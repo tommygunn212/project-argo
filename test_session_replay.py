@@ -18,7 +18,7 @@ import os
 # Setup
 # ============================================================================
 
-# Add wrapper module to path so we can import jarvis
+# Add wrapper module to path so we can import argo
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "wrapper"))
 
 # Import after path is set

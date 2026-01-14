@@ -115,14 +115,14 @@ MAIN COMPONENTS:
     Used by: --replay session flag
     Returns: List of dicts, chronologically ordered
 
-  run_jarvis() (line 413)
+  run_argo() (line 413)
     Core execution function:
       1. Classify input intent (gating check)
       2. Classify input verbosity (response length preference)
       3. Handle rejected input or route commands (if gating active)
       4. Build replay context (if requested)
       5. Build final prompt (mode → persona → verbosity → replay → user input)
-      6. Call Ollama's "jarvis" model via subprocess
+      6. Call Ollama's "argo" model via subprocess
       7. Log the interaction with all metadata
       8. Print model response to stdout
 

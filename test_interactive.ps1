@@ -5,6 +5,6 @@ $input = @"
 What is 2+2?
 Explain photosynthesis
 exit
-"@ | python wrapper\jarvis.py
+"@ | python wrapper\argo.py
 
 Write-Host "✅ Interactive test completed" -ForegroundColor Green

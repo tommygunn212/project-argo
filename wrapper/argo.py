@@ -111,7 +111,7 @@ def classify_input(user_input: str) -> str:
     
     Intent classification is deterministic and rule-based:
     - "empty": whitespace-only input
-    - "command": input starting with /jarvis (reserved for system commands)
+    - "command": input starting with /argo (reserved for system commands)
     - "ambiguous": exactly 1 word (too vague)
     - "low_intent": 2 words (barely enough context)
     - "valid": 3+ words (sufficient intent signal)
@@ -130,7 +130,7 @@ def classify_input(user_input: str) -> str:
         return "empty"
     
     # Classify commands (reserved syntax)
-    if user_input.strip().startswith("/jarvis"):
+    if user_input.strip().startswith("/argo"):
         return "command"
     
     # Count words (split on whitespace)
