@@ -282,6 +282,7 @@ def _append_daily_log(
     replay_session: bool,
     persona: str = "neutral",
     verbosity: str = "short",
+    replay_policy: dict | None = None,
 ) -> None:
     """
     Append a single interaction record to the daily log file.
@@ -293,6 +294,7 @@ def _append_daily_log(
     - Active conversation mode (if any)
     - Replay metadata (whether and how replay was used)
     - Persona and verbosity settings for this turn
+    - Replay policy diagnostics (entries used, chars, trimming, reason)
     
     Log files are organized by date: YYYY-MM-DD.log
     Corrupt lines are silently skipped during reads.
@@ -307,6 +309,7 @@ def _append_daily_log(
         replay_session: True if --replay session was used; False otherwise
         persona: Persona name used for this interaction (default: "neutral")
         verbosity: Response length control, "short" or "long" (default: "short")
+        replay_policy: Dict with replay diagnostics (entries_used, chars_used, trimmed, reason)
     """
     log_dir = _get_log_dir()
     os.makedirs(log_dir, exist_ok=True)
@@ -330,6 +333,10 @@ def _append_daily_log(
         "user_prompt": user_prompt,
         "model_response": model_response,
     }
+    
+    # Add replay policy diagnostics if available
+    if replay_policy:
+        record["replay_policy"] = replay_policy
 
     # Append as newline-delimited JSON
     with open(file_path, "a", encoding="utf-8", newline="\n") as f:
@@ -418,6 +425,98 @@ def get_session_entries(session_id: str) -> list[dict]:
     return entries
 
 
+def classify_entry_type(user_prompt: str, model_response: str) -> str:
+    """
+    Classify entry type for intelligent replay filtering.
+    
+    Rules (deterministic, no ML):
+    - "question": user input ends with ? or contains question words
+    - "instruction": starts with verb (do, list, create, explain, etc.)
+    - "correction": contains correction keywords (actually, no wait, correction, etc.)
+    - "meta": asks about previous conversation (what did, repeat, summary, etc.)
+    - "other": fallback
+    
+    Args:
+        user_prompt: The user's input
+        model_response: The model's response (for context)
+        
+    Returns:
+        str: One of: "question", "instruction", "correction", "meta", "other"
+    """
+    prompt_lower = user_prompt.lower().strip()
+    
+    # Meta: asks about conversation history
+    meta_patterns = ("what did", "repeat", "summarize", "recap", "previous", "before", "earlier", "said")
+    if any(pattern in prompt_lower for pattern in meta_patterns):
+        return "meta"
+    
+    # Question: ends with ? or has question words
+    if prompt_lower.endswith("?") or any(word in prompt_lower for word in ("what", "why", "how", "when", "where", "who")):
+        return "question"
+    
+    # Correction: correction keywords
+    correction_patterns = ("actually", "no wait", "correction", "mistake", "wrong", "not", "instead")
+    if any(pattern in prompt_lower for pattern in correction_patterns):
+        return "correction"
+    
+    # Instruction: starts with imperative verb
+    instruction_verbs = ("do", "list", "create", "write", "explain", "show", "tell", "give", "make", "build", "find", "analyze", "compare")
+    first_word = prompt_lower.split()[0] if prompt_lower.split() else ""
+    if first_word in instruction_verbs:
+        return "instruction"
+    
+    return "other"
+
+
+def apply_replay_budget(entries: list[dict], max_chars: int = 5500) -> tuple[list[dict], dict]:
+    """
+    Apply replay budget to entries, trimming from oldest first.
+    Always preserves the most recent exchange (latest user+assistant).
+    
+    Args:
+        entries: List of log records (oldest to newest)
+        max_chars: Maximum characters allowed for replay context
+        
+    Returns:
+        tuple: (trimmed_entries, stats_dict) where stats_dict contains:
+          - entries_used: Number of entries included
+          - chars_used: Total characters used
+          - trimmed: Boolean indicating if trimming occurred
+    """
+    if not entries:
+        return [], {"entries_used": 0, "chars_used": 0, "trimmed": False}
+    
+    # Always keep the most recent exchange (last user + last assistant)
+    # which means last 2 entries minimum
+    min_keep = min(2, len(entries))
+    
+    total_chars = 0
+    selected_entries = []
+    trimmed = False
+    
+    # Walk backward from oldest to newest, keeping only what fits
+    for i, entry in enumerate(entries):
+        user_prompt = entry.get("user_prompt", "")
+        model_response = entry.get("model_response", "")
+        entry_chars = len(user_prompt) + len(model_response) + 10  # +10 for formatting
+        
+        # If adding this would exceed budget AND we have minimum entries kept
+        if total_chars + entry_chars > max_chars and len(entries) - i >= min_keep:
+            trimmed = True
+            continue
+        
+        selected_entries.insert(0, entry)  # Insert at front to maintain order
+        total_chars += entry_chars
+    
+    stats = {
+        "entries_used": len(selected_entries),
+        "chars_used": total_chars,
+        "trimmed": trimmed
+    }
+    
+    return selected_entries, stats
+
+
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -430,7 +529,8 @@ def run_argo(
     replay_session: bool = False,
     strict_mode: bool = True,
     persona: str = "neutral",
-    verbosity: str = "short"
+    verbosity: str = "short",
+    replay_reason: str = "continuation"
 ) -> None:
     """
     Execute a single interaction with the Jarvis model.
@@ -535,18 +635,12 @@ def run_argo(
             replay_session=replay_session,
             persona=persona,
             verbosity=classified_verbosity,
+            replay_policy=None,
         )
-        
-        print(output)
-        return
-    
-    # If we get here, intent is "valid" or strict_mode is False
-    
-    # ________________________________________________________________________
-    # Step 1: Build replay context (if requested)
     # ________________________________________________________________________
     
     replay_block = ""
+    replay_policy = None
 
     if replay_session:
         entries = get_session_entries(SESSION_ID)
@@ -555,8 +649,12 @@ def run_argo(
     else:
         entries = []
 
-    # Format previous turns for context injection
+    # Apply replay budget and get diagnostics
     if entries:
+        entries, replay_stats = apply_replay_budget(entries, max_chars=5500)
+        replay_policy = {**replay_stats, "reason": replay_reason}
+        
+        # Format previous turns for context injection
         replay_lines = []
         for e in entries:
             replay_lines.append(f"User: {e['user_prompt']}")
@@ -699,6 +797,7 @@ def run_argo(
         replay_session=replay_session,
         persona=persona,
         verbosity=classified_verbosity,
+        replay_policy=replay_policy,
     )
 
 
