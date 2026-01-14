@@ -468,6 +468,91 @@ def classify_entry_type(user_prompt: str, model_response: str) -> str:
     return "other"
 
 
+def classify_context_strength(replay_policy: dict | None, entry_types: list[str] | None) -> str:
+    """
+    Classify context confidence level based on replay diagnostics.
+    
+    Deterministic rules (no ML, no fuzzy logic):
+    
+    STRONG:
+      - entries_used >= 2
+      - trimmed == False
+      - replay_reason in {session, continuation}
+      - at least one entry type is instruction or correction
+    
+    MODERATE:
+      - entries_used >= 1
+      - trimmed may be True
+      - replay_reason in {continuation, clarification}
+      - mostly question or instruction
+    
+    WEAK:
+      - entries_used == 0
+      - OR (replay_reason == clarification AND trimmed == True)
+      - OR only meta/other entries survived replay
+    
+    Args:
+        replay_policy: Dict with entries_used, chars_used, trimmed, reason
+        entry_types: List of entry type classifications (question, instruction, etc.)
+        
+    Returns:
+        str: One of: "strong", "moderate", "weak"
+    """
+    if not replay_policy:
+        return "weak"
+    
+    entries_used = replay_policy.get("entries_used", 0)
+    trimmed = replay_policy.get("trimmed", False)
+    reason = replay_policy.get("reason", "continuation")
+    entry_types = entry_types or []
+    
+    # WEAK: no context or only meta/other
+    if entries_used == 0:
+        return "weak"
+    
+    # Check if only meta/other entries survived
+    non_meta_other = [t for t in entry_types if t not in ("meta", "other")]
+    if entries_used > 0 and not non_meta_other:
+        return "weak"
+    
+    # WEAK: clarification with trimming
+    if reason == "clarification" and trimmed:
+        return "weak"
+    
+    # STRONG: rich context, no trimming, good reason, has instruction/correction
+    has_instruction_or_correction = any(t in ("instruction", "correction") for t in entry_types)
+    if entries_used >= 2 and not trimmed and reason in ("session", "continuation") and has_instruction_or_correction:
+        return "strong"
+    
+    # MODERATE: fallback for any other valid replay
+    if entries_used >= 1 and reason in ("continuation", "clarification"):
+        return "moderate"
+    
+    # Final fallback: any replay is better than nothing
+    if entries_used >= 1:
+        return "moderate"
+    
+    return "weak"
+
+
+def get_confidence_instruction(context_strength: str) -> str:
+    """
+    Get the confidence instruction based on context strength.
+    
+    Args:
+        context_strength: One of: strong, moderate, weak
+        
+    Returns:
+        str: Confidence instruction to inject into prompt
+    """
+    instructions = {
+        "strong": "You have sufficient prior context. Answer directly and confidently.",
+        "moderate": "Some prior context exists. Answer carefully and avoid assumptions.",
+        "weak": "Prior context may be insufficient. If uncertain, say so plainly and do not guess.",
+    }
+    return instructions.get(context_strength, instructions["weak"])
+
+
 def apply_replay_budget(entries: list[dict], max_chars: int = 5500) -> tuple[list[dict], dict]:
     """
     Apply replay budget to entries, trimming from oldest first.
@@ -641,6 +726,8 @@ def run_argo(
     
     replay_block = ""
     replay_policy = None
+    context_strength = "weak"
+    entry_types = []
 
     if replay_session:
         entries = get_session_entries(SESSION_ID)
@@ -652,7 +739,14 @@ def run_argo(
     # Apply replay budget and get diagnostics
     if entries:
         entries, replay_stats = apply_replay_budget(entries, max_chars=5500)
+        
+        # Classify entry types for context strength calculation
+        entry_types = [classify_entry_type(e.get("user_prompt", ""), e.get("model_response", "")) for e in entries]
+        
+        # Determine context strength based on replay diagnostics
         replay_policy = {**replay_stats, "reason": replay_reason}
+        context_strength = classify_context_strength(replay_policy, entry_types)
+        replay_policy["context_strength"] = context_strength
         
         # Format previous turns for context injection
         replay_lines = []
@@ -671,17 +765,20 @@ def run_argo(
     # Get verbosity text (always present: either concise or detailed instruction)
     verbosity_text = get_verbosity_text(classified_verbosity)
     
-    # Build prompt: mode enforcement (if any) -> persona (if any) -> verbosity -> replay -> user input
+    # Get confidence instruction based on context strength
+    confidence_text = get_confidence_instruction(context_strength)
+    
+    # Build prompt: mode enforcement (if any) -> persona (if any) -> verbosity -> confidence -> replay -> user input
     if active_mode:
         if persona_text:
-            full_prompt = f"{MODE_ENFORCEMENT}\n\n{persona_text}\n\n{verbosity_text}\n\n{replay_block}{user_input}".encode("utf-8")
+            full_prompt = f"{MODE_ENFORCEMENT}\n\n{persona_text}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
         else:
-            full_prompt = f"{MODE_ENFORCEMENT}\n\n{verbosity_text}\n\n{replay_block}{user_input}".encode("utf-8")
+            full_prompt = f"{MODE_ENFORCEMENT}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
     else:
         if persona_text:
-            full_prompt = f"{persona_text}\n\n{verbosity_text}\n\n{replay_block}{user_input}".encode("utf-8")
+            full_prompt = f"{persona_text}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
         else:
-            full_prompt = f"{verbosity_text}\n\n{replay_block}{user_input}".encode("utf-8")
+            full_prompt = f"{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
 
     # ________________________________________________________________________
     # Step 3: Call Ollama (with streaming output)
