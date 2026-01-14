@@ -1,0 +1,53 @@
+import requests
+import sys
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+MODEL = "hal"
+
+def chat(user_message, context=None):
+    messages = []
+
+    # System: name injection
+    messages.append({
+        "role": "system",
+        "content": "You are called HAL."
+    })
+
+    # Optional system context
+    if context:
+        messages.append({
+            "role": "system",
+            "content": f"Context: {context}"
+        })
+
+    # User message
+    messages.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "stream": False
+    }
+
+    response = requests.post(OLLAMA_URL, json=payload, timeout=60)
+    response.raise_for_status()
+
+    return response.json()["message"]["content"]
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python hal_chat.py \"your message here\"")
+        sys.exit(1)
+
+    user_input = sys.argv[1]
+
+    # Example: change or remove context as needed
+    context = None
+    # context = "The user just completed building and running a custom Ollama model."
+
+    reply = chat(user_input, context)
+    print(reply)

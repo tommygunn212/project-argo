@@ -1,0 +1,203 @@
+import subprocess
+import sys
+import os
+import json
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+SESSION_ID = str(uuid.uuid4())
+
+MODE_ENFORCEMENT = """You must strictly follow the rules of any activated conversation mode.
+These rules are mandatory constraints, not suggestions.
+
+Do not narrate modes.
+Do not ask permission to begin.
+Do not ask clarifying questions before producing output if the active mode forbids it.
+
+If Brainstorming Mode applies:
+- Start by generating ideas immediately
+- Provide multiple distinct ideas before asking any questions
+- Do not ask “what’s the concept” or similar gatekeeping questions
+
+Respond to the user. Do not mention conversation modes or internal state.
+"""
+
+def _get_log_dir() -> str:
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(base_dir, "logs")
+
+def _append_daily_log(
+    *,
+    timestamp_iso: str,
+    session_id: str,
+    user_prompt: str,
+    model_response: str,
+    active_mode: str | None,
+    replay_n: int | None,
+    replay_session: bool,
+) -> None:
+    log_dir = _get_log_dir()
+    os.makedirs(log_dir, exist_ok=True)
+
+    file_name = f"{timestamp_iso[:10]}.log"
+    file_path = os.path.join(log_dir, file_name)
+
+    record = {
+        "timestamp": timestamp_iso,
+        "session_id": session_id,
+        "active_mode": active_mode,
+        "replay": {
+            "enabled": replay_n is not None or replay_session,
+            "count": replay_n,
+            "session": replay_session,
+        },
+        "user_prompt": user_prompt,
+        "model_response": model_response,
+    }
+
+    with open(file_path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+def get_last_n_entries(n: int) -> list[dict]:
+    log_dir = _get_log_dir()
+    if not os.path.exists(log_dir):
+        return []
+
+    log_files = sorted(Path(log_dir).glob("*.log"))
+    if not log_files:
+        return []
+
+    entries: list[dict] = []
+
+    for log_file in reversed(log_files):
+        with open(log_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        for line in reversed(lines):
+            try:
+                record = json.loads(line)
+                entries.append(record)
+                if len(entries) >= n:
+                    return list(reversed(entries))
+            except json.JSONDecodeError:
+                continue
+
+    return list(reversed(entries))
+
+def get_session_entries(session_id: str) -> list[dict]:
+    log_dir = _get_log_dir()
+    if not os.path.exists(log_dir):
+        return []
+
+    entries: list[dict] = []
+
+    for log_file in sorted(Path(log_dir).glob("*.log")):
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    if record.get("session_id") == session_id:
+                        entries.append(record)
+                except json.JSONDecodeError:
+                    continue
+
+    return entries
+
+def run_jarvis(
+    user_input: str,
+    *,
+    active_mode: str | None = None,
+    replay_n: int | None = None,
+    replay_session: bool = False
+):    # IMPORTANT:
+    # Only inject MODE_ENFORCEMENT if a mode is explicitly provided.
+    # Otherwise, send raw user input to keep output pure.
+    replay_block = ""
+
+    if replay_session:
+        entries = get_session_entries(SESSION_ID)
+    elif replay_n:
+        entries = get_last_n_entries(replay_n)
+    else:
+        entries = []
+
+    if entries:
+        replay_lines = []
+        for e in entries:
+            replay_lines.append(f"User: {e['user_prompt']}")
+            replay_lines.append(f"Assistant: {e['model_response']}")
+        replay_block = "\n".join(replay_lines) + "\n\n"
+
+    if active_mode:
+        full_prompt = f"{MODE_ENFORCEMENT}\n\n{replay_block}{user_input}".encode("utf-8")
+    else:
+        full_prompt = f"{replay_block}{user_input}".encode("utf-8")
+
+    env = os.environ.copy()
+    env["OLLAMA_NO_INTERACTIVE"] = "1"
+
+    result = subprocess.run(
+        ["ollama", "run", "jarvis"],
+        input=full_prompt,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env
+    )
+
+    output = result.stdout.decode("utf-8", errors="ignore").strip()
+
+    timestamp_iso = datetime.now().isoformat(timespec="seconds")
+    _append_daily_log(
+        timestamp_iso=timestamp_iso,
+        session_id=SESSION_ID,
+        user_prompt=user_input,
+        model_response=output,
+        active_mode=active_mode,
+        replay_n=replay_n,
+        replay_session=replay_session,
+    )
+
+    # Print ONLY the model response. No wrapper chatter.
+    print(output)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print('Usage: python jarvis.py [--mode MODE] [--replay last:N|session] "your message here"', file=sys.stderr)
+        sys.exit(1)
+
+    mode_value: str | None = None
+    replay_n: int | None = None
+    replay_session: bool = False
+    args = sys.argv[1:]
+
+    if len(args) >= 2 and args[0] == "--mode":
+        mode_value = args[1]
+        args = args[2:]
+
+    if len(args) >= 2 and args[0] == "--replay":
+        value = args[1]
+
+        if value == "session":
+            replay_session = True
+
+        elif value.startswith("last:"):
+            try:
+                replay_n = int(value.split(":", 1)[1])
+            except ValueError:
+                print("Invalid replay value. Use last:N or session", file=sys.stderr)
+                sys.exit(1)
+
+        else:
+            print("Invalid replay value. Use last:N or session", file=sys.stderr)
+            sys.exit(1)
+
+        args = args[2:]
+
+    user_message = " ".join(args)
+    run_jarvis(
+        user_message,
+        active_mode=mode_value,
+        replay_n=replay_n,
+        replay_session=replay_session
+    )
