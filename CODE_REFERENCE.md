@@ -12,7 +12,7 @@ their purposes, and how they interact with each other.
 """
 i:\jarvis\
 ├── wrapper/
-│   ├── jarvis.py              ← Main CLI entry point
+│   ├── argo.py              ← Main CLI entry point
 │   └── __pycache__/
 ├── runtime/
 │   └── ollama/
@@ -35,7 +35,7 @@ i:\jarvis\
 
 """
 ────────────────────────────────────────────────────────────────────────────
-1. wrapper/jarvis.py
+1. wrapper/argo.py
 ────────────────────────────────────────────────────────────────────────────
 
 PURPOSE:
@@ -129,25 +129,25 @@ MAIN COMPONENTS:
 USAGE:
 
   Basic:
-    python jarvis.py "What is the weather?"
+    python argo.py "What is the weather?"
 
   With mode:
-    python jarvis.py --mode brainstorm "List 10 ideas"
+    python argo.py --mode brainstorm "List 10 ideas"
 
   With persona:
-    python jarvis.py --persona dry "Explain quantum mechanics"
+    python argo.py --persona dry "Explain quantum mechanics"
 
   With long-form cue (automatic verbosity):
-    python jarvis.py "Explain in detail how photosynthesis works"
+    python argo.py "Explain in detail how photosynthesis works"
 
   With replay (last 3 turns):
-    python jarvis.py --replay last:3 "Continue"
+    python argo.py --replay last:3 "Continue"
 
   With session replay:
-    python jarvis.py --replay session "Summarize what we discussed"
+    python argo.py --replay session "Summarize what we discussed"
 
   Combined:
-    python jarvis.py --session work --persona dry --replay last:2 "Step by step"
+    python argo.py --session work --persona dry --replay last:2 "Step by step"
 
 LOG FORMAT:
   
@@ -263,7 +263,7 @@ EXPECTED OUTPUT:
 """
 CLI INVOCATION:
   
-  jarvis.py "user input"
+  argo.py "user input"
     ↓
   Parse arguments (--mode, --replay)
     ↓
@@ -390,7 +390,7 @@ LOG PERSISTENCE:
 # ============================================================================
 
 """
-OLLAMA SETTINGS (in jarvis.py):
+OLLAMA SETTINGS (in argo.py):
   env["OLLAMA_NO_INTERACTIVE"] = "1"
     Ensures Ollama doesn't hang waiting for input
 
@@ -421,7 +421,7 @@ ENCODING:
 To verify everything is working:
 
 1. Test basic jarvis.py:
-   python i:\jarvis\wrapper\jarvis.py "hello"
+   python i:\jarvis\wrapper\argo.py "hello"
    
    Expected: Response from model
 
@@ -491,3 +491,7 @@ Potential improvements (not yet implemented):
    - Security logging
    - Compliance reporting
 """
+
+SESSION_ID
+A per-process unique identifier generated at Argo startup.
+Used for logging, replay, and traceability across a single run.

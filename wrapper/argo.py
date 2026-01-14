@@ -1,5 +1,5 @@
 """
-JARVIS - Ollama-based conversational AI wrapper with session management and replay.
+ARGO - Ollama-based conversational AI wrapper with session management and replay.
 
 This module provides:
 - Direct interface to Ollama's Jarvis model via subprocess
@@ -39,7 +39,8 @@ if sys.stdout.encoding != 'utf-8':
 # Session Management
 # ============================================================================
 
-SESSION_ID: str
+# Define a system-wide session identifier
+SESSION_ID = str(uuid.uuid4())
 """Unique identifier for this execution. Set in __main__ based on CLI args."""
 
 
@@ -421,7 +422,7 @@ def get_session_entries(session_id: str) -> list[dict]:
 # Main Execution
 # ============================================================================
 
-def run_jarvis(
+def run_argo(
     user_input: str,
     *,
     active_mode: str | None = None,
@@ -779,7 +780,7 @@ if __name__ == "__main__":
                         continue
                     
                     # Execute query
-                    run_jarvis(
+                    run_argo(
                         user_input,
                         active_mode=mode_value,
                         replay_n=replay_n,
@@ -798,7 +799,7 @@ if __name__ == "__main__":
             print("\nSession ended.", file=sys.stderr)
     else:
         # Single-shot mode: execute once and exit
-        run_jarvis(
+        run_argo(
             user_message,
             active_mode=mode_value,
             replay_n=replay_n,

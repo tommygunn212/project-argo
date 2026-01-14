@@ -22,7 +22,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "wrapper"))
 
 # Import after path is set
-from jarvis import run_jarvis, SESSION_ID
+from wrapper.argo import run_argo, SESSION_ID
 
 
 # ============================================================================
@@ -42,7 +42,7 @@ print("\n=== Turn 1: Initial ===")
 print("Input: 'one'")
 print("Replay: None")
 print("-" * 70)
-run_jarvis("one")
+run_argo("one")
 
 # ________________________________________________________________________
 # Turn 2: Another interaction (no replay)
@@ -52,7 +52,7 @@ print("\n=== Turn 2: Follow-up ===")
 print("Input: 'two'")
 print("Replay: None")
 print("-" * 70)
-run_jarvis("two")
+run_argo("two")
 
 # ________________________________________________________________________
 # Turn 3: Query with full session replay
@@ -62,7 +62,7 @@ print("\n=== Turn 3: Session Replay ===")
 print("Input: 'what did you say?'")
 print("Replay: --replay session (includes Turn 1 and Turn 2)")
 print("-" * 70)
-run_jarvis("what did you say?", replay_session=True)
+run_argo("what did you say?", replay_session=True)
 
 # ________________________________________________________________________
 # Results
@@ -77,4 +77,17 @@ print("  - Turn 3: Model should reference 'one' and 'two' from previous turns")
 print(f"\nCheck logs for session_id: {SESSION_ID}")
 print("  - Turn 1 & 2 should have: replay.enabled=false, replay.session=false")
 print("  - Turn 3 should have: replay.enabled=true, replay.session=true")
+
+
+# Added minimal test functions for pytest discovery
+
+def test_session_id_is_defined():
+    from wrapper.argo import SESSION_ID
+    assert SESSION_ID is not None
+
+def test_session_id_is_stable_within_process():
+    from wrapper.argo import SESSION_ID
+    first = SESSION_ID
+    second = SESSION_ID
+    assert first == second
 

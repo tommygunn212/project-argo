@@ -10,7 +10,7 @@ exit
 """
 
 proc = subprocess.Popen(
-    [sys.executable, "wrapper/jarvis.py"],
+    [sys.executable, "wrapper/argo.py"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
