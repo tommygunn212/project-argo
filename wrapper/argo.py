@@ -17,13 +17,13 @@ Session Structure:
   No automatic memory. No persistence between runs unless --session is used.
 """
 
-import subprocess
 import sys
 import os
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+import requests
 
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
@@ -589,83 +589,105 @@ def run_argo(
     # Step 3: Call Ollama (with streaming output)
     # ________________________________________________________________________
     
-    # Show immediate feedback to user before model starts processing
-    print("Argo is thinking…", flush=True)
-    
     # Set up environment
     env = os.environ.copy()
     env["OLLAMA_NO_INTERACTIVE"] = "1"
 
-    # Start Ollama process with streaming stdout
-    # Use DEVNULL for stderr to prevent buffer blocking
-    process = subprocess.Popen(
-        ["ollama", "run", "argo"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        env=env
-    )
+    # Validate Ollama connection before proceeding
+    url = "http://localhost:11434/api/generate"
+    try:
+        # Quick connectivity check
+        response = requests.head("http://localhost:11434/api/tags", timeout=2)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        print("Error: Ollama server is not running.", file=sys.stderr)
+        print("Start Ollama with: ollama serve", file=sys.stderr)
+        sys.exit(1)
+    except requests.exceptions.Timeout:
+        print("Error: Ollama server is not responding.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error connecting to Ollama: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Feed prompt to stdin and close to signal EOF
-    process.stdin.write(full_prompt)
-    process.stdin.close()
+    # Validate model existence
+    try:
+        tags_response = requests.get("http://localhost:11434/api/tags", timeout=2)
+        tags_response.raise_for_status()
+        models = tags_response.json().get("models", [])
+        model_names = [m.get("name") for m in models]
+        
+        # Check if 'argo' or 'argo:latest' exists
+        argo_exists = any(name.startswith("argo") for name in model_names)
+        
+        if not argo_exists:
+            print("Error: Model 'argo' not found.", file=sys.stderr)
+            print(f"Available models: {', '.join(model_names) if model_names else 'none'}", file=sys.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error validating model: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Stream output to stdout and accumulate for logging
+    # Make the actual generation request
+    payload = {
+        "model": "argo",
+        "prompt": full_prompt.decode("utf-8") if isinstance(full_prompt, bytes) else full_prompt,
+        "stream": True
+    }
+
+    response = requests.post(url, json=payload, stream=True)
+    response.raise_for_status()
+
     output_lines = []
-    
-    # Output limit settings
     MAX_CHARACTERS = 3000
-    
-    # Tracking state for cutoff
     char_printed = 0
     output_cutoff = False
     cutoff_printed = False
     
-    try:
-        for line in iter(process.stdout.readline, b""):
-            if line:
-                # Decode with error handling (replace invalid chars, don't crash)
-                decoded_line = line.decode("utf-8", errors="replace").rstrip("\n")
-                
-                # Always accumulate full output for logging
-                output_lines.append(decoded_line)
-                
-                # Print to terminal unless we've hit cutoff
+    # Token buffer to reduce syscalls
+    token_buffer = []
+    BUFFER_SIZE = 10
+
+    for line in response.iter_lines(decode_unicode=True):
+        if line:
+            try:
+                data = json.loads(line)
+                token = data.get("response", "")
+                output_lines.append(token)
+
                 if not output_cutoff:
-                    chars_this_line = len(decoded_line) + 1  # +1 for newline
-                    
-                    # Check if adding this line would exceed limit
+                    chars_this_line = len(token)
                     if char_printed + chars_this_line > MAX_CHARACTERS:
+                        # Flush any pending tokens before cutoff message
+                        if token_buffer:
+                            print("".join(token_buffer), end="", flush=True)
+                            token_buffer.clear()
+                        
                         output_cutoff = True
-                        cutoff_printed = True
-                        # Print cutoff message once
                         cutoff_msg = "\n— Output paused to keep things readable. Say \"continue\" to go deeper."
-                        try:
-                            print(cutoff_msg, flush=True)
-                        except UnicodeEncodeError:
-                            print(cutoff_msg.encode('utf-8', errors='replace').decode('utf-8'), flush=True)
+                        print(cutoff_msg, flush=True)
                     else:
-                        # Print immediately to stdout with error handling
-                        if decoded_line:  # Don't print empty lines
-                            char_printed += chars_this_line
-                            try:
-                                print(decoded_line, flush=True)
-                            except UnicodeEncodeError:
-                                # Fallback: encode with 'replace' to avoid crashes
-                                print(decoded_line.encode('utf-8', errors='replace').decode('utf-8'), flush=True)
-    except (BrokenPipeError, OSError):
-        # Handle broken pipe if process terminates early
-        pass
-    finally:
-        process.stdout.close()
+                        char_printed += chars_this_line
+                        token_buffer.append(token)
+                        
+                        # Flush buffer when it reaches size threshold
+                        if len(token_buffer) >= BUFFER_SIZE:
+                            print("".join(token_buffer), end="", flush=True)
+                            token_buffer.clear()
+            except json.JSONDecodeError:
+                continue
+    
+    # Final flush of any remaining buffered tokens
+    if token_buffer:
+        print("".join(token_buffer), flush=True)
     
     # Wait for process to complete, with timeout and cleanup
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        # Force terminate if still running after timeout
-        process.kill()
-        process.wait()  # Clean up zombie
+    # try:
+    #     process.wait(timeout=5)
+    # except subprocess.TimeoutExpired:
+    #     # Force terminate if still running after timeout
+    #     process.kill()
+    #     process.wait()  # Clean up zombie
     
     # Reconstruct full output for logging (preserves everything, even if truncated in terminal)
     output = "\n".join(output_lines).strip()
