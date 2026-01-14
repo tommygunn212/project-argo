@@ -1,0 +1,17 @@
+# Python junk
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Logs
+logs/
+
+# Runtime / generated state
+runtime/
+orchestrator/
+memory/
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db
