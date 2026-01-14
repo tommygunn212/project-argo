@@ -631,7 +631,7 @@ def run_argo(
     # Make the actual generation request
     payload = {
         "model": "argo",
-        "prompt": full_prompt.decode("utf-8") if isinstance(full_prompt, bytes) else full_prompt,
+        "prompt": full_prompt.decode("utf-8"),
         "stream": True
     }
 
@@ -681,16 +681,8 @@ def run_argo(
     if token_buffer:
         print("".join(token_buffer), flush=True)
     
-    # Wait for process to complete, with timeout and cleanup
-    # try:
-    #     process.wait(timeout=5)
-    # except subprocess.TimeoutExpired:
-    #     # Force terminate if still running after timeout
-    #     process.kill()
-    #     process.wait()  # Clean up zombie
-    
     # Reconstruct full output for logging (preserves everything, even if truncated in terminal)
-    output = "\n".join(output_lines).strip()
+    output = "".join(output_lines).strip()
 
     # ________________________________________________________________________
     # Step 4: Log the interaction
