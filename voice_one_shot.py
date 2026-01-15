@@ -262,7 +262,7 @@ def main():
         print("\n" + "=" * 70)
         print("VOICE ONE-SHOT PIPELINE")
         print("=" * 70)
-        print("Mic (3s) → Whisper → Text → Exit")
+        print("Mic (3s) -> Whisper -> Text -> Exit")
         print()
     
     try:
