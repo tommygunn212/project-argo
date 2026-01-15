@@ -39,6 +39,64 @@ User input → Validate Ollama running → Validate "argo" model exists
 - Model validation: Confirm "argo" or "argo:latest" exists
 - Token buffering: Accumulate 10 tokens before printing to reduce terminal I/O
 
+## Context Governance Pipeline
+
+Argo implements a deterministic, policy-driven pipeline that governs how context is constructed, filtered, and presented to the model.
+
+This is **not** learning, adaptation, or hidden heuristics. It is explicit governance.
+
+**The Pipeline (in order)**:
+
+```
+User Input
+   ↓
+Intent & Verbosity Classification
+   ↓
+Replay Reason Determination
+   ↓
+Replay Entry Loading
+   ↓
+Entry Type Classification
+   (question | instruction | correction | meta | other)
+   ↓
+Selective Replay Filtering
+   (REPLAY_FILTERS policy by reason)
+   ↓
+Replay Budget Enforcement
+   (5500 char cap, trim oldest first, preserve recent)
+   ↓
+Context Strength Classification
+   (strong | moderate | weak)
+   ↓
+Confidence Instruction Injection
+   ("answer directly" vs "answer carefully" vs "say if uncertain")
+   ↓
+Prompt Assembly
+   (Mode → Persona → Verbosity → Confidence → Replay → Input)
+   ↓
+Ollama HTTP Streaming
+   (Persistent, buffered, logged)
+```
+
+**Key Properties**:
+
+1. **Deterministic**: Every decision follows explicit rules, no randomness or learned patterns
+2. **Policy-Driven**: Behaviors are controlled by configurable mappings (REPLAY_FILTERS, PERSONAS, confidence instructions)
+3. **Non-Learning**: The system does not adapt, personalize, or improve based on user input
+4. **Fully Observable**: Every decision and its reasoning are logged
+5. **Reason-Aware**: The same input is handled differently based on intent (continuation vs clarification vs session)
+
+**Why This Matters**:
+
+This governance layer ensures Argo behaves like a *controlled tool*, not a *learning agent*. 
+
+- Users understand why the model is confident or cautious
+- Filtered context prevents emotional/meta turns from polluting reasoning
+- Budget enforcement ensures predictable behavior under long sessions
+- Logging provides accountability for every decision
+
+This foundation enables progressive constraint relaxation: as users gain confidence in the system's reliability, they can enable more autonomy without risk.
+
 ---
 
 ### 2. Replay Budget & Entry Type Tagging
