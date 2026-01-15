@@ -268,6 +268,24 @@ Respond to the user. Do not mention conversation modes or internal state.
 
 
 # ============================================================================
+# Replay Filtering Policy
+# ============================================================================
+
+REPLAY_FILTERS = {
+    "continuation": {"instruction", "correction", "question"},
+    "clarification": {"question", "instruction"},
+    "session": {"instruction", "correction"},
+}
+"""
+Deterministic replay filtering policy by reason.
+
+Defines which entry types to include when filtering replay context.
+Meta entries are excluded by default. Other entries are lowest priority.
+Policy is configurable without changing logic.
+"""
+
+
+# ============================================================================
 # Logging Infrastructure
 # ============================================================================
 
@@ -602,6 +620,68 @@ def apply_replay_budget(entries: list[dict], max_chars: int = 5500) -> tuple[lis
     return selected_entries, stats
 
 
+def filter_replay_entries(entries: list[dict], replay_reason: str, entry_types: list[str]) -> tuple[list[dict], dict]:
+    """
+    Filter replay entries by type based on replay reason.
+    Always preserves the most recent exchange (last user+assistant).
+    
+    Filtering policy (REPLAY_FILTERS):
+    - continuation: instruction, correction, question
+    - clarification: question, instruction
+    - session: instruction, correction
+    - meta is excluded by default
+    - other is lowest priority
+    
+    Args:
+        entries: List of log records (oldest to newest)
+        replay_reason: One of: session, clarification, continuation
+        entry_types: List of entry type strings (parallel to entries)
+        
+    Returns:
+        tuple: (filtered_entries, filter_stats) where filter_stats contains:
+          - entries_available: Total entries before filtering
+          - entries_filtered: Number of entries removed by type filter
+          - filtered_types: List of types that were excluded
+    """
+    if not entries or not entry_types:
+        return entries, {"entries_available": 0, "entries_filtered": 0, "filtered_types": []}
+    
+    entries_available = len(entries)
+    allowed_types = REPLAY_FILTERS.get(replay_reason, set())
+    filtered_types = set()
+    
+    # Build list of (index, entry, type) to identify most recent
+    indexed = list(enumerate(zip(entries, entry_types)))
+    
+    # Always keep last exchange (last 2 entries minimum: user + assistant)
+    # Find the last 2 entries regardless of type
+    min_keep_indices = set()
+    if len(indexed) >= 1:
+        min_keep_indices.add(len(indexed) - 1)  # Last entry
+    if len(indexed) >= 2:
+        min_keep_indices.add(len(indexed) - 2)  # Second to last
+    
+    filtered_entries = []
+    for i, (entry, entry_type) in indexed:
+        # Always keep the most recent exchange
+        if i in min_keep_indices:
+            filtered_entries.append(entry)
+        # Keep if type matches policy
+        elif entry_type in allowed_types:
+            filtered_entries.append(entry)
+        # Track filtered types
+        else:
+            filtered_types.add(entry_type)
+    
+    filter_stats = {
+        "entries_available": entries_available,
+        "entries_filtered": entries_available - len(filtered_entries),
+        "filtered_types": sorted(list(filtered_types)),
+    }
+    
+    return filtered_entries, filter_stats
+
+
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -736,15 +816,26 @@ def run_argo(
     else:
         entries = []
 
-    # Apply replay budget and get diagnostics
+    # Process replay entries: classify, filter, then budget
     if entries:
-        entries, replay_stats = apply_replay_budget(entries, max_chars=5500)
-        
-        # Classify entry types for context strength calculation
+        # Step 1: Classify entry types
         entry_types = [classify_entry_type(e.get("user_prompt", ""), e.get("model_response", "")) for e in entries]
         
-        # Determine context strength based on replay diagnostics
-        replay_policy = {**replay_stats, "reason": replay_reason}
+        # Step 2: Filter entries by type based on replay reason (BEFORE budget)
+        entries, filter_stats = filter_replay_entries(entries, replay_reason, entry_types)
+        entry_types = [classify_entry_type(e.get("user_prompt", ""), e.get("model_response", "")) for e in entries]
+        
+        # Step 3: Apply replay budget to filtered entries
+        entries, replay_stats = apply_replay_budget(entries, max_chars=5500)
+        
+        # Combine stats: replay_policy includes both filter and budget information
+        replay_policy = {
+            **filter_stats,
+            **replay_stats,
+            "reason": replay_reason
+        }
+        
+        # Step 4: Determine context strength based on final replay diagnostics
         context_strength = classify_context_strength(replay_policy, entry_types)
         replay_policy["context_strength"] = context_strength
         
