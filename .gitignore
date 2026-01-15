@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Virtual environments
+.venv/
+
 # Logs
 logs/
 
@@ -10,6 +13,10 @@ logs/
 runtime/
 orchestrator/
 memory/
+
+# Temporary files
+temp/
+*.wav
 
 # IDE / OS
 .vscode/
