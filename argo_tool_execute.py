@@ -28,6 +28,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 import os
+import re
 
 
 # === TOOL REGISTRY FOR v0 ===
@@ -77,19 +78,10 @@ def call_controller(intent_id: str, hash_value: str) -> bool:
 
 
 def validate_uuid(value: str) -> bool:
-    """Validate UUID format."""
-    if not value:
-        return False
-    parts = value.split('-')
-    if len(parts) != 5:
-        return False
-    if len(parts[0]) != 8 or len(parts[1]) != 4 or len(parts[2]) != 4 or len(parts[3]) != 4 or len(parts[4]) != 12:
-        return False
-    try:
-        int(value.replace('-', ''), 16)
-        return True
-    except ValueError:
-        return False
+    """Validate UUID format: must be lowercase hex only."""
+    # RFC 4122 format: 8-4-4-4-12 lowercase hex digits with hyphens
+    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+    return bool(uuid_pattern.match(value))
 
 
 def validate_hash(value: str) -> bool:
