@@ -33,12 +33,13 @@ It refuses to act beyond the boundaries you set.
 
 ## What ARGO Can Do
 
-- Voice-based interaction with preference-aware responses
-- Conversation browsing and recall
-- Explicit memory storage and preference management
-- Smart home control foundations (via Raspberry Pi peripherals)
-- Document and email drafting with confirmation gates
-- Local system monitoring and health reporting
+- **Voice-based interaction** with preference-aware responses
+- **Audio transcription** with explicit user confirmation (Whisper)
+- **Conversation browsing and recall** (deterministic, no model re-inference)
+- **Explicit memory storage** and preference management
+- **Smart home control foundations** (via Raspberry Pi peripherals)
+- **Document and email drafting** with confirmation gates
+- **Local system monitoring** and health reporting
 
 ## Architecture Overview
 

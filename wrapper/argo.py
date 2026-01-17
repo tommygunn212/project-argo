@@ -41,6 +41,13 @@ FEATURES
    - Single-shot query execution
    - Natural input/output flow
 
+6. WHISPER AUDIO TRANSCRIPTION
+   - Audio-to-text conversion with explicit confirmation gate
+   - TranscriptionArtifact for full auditability
+   - No blind automation: user sees and approves every transcript
+   - Deterministic transcription (same audio → same text)
+   - Comprehensive logging of all transcription events
+
 ================================================================================
 DEPENDENCIES
 ================================================================================
@@ -48,9 +55,11 @@ DEPENDENCIES
 - Python 3.9+
 - requests (HTTP library for Ollama API)
 - ollama (Ollama Python wrapper)
+- openai-whisper (Audio transcription with confirmation gate)
 - memory.py (TF-IDF + topic retrieval)
 - prefs.py (Preference detection and application)
 - browsing.py (Conversation browser)
+- transcription.py (Whisper integration with TranscriptionArtifact)
 
 ================================================================================
 """
@@ -76,14 +85,17 @@ from browsing import (
     get_conversation_context, summarize_conversation
 )
 
-# Import User Preferences (automatic personalization)
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from memory import find_relevant_memory, store_interaction, load_memory
-from prefs import load_prefs, save_prefs, update_prefs, build_pref_block
-from browsing import (
-    list_conversations, show_by_date, show_by_topic,
-    get_conversation_context, summarize_conversation
-)
+# Import Whisper Transcription (audio-to-text with confirmation gate)
+try:
+    from transcription import (
+        transcribe_audio,
+        transcription_storage,
+        TranscriptionArtifact
+    )
+    WHISPER_AVAILABLE = True
+except ImportError:
+    WHISPER_AVAILABLE = False
+    # Whisper optional; graceful degradation if not installed
 
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
@@ -1917,6 +1929,84 @@ def validate_voice_compliance(response_text: str) -> str:
     return response_text.strip() if response_text else ""
 
 
+# ============================================================================
+# WHISPER TRANSCRIPTION WITH CONFIRMATION GATE
+# ============================================================================
+
+def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> tuple:
+    """
+    Transcribe audio file and display confirmation gate before processing.
+    
+    ARGO's philosophy on transcription:
+      1. Audio in → text out (no intent detection)
+      2. Display text to user
+      3. Wait for explicit confirmation
+      4. Only confirmed transcripts flow downstream
+    
+    This function enforces the confirmation gate: users must see what Whisper
+    heard before any downstream processing. No blind automation.
+    
+    Args:
+        audio_path: Path to WAV file
+        max_duration_seconds: Maximum audio duration (default 5 minutes)
+    
+    Returns:
+        tuple: (confirmed: bool, transcript_text: str, artifact: TranscriptionArtifact)
+               - confirmed: True if user approved, False if rejected
+               - transcript_text: Raw transcript (empty if rejected or failed)
+               - artifact: Full artifact with metadata (for logging/audit)
+    
+    Example:
+        confirmed, text, artifact = transcribe_and_confirm("user_audio.wav")
+        
+        if confirmed:
+            # Safe to use: user explicitly approved this text
+            run_argo(text)
+        else:
+            print("Transcript rejected. Please try again.")
+    """
+    if not WHISPER_AVAILABLE:
+        print("⚠ Whisper not installed. Run: pip install openai-whisper", file=sys.stderr)
+        return False, "", None
+    
+    # Transcribe audio file
+    print(f"\n🎤 Transcribing audio...", file=sys.stderr)
+    artifact = transcribe_audio(audio_path, max_duration_seconds=max_duration_seconds)
+    
+    # Handle transcription failure
+    if artifact.status == "failure":
+        print(f"❌ Transcription failed: {artifact.error_detail}", file=sys.stderr)
+        return False, "", artifact
+    
+    if artifact.status == "partial":
+        print(f"⚠ Partial transcription: {artifact.error_detail}", file=sys.stderr)
+    
+    # Display confirmation gate (core philosophy)
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"Here's what I heard:", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\n  \"{artifact.transcript_text}\"", file=sys.stderr)
+    print(f"\nLanguage: {artifact.language_detected} | Confidence: {artifact.confidence:.0%}", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\nProceed with this transcript? (yes/no): ", end="", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Get user confirmation
+    try:
+        response = input().strip().lower()
+    except EOFError:
+        # Piped input or non-interactive: assume no confirmation
+        response = "no"
+    
+    # Process confirmation
+    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
+        transcription_storage.confirm(artifact.id)
+        print(f"✅ Confirmed. Processing transcript...\n", file=sys.stderr)
+        return True, artifact.transcript_text, artifact
+    else:
+        transcription_storage.reject(artifact.id)
+        print(f"❌ Rejected. Please try again.\n", file=sys.stderr)
+        return False, "", artifact
 
 
 
@@ -2541,8 +2631,14 @@ if __name__ == "__main__":
     strict_mode: bool = True
     interactive_mode: bool = False
     user_message: str = ""
+    transcribe_file: str | None = None
     
     args = sys.argv[1:]
+
+    # Parse --transcribe flag (transcribe audio file and get confirmation)
+    if len(args) >= 2 and args[0] == "--transcribe":
+        transcribe_file = args[1]
+        args = args[2:]
 
     # Parse flags FIRST (works for both interactive and non-interactive)
     if len(args) >= 2 and args[0] == "--session":
@@ -2578,12 +2674,27 @@ if __name__ == "__main__":
             sys.exit(1)
         args = args[2:]
 
-    # NOW check if interactive mode (after flags consumed, if anything remains, it's the message)
-    user_message = " ".join(args)
-    if not user_message:
-        interactive_mode = True
-    else:
+    # ________________________________________________________________________
+    # Handle Transcription (if --transcribe flag provided)
+    # ________________________________________________________________________
+    
+    if transcribe_file:
+        # Transcribe audio and get user confirmation
+        confirmed, transcript, artifact = transcribe_and_confirm(transcribe_file)
+        
+        if not confirmed:
+            sys.exit(1)
+        
+        # Use transcribed text as the message
+        user_message = transcript
         interactive_mode = False
+    else:
+        # NOW check if interactive mode (after flags consumed, if anything remains, it's the message)
+        user_message = " ".join(args)
+        if not user_message:
+            interactive_mode = True
+        else:
+            interactive_mode = False
 
     # ________________________________________________________________________
     # Resolve Session ID (shared across all turns in interactive mode)

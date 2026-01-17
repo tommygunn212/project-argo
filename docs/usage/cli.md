@@ -28,6 +28,30 @@ ai "Why does ice melt?"
 
 The program exits automatically after responding.
 
+## Audio Transcription
+
+Transcribe an audio file and process with ARGO:
+
+```powershell
+ai --transcribe audio.wav
+```
+
+Flow:
+1. ARGO transcribes the audio using Whisper
+2. Displays: "Here's what I heard: '<transcript>'. Proceed? (yes/no)"
+3. You confirm or reject the transcript
+4. If confirmed: ARGO processes the transcript as a query
+5. If rejected: Re-record and try again
+
+**With session persistence:**
+
+```powershell
+ai --transcribe audio1.wav --session meeting
+ai --transcribe audio2.wav --session meeting
+```
+
+Both transcriptions will be stored in the same session and can reference each other.
+
 ## Conversation Browsing
 
 Review past interactions by date or topic:

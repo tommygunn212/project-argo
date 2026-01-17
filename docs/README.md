@@ -4,6 +4,17 @@ This folder contains specifications, architectural decisions, and implementation
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
+## transcription/
+
+**whisper.md** — Complete guide to ARGO's Whisper audio transcription module. Covers the transcription-only design philosophy, input/output contracts, confirmation gate flow, failure handling, and logging/auditability.
+
+Use this to:
+- Understand how ARGO transcribes audio
+- Learn the confirmation gate design
+- Understand what Whisper explicitly does NOT do (intent detection, command execution, background listening)
+- Set up transcription in your ARGO instance
+- Debug transcription issues
+
 ## specs/
 
 **master-feature-list.md** — The canonical scope document. Lists all 200 planned capabilities, grouped by domain (voice, lighting, climate, media, automation, security, etc.). Also defines explicit non-behaviors (what ARGO refuses to do).
@@ -28,13 +39,14 @@ Use this to:
 
 *Existing architecture documentation*
 
-**architecture.md** — Technical overview of memory system (TF-IDF + topic fallback), preference detection and storage, recall mode mechanics, voice system, and conversation browsing.
+**architecture.md** — Technical overview of memory system (TF-IDF + topic fallback), preference detection and storage, recall mode mechanics, voice system, conversation browsing, and transcription artifacts.
 
 Use this to:
 - Understand how memory retrieval works
 - Learn preference detection patterns
 - Understand recall mode formatting rules
 - Understand voice compliance enforcement
+- Learn transcription artifact architecture
 
 ## decisions/
 
