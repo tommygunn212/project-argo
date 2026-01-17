@@ -1,13 +1,67 @@
 """
-User Preference Memory Module
+================================================================================
+ARGO User Preferences Module — Automatic Personalization
+================================================================================
 
-Captures and applies user preferences automatically:
-- tone: casual, formal
-- verbosity: concise, detailed
-- humor: likes humor, no humor
-- structure: bullets, no lists
+Module:      prefs.py
+Creator:     Tommy Gunn (@tommygunn212)
+Version:     1.0.0 (Phase 3a)
+Created:     December 2025
+Purpose:     Detect and apply user preferences across sessions
 
-Preferences persist across sessions and are injected into prompts automatically.
+================================================================================
+FEATURES
+================================================================================
+
+1. PREFERENCE CATEGORIES
+   - tone: casual, formal, neutral
+   - verbosity: concise, detailed, medium
+   - humor: likes_humor, no_humor, neutral
+   - structure: bullets, prose, mixed
+
+2. AUTOMATIC DETECTION
+   - Pattern-based detection from user messages
+   - Learns from explicit feedback
+   - Non-invasive observation of communication style
+
+3. PERSISTENCE
+   - Stored in user_preferences.json
+   - Survives across conversation sessions
+   - Manual override available
+
+4. AUTOMATIC APPLICATION
+   - Injected into SYSTEM prompt before each generation
+   - Model sees preferences as part of context, not hard constraints
+   - Preference block prepended to memory + user input
+
+================================================================================
+FUNCTIONS
+================================================================================
+
+1. load_prefs() → dict
+   Load preferences from disk, return defaults if missing
+
+2. save_prefs(prefs: dict)
+   Persist preferences to disk
+
+3. update_prefs(user_input: str, prefs: dict) → dict
+   Auto-detect preferences from user message, update dict
+
+4. build_pref_block(prefs: dict) → str
+   Create human-readable preference block for SYSTEM prompt
+
+================================================================================
+DESIGN PRINCIPLES
+================================================================================
+
+- Explicit only: Users control what ARGO learns
+- No background learning: Changes only on request
+- Guidance-based: Preferences are suggestions, not hard rules
+- Transparent: Users can review and edit preferences.json
+- Persistent: Preferences survive across sessions
+- Session-independent: Each conversation receives the same prefs
+
+================================================================================
 """
 
 import json

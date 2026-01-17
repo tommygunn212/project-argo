@@ -1,17 +1,89 @@
 """
-Argo Memory Module — RAG-style memory recall without external dependencies.
+================================================================================
+ARGO Memory Module — Context-Aware Interaction Retrieval
+================================================================================
 
-Stores interaction history (user input + model response + keywords) and retrieves
-relevant past interactions based on keyword overlap and topic matching.
+Module:      memory.py
+Creator:     Tommy Gunn (@tommygunn212)
+Version:     1.0.0 (Phase 2a)
+Created:     December 2025
+Purpose:     TF-IDF + topic-based memory system for conversational context
 
-Usage:
-    from argo_memory import find_relevant_memory, store_interaction
-    
-    # Before generating response:
-    relevant = find_relevant_memory(user_input, top_n=2)
-    
-    # After generating response:
-    store_interaction(user_input, model_response)
+================================================================================
+FEATURES
+================================================================================
+
+1. PERSISTENT STORAGE
+   - Stores up to 200 interactions in memory/interactions.json
+   - Each entry: timestamp, user_input, response, keywords, topic
+   - Automatic cleanup when limit exceeded (oldest removed first)
+
+2. RETRIEVAL SYSTEM (Three-Tier Fallback)
+   - Tier 1: TF-IDF scoring (keyword relevance)
+   - Tier 2: Topic matching (inferred categories)
+   - Tier 3: Recency fallback (timestamp ordering)
+
+3. KEYWORD EXTRACTION
+   - Automatic keyword extraction from user input and model response
+   - Stopword filtering (common words removed)
+   - Deduplication and scoring
+
+4. TOPIC INFERENCE
+   - 8 core topics: conversation, work, personal, health, tech, creative, planning, other
+   - Pattern-based topic classification
+   - Fallback to 'other' if no clear match
+
+5. HYGIENE RULES
+   - Recall queries never stored (memory stays clean)
+   - Automatic deduplication of similar queries
+   - No recording of system prompts or metadata
+
+================================================================================
+FUNCTIONS
+================================================================================
+
+1. load_memory() → List[Dict]
+   Load all interactions from disk
+
+2. save_memory(memory: List[Dict])
+   Persist interactions to disk
+
+3. infer_topic(text: str) → str
+   Classify interaction into one of 8 topics
+
+4. clean_tokens(text: str) → List[str]
+   Tokenize and remove stopwords
+
+5. extract_keywords(user_input: str, model_response: str) → List[str]
+   Extract meaningful keywords from input and response
+
+6. store_interaction(user_input: str, model_response: str)
+   Save interaction to memory (called after each generation)
+
+7. compute_idf(memory: List[Dict]) → Dict[str, float]
+   Calculate Inverse Document Frequency for all terms
+
+8. compute_tf(text: str) → Dict[str, float]
+   Calculate Term Frequency for query
+
+9. score_by_tfidf(query: str, memory: List[Dict]) → List[tuple]
+   Score and rank interactions by relevance
+
+10. find_relevant_memory(query: str, top_n: int = 2) → List[Dict]
+    Main retrieval function; returns top N relevant interactions
+
+================================================================================
+DESIGN PRINCIPLES
+================================================================================
+
+- Explicit storage only (no background learning)
+- Transparent scoring (all logic is readable)
+- Deterministic retrieval (no randomness)
+- No external dependencies (pure Python)
+- Fast retrieval (in-memory scoring)
+- Easy debugging (full logs available)
+
+================================================================================
 """
 
 import json

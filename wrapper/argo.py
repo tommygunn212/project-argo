@@ -1,24 +1,57 @@
 """
-ARGO - Ollama-based conversational AI wrapper with session management and replay.
+================================================================================
+ARGO — Local-First AI Control System
+================================================================================
 
-Module: argo
-Author: Tommy Gunn
-Version: 1.0.0
+Module:      argo.py (Main Execution Engine)
+Creator:     Tommy Gunn (@tommygunn212)
+Version:     1.0.0
+Created:     December 2025
+Purpose:     Core orchestration layer for ARGO AI system
 
-This module provides:
-- Direct interface to Ollama's Jarvis model via subprocess
-- Persistent JSON logging of all interactions
-- Session tracking with unique IDs (ephemeral or named)
-- Selective replay functionality (last:N turns or current session)
-- Conversation mode enforcement
+================================================================================
+FEATURES
+================================================================================
 
-Session Structure:
-  Ephemeral: Each run gets a unique SESSION_ID (default)
-  Named: Multiple runs can share a SESSION_ID using --session <name> flag
-  
-  Named sessions persist in .sessions.json until manually deleted.
-  Replay can be triggered explicitly with --replay flags.
-  No automatic memory. No persistence between runs unless --session is used.
+1. CONVERSATIONAL AI
+   - Direct interface to Ollama's llama3.1:8b model
+   - Example-based voice guidance (warm, confident, casual tone)
+   - Adaptive persona based on user familiarity and query type
+   - Full auditability with JSON logging of all interactions
+
+2. MEMORY & CONTEXT
+   - TF-IDF + topic fallback for relevant past interaction retrieval
+   - Automatic preference detection (tone, verbosity, humor, structure)
+   - Explicit memory storage (no background learning)
+   - Session-aware context building
+
+3. RECALL MODE
+   - Deterministic meta-query detection (what did we discuss?)
+   - Formatted conversation summaries without model re-inference
+   - No model inference for recall—deterministic list formatting
+
+4. CONVERSATION BROWSING
+   - Read-only access to past interactions by date or topic
+   - Search by keyword without modification
+   - Session isolation and management
+
+5. INTERACTIVE & SINGLE-SHOT MODES
+   - Multi-turn conversation with full context
+   - Single-shot query execution
+   - Natural input/output flow
+
+================================================================================
+DEPENDENCIES
+================================================================================
+
+- Python 3.9+
+- requests (HTTP library for Ollama API)
+- ollama (Ollama Python wrapper)
+- memory.py (TF-IDF + topic retrieval)
+- prefs.py (Preference detection and application)
+- browsing.py (Conversation browser)
+
+================================================================================
 """
 
 import sys

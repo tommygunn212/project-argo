@@ -1,8 +1,90 @@
 #!/usr/bin/env python3
 """
-Conversation browser: read-only access to past conversations.
+================================================================================
+ARGO Conversation Browser — Read-Only Memory Access
+================================================================================
 
-Exposes memory without reinterpreting it.
+Module:      browsing.py
+Creator:     Tommy Gunn (@tommygunn212)
+Version:     1.0.0 (Phase 4)
+Created:     December 2025
+Purpose:     User-facing interface for reviewing past conversations
+
+================================================================================
+FEATURES
+================================================================================
+
+1. READ-ONLY ACCESS
+   - Browse conversations without modification
+   - No editing, deletion, or manipulation of history
+   - User has full visibility and control
+
+2. FIVE BROWSING COMMANDS
+   - list conversations      : Show recent conversations
+   - show by date <DATE>     : View conversations from specific date
+   - show by topic <TOPIC>   : View conversations by category
+   - summarize by topic <T>  : Get summary of topic
+   - context <TOPIC>         : Get detailed context for topic
+
+3. TOPIC CATEGORIES
+   - conversation: General discussion
+   - work: Work-related queries
+   - personal: Personal interests
+   - health: Health and wellness
+   - tech: Technology and coding
+   - creative: Arts and creativity
+   - planning: Planning and organization
+   - other: Uncategorized
+
+4. OUTPUT FORMATTING
+   - Human-readable summaries
+   - Chronological ordering
+   - Topic grouping
+   - No raw JSON output to users
+
+================================================================================
+FUNCTIONS
+================================================================================
+
+1. load_conversations() → List[Dict]
+   Load all stored interactions from memory file
+
+2. parse_date(date_str: str) → datetime
+   Parse ISO timestamp string to datetime object
+
+3. format_date(dt: datetime) → str
+   Format datetime for user-friendly display
+
+4. group_by_date(conversations: List[Dict]) → Dict[str, List[Dict]]
+   Organize conversations by date
+
+5. list_conversations(limit: int = 5) → str
+   Return summary of N most recent conversations
+
+6. show_by_date(date_query: str) → str
+   Return conversations from specified date
+
+7. show_by_topic(topic: str) -> str
+   Return conversations with specified topic
+
+8. get_conversation_context(topic: str) -> str
+   Return detailed context for a topic
+
+9. summarize_conversation(topic: str) -> str
+   Return brief summary of topic discussion
+
+================================================================================
+DESIGN PRINCIPLES
+================================================================================
+
+- Read-only: No deletion or modification
+- Transparent: Users see exactly what ARGO remembers
+- Simple: Five commands, no complex syntax
+- Deterministic: Same query always returns same result
+- Auditable: All output is traceable to source
+- User-focused: Output formatted for human reading, not machines
+
+================================================================================
 """
 
 import json
