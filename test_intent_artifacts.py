@@ -339,13 +339,15 @@ class TestIntentConfirmationGate(unittest.TestCase):
     def test_approval_not_execution(self):
         """Test: 'Approved' status means user said yes, NOT executed."""
         artifact = create_intent_artifact("save as report.txt", source_type="typed")
+        intent_storage.store(artifact)  # Store before approving
         intent_storage.approve(artifact.id)
         
         # File should NOT be created
         self.assertFalse(Path("report.txt").exists())
         
         # Status should only be "approved"
-        self.assertEqual(artifact.status, "approved")
+        retrieved = intent_storage.retrieve(artifact.id)
+        self.assertEqual(retrieved.status, "approved")
 
 
 class TestIntentStorage(unittest.TestCase):
@@ -472,11 +474,13 @@ class TestNOExecutionGuarantee(unittest.TestCase):
     def test_no_app_launch_on_open(self):
         """Test: 'open notepad' does NOT launch app."""
         artifact = create_intent_artifact("open notepad", source_type="typed")
+        intent_storage.store(artifact)  # Store before approving
         intent_storage.approve(artifact.id)
         
         # No process spawn, no app launch
         # (If it did, test would hang or fail spectacularly)
-        self.assertEqual(artifact.status, "approved")
+        retrieved = intent_storage.retrieve(artifact.id)
+        self.assertEqual(retrieved.status, "approved")
         # Status is all that changed
     
     def test_no_side_effects_on_parse(self):
@@ -495,10 +499,12 @@ class TestNOExecutionGuarantee(unittest.TestCase):
     def test_approval_is_not_execution(self):
         """Test: Approval is only state change, never execution."""
         artifact = create_intent_artifact("save as secret.txt", source_type="typed")
+        intent_storage.store(artifact)  # Store before approving
         
         initial_status = artifact.status
         intent_storage.approve(artifact.id)
-        final_status = artifact.status
+        retrieved = intent_storage.retrieve(artifact.id)
+        final_status = retrieved.status
         
         # Only status changed
         self.assertEqual(initial_status, "proposed")

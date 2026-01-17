@@ -129,6 +129,17 @@ except ImportError:
     EXECUTABLE_INTENT_AVAILABLE = False
     # Executable intent system optional; graceful degradation if not installed
 
+# Import Execution Engine (simulation mode, v1.3.0-alpha)
+try:
+    from execution_engine import (
+        ExecutionEngine,
+        DryRunExecutionReport
+    )
+    EXECUTION_ENGINE_AVAILABLE = True
+except ImportError:
+    EXECUTION_ENGINE_AVAILABLE = False
+    # Execution engine optional; graceful degradation if not installed
+
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
 # ============================================================================
@@ -2195,6 +2206,111 @@ def plan_and_confirm(intent_artifact: IntentArtifact) -> tuple:
         plan.status = "rejected"
         print(f"❌ Plan rejected. No changes will be made.\n", file=sys.stderr)
         return False, plan
+
+
+def dry_run_and_confirm(plan_artifact: ExecutionPlanArtifact) -> tuple:
+    """
+    Simulate execution of a plan and request user approval (v1.3.0-alpha).
+    
+    ARGO's philosophy on execution validation:
+      1. Plan artifact in → DryRunExecutionReport out (simulation only, NO changes)
+      2. Validate all preconditions (symbolically)
+      3. Predict state changes (text descriptions only)
+      4. Validate rollback procedures
+      5. Identify failure modes
+      6. Display safety analysis to user
+      7. Wait for explicit execution approval
+      8. Only approved plans advance to actual execution (v1.4.0+)
+    
+    Reports contain:
+      - Full simulation results per step
+      - Precondition status (MET/UNKNOWN/UNMET)
+      - Predicted state changes (text only, not executed)
+      - Rollback procedure validation
+      - Failure mode enumeration
+      - Risk analysis (SAFE/CAUTIOUS/RISKY/CRITICAL)
+      - Execution feasibility verdict
+    
+    HARD CONSTRAINT: This function makes ZERO changes to system state.
+    All simulation is symbolic. No files created, no commands executed.
+    
+    Args:
+        plan_artifact: ExecutionPlanArtifact from plan_and_confirm()
+        intent_id: Optional - ID of parent IntentArtifact
+        transcription_id: Optional - ID of parent TranscriptionArtifact
+    
+    Returns:
+        tuple: (approved: bool, report: DryRunExecutionReport)
+               - approved: True if user approved execution, False if rejected
+               - report: Complete simulation results
+    
+    Example:
+        plan_confirmed, plan = plan_and_confirm(intent)
+        if plan_confirmed:
+            approved, report = dry_run_and_confirm(plan)
+            if approved:
+                # Ready for v1.4.0 actual execution
+                execute_plan_for_real(plan, report)
+    """
+    if not EXECUTION_ENGINE_AVAILABLE:
+        print("⚠ Execution engine (v1.3.0) not available.", file=sys.stderr)
+        return False, None
+    
+    # Initialize execution engine
+    engine = ExecutionEngine()
+    
+    # Simulate execution (NO REAL CHANGES)
+    report = engine.dry_run(
+        plan=plan_artifact,
+        intent_id=getattr(plan_artifact, 'intent_id', None),
+        transcription_id=getattr(plan_artifact, 'transcription_id', None)
+    )
+    
+    # Display dry-run results
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"DRY-RUN SIMULATION RESULTS", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\n{report.summary()}", file=sys.stderr)
+    print(f"\n{'='*70}", file=sys.stderr)
+    
+    # Risk warnings
+    if report.highest_risk_detected == "critical":
+        print(f"🚨 CRITICAL RISK: This plan has irreversible actions.", file=sys.stderr)
+        print(f"   Proceed only if you understand the consequences.", file=sys.stderr)
+    elif report.highest_risk_detected == "risky":
+        print(f"⚠️  RISKY: Partial rollback available if execution fails.", file=sys.stderr)
+    elif report.highest_risk_detected == "cautious":
+        print(f"ℹ️  CAUTION: Plan is fully reversible but changes system state.", file=sys.stderr)
+    
+    if not report.execution_feasible:
+        print(f"\n❌ EXECUTION NOT FEASIBLE: {report.blocking_reason}", file=sys.stderr)
+        print(f"   Simulation indicates this plan cannot be executed safely.", file=sys.stderr)
+        return False, report
+    
+    # Approval request
+    print(f"\n{'='*70}", file=sys.stderr)
+    if report.highest_risk_detected == "safe":
+        print(f"Approve execution of this plan? (yes/no): ", end="", file=sys.stderr)
+    else:
+        print(f"⚠️  Execute despite {report.highest_risk_detected} risk? (yes/no): ", end="", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Get user approval
+    try:
+        response = input().strip().lower()
+    except EOFError:
+        # Piped input: assume no approval
+        response = "no"
+    
+    # Process approval
+    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
+        report.user_approved_execution = True
+        print(f"✅ Execution approved. Ready for real execution (v1.4.0+).\n", file=sys.stderr)
+        return True, report
+    else:
+        report.user_approved_execution = False
+        print(f"❌ Execution rejected. Plan will not be executed.\n", file=sys.stderr)
+        return False, report
 
 
 def run_argo(
