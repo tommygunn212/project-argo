@@ -89,5 +89,16 @@ ARGO is available under a dual-licensing model.
 
 Commercial use includes any revenue-generating product, service, or internal business deployment.
 
-See `LICENSE` for full terms.  
+See `LICENSE` for full terms.
+
+## Project Milestones
+
+ARGO development is tracked in phases. See [MILESTONES.md](MILESTONES.md) for:
+- ✅ Completed features (Memory, Transcription, Intent Parsing)
+- 🚧 Current development status
+- 📋 Planned features (Executable Intent, Execution Engine, Smart Home)
+- 📊 Project metrics and design principles
+
+**Current Status:** v1.1.0 (Intent Parsing + Audio Transcription + Memory) — Production Ready
+
 For commercial licensing inquiries, contact the project owner via GitHub.
