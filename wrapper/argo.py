@@ -1,6 +1,10 @@
 """
 ARGO - Ollama-based conversational AI wrapper with session management and replay.
 
+Module: argo
+Author: Tommy Gunn
+Version: 1.0.0
+
 This module provides:
 - Direct interface to Ollama's Jarvis model via subprocess
 - Persistent JSON logging of all interactions
@@ -24,6 +28,28 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 import requests
+
+# Import Phase 4D drift monitor
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from system.runtime.drift_monitor import get_drift_monitor
+
+# Import Argo Memory (RAG-based interaction recall)
+sys.path.insert(0, os.path.dirname(__file__))
+from memory import find_relevant_memory, store_interaction, load_memory
+from prefs import load_prefs, save_prefs, update_prefs, build_pref_block
+from browsing import (
+    list_conversations, show_by_date, show_by_topic,
+    get_conversation_context, summarize_conversation
+)
+
+# Import User Preferences (automatic personalization)
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from memory import find_relevant_memory, store_interaction, load_memory
+from prefs import load_prefs, save_prefs, update_prefs, build_pref_block
+from browsing import (
+    list_conversations, show_by_date, show_by_topic,
+    get_conversation_context, summarize_conversation
+)
 
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
@@ -246,6 +272,59 @@ def get_verbosity_text(verbosity: str) -> str:
     return verbosity_instructions.get(verbosity, verbosity_instructions["short"])
 
 
+def get_cli_formatting_suppression(execution_context: str) -> str:
+    """
+    CLI formatting suppression: suppress lists/bullets in non-TTY contexts.
+    
+    When stdin/stdout are not TTY (headless CLI), suppress formatted lists.
+    Use plain paragraphs instead. Content rules unchanged.
+    
+    Args:
+        execution_context: "cli" or "gui" from detect_context()
+        
+    Returns:
+        str: Formatting constraint text (empty if GUI context)
+    """
+    if execution_context == "cli":
+        return "Use plain paragraphs. Do not use numbered lists, bullet points, or markdown formatting."
+    return ""
+
+
+def validate_cli_format(response: str, execution_context: str) -> tuple[bool, str]:
+    """
+    Validate CLI response format: no lists, bullets, or headings.
+    
+    Post-generation validator (shape only, not content).
+    
+    Args:
+        response: Model response text
+        execution_context: "cli" or "gui" from detect_context()
+        
+    Returns:
+        tuple: (is_valid: bool, error_message: str or "")
+    """
+    if execution_context != "cli":
+        return True, ""
+    
+    lines = response.split("\n")
+    
+    # Check for forbidden list tokens
+    for i, line in enumerate(lines):
+        # Numbered lists (1., 2., etc.)
+        if line.lstrip() and line.lstrip()[0].isdigit() and len(line.lstrip()) > 1 and line.lstrip()[1] == ".":
+            return False, f"Line {i+1}: Numbered list detected ('{line.strip()}')"
+        
+        # Bullet points (-, *, etc.)
+        if line.lstrip().startswith("-") or line.lstrip().startswith("*"):
+            return False, f"Line {i+1}: Bullet point detected ('{line.strip()}')"
+        
+        # Section headers (markdown headers #)
+        if line.lstrip().startswith("#"):
+            return False, f"Line {i+1}: Section header detected ('{line.strip()}')"
+    
+    return True, ""
+
+
 # ============================================================================
 # System Prompts & Constraints
 # ============================================================================
@@ -286,6 +365,926 @@ Policy is configurable without changing logic.
 
 
 # ============================================================================
+# Phase 4C: Pre-Generation Behavior Selector
+# ============================================================================
+
+QUERY_TYPE_PATTERNS = {
+    "factual": {
+        "patterns": ("what is", "define", "who is", "when was", "where is", "how many", "isn't", "doesn't", "aren't"),
+        "priority": 1,
+    },
+    "exploratory": {
+        "patterns": ("tell me about", "explain", "describe", "how does", "why"),
+        "priority": 2,
+    },
+    "corrective": {
+        "patterns": ("actually", "no wait", "correction", "wrong", "mistake", "that's not", "instead"),
+        "priority": 3,
+    },
+    "instructional": {
+        "patterns": ("how to", "steps to", "walk me through", "guide", "tutorial", "process", "add", "install", "setup", "configure"),
+        "priority": 4,
+    },
+    "speculative": {
+        "patterns": ("what if", "suppose", "imagine", "could", "would it", "possible to"),
+        "priority": 5,
+    },
+}
+"""
+Query type classification patterns.
+Priority indicates detection order (higher priority checked first).
+"""
+
+
+def classify_query_type(user_input: str) -> str:
+    """
+    Classify the query into a behavioral category.
+    
+    Types:
+    - "factual": asking for facts, definitions, specs
+    - "exploratory": open-ended questions, seeking understanding
+    - "corrective": correcting/updating previous statements
+    - "instructional": asking for step-by-step guidance
+    - "speculative": hypothetical/future questions
+    - "other": fallback
+    
+    Args:
+        user_input: Raw user input
+        
+    Returns:
+        str: Query type classification
+    """
+    user_input_lower = user_input.lower().strip()
+    
+    # Sort by priority (highest first)
+    sorted_types = sorted(QUERY_TYPE_PATTERNS.items(), key=lambda x: -x[1]["priority"])
+    
+    for query_type, config in sorted_types:
+        for pattern in config["patterns"]:
+            if pattern in user_input_lower:
+                return query_type
+    
+    return "other"
+
+
+def infer_canonical_knowledge(user_input: str) -> bool:
+    """
+    Infer whether user is asking about canonical/well-specified knowledge.
+    
+    Signals for canonical knowledge:
+    - Manufacturer names (BigTreeTech, LDO, VzBot, Bambu, Creality, Duet, E3D)
+    - Product model numbers (SKR 3, LK4pro, RRF, etc.)
+    - Technical specifications (specs, datasheet, reference)
+    - Established standards (NEMA 17, 24V, PWM, etc.)
+    - Well-defined procedures (calibrate, home, tune, etc.)
+    
+    Signals for non-canonical knowledge:
+    - Opinion words (think, believe, probably, maybe, seems)
+    - Vague references (that thing, some setup, random config)
+    - Future/hypothetical context
+    
+    This is a stub that infers canonical status until a real knowledge
+    database is available.
+    
+    Args:
+        user_input: Raw user input
+        
+    Returns:
+        bool: True if query appears to be about canonical knowledge
+    """
+    user_input_lower = user_input.lower()
+    
+    # Canonical knowledge signals
+    canonical_signals = (
+        "skr 3",
+        "bigtreetech",
+        "ldo",
+        "vzbot",
+        "bambu",
+        "creality",
+        "duet",
+        "e3d",
+        "nema 17",
+        "tmc2209",
+        "marlin",
+        "klipper",
+        "datasheet",
+        "spec",
+        "specification",
+        "24v",
+        "12v",
+        "heater cartridge",
+        "thermistor",
+        "stepper",
+        "endstop",
+        "power supply",
+        "calibrate",
+        "home",
+        "tune",
+        "pid",
+        "homing",
+    )
+    
+    # Non-canonical signals
+    non_canonical_signals = (
+        "i think",
+        "i believe",
+        "probably",
+        "maybe",
+        "seems like",
+        "guess",
+        "might be",
+        "could be",
+        "some random",
+        "that thing",
+    )
+    
+    # Check non-canonical first (stronger signal)
+    for signal in non_canonical_signals:
+        if signal in user_input_lower:
+            return False
+    
+    # Check canonical
+    for signal in canonical_signals:
+        if signal in user_input_lower:
+            return True
+    
+    # Canonical inference failure: factual queries default to non-canonical (conservative)
+    # This forces uncertainty enforcement when facts are demanded but knowledge is unverified
+    factual_patterns = ("what ", "what's", "define ", "explain ", "how many", "when was", "where is", "who is")
+    if any(user_input_lower.startswith(p) for p in factual_patterns):
+        return False  # Non-canonical by default when inference fails on factual query
+    
+    # Default: uncertain, treat as potentially non-canonical
+    return False
+
+
+def select_behavior_profile(
+    query_type: str,
+    context_strength: str,
+    has_canonical_knowledge: bool,
+) -> dict:
+    """
+    Select behavior profile based on query type, context, and knowledge availability.
+    
+    Behavior profile determines:
+    - verbosity_override: "short", "normal", "long" (None = no override)
+    - explanation_depth: "minimal", "standard", "full"
+    - correction_style: "factual", "exploratory", "confrontational"
+    
+    Decision matrix:
+    
+    Factual + Strong Context + Canonical → SHORT + MINIMAL
+    Factual + Weak Context + Canonical → NORMAL + STANDARD
+    Factual + Any Context + Non-Canonical → LONG + FULL
+    
+    Exploratory + Strong Context → NORMAL + MINIMAL (compress, skip primers)
+    Exploratory + Weak Context → LONG + STANDARD
+    
+    Corrective + Any Context → NORMAL + STANDARD (always verify)
+    
+    Instructional + Any Context → LONG + FULL (always detailed)
+    
+    Speculative + Any Context → NORMAL + STANDARD
+    
+    Args:
+        query_type: From classify_query_type()
+        context_strength: From classify_context_strength() (strong/moderate/weak)
+        has_canonical_knowledge: From infer_canonical_knowledge()
+        
+    Returns:
+        dict: Behavior profile with overrides and instructions
+    """
+    profile = {
+        "verbosity_override": None,
+        "explanation_depth": "standard",
+        "correction_style": "factual",
+    }
+    
+    # ________________________________________________________________________
+    # Factual queries
+    # ________________________________________________________________________
+    if query_type == "factual":
+        if has_canonical_knowledge:
+            if context_strength == "strong":
+                profile["verbosity_override"] = "short"
+                profile["explanation_depth"] = "minimal"
+            elif context_strength == "moderate":
+                profile["verbosity_override"] = "normal"
+                profile["explanation_depth"] = "standard"
+            else:  # weak
+                profile["verbosity_override"] = "normal"
+                profile["explanation_depth"] = "standard"
+        else:
+            # Non-canonical: HARD STOP - refuse speculation
+            profile["verbosity_override"] = "long"
+            profile["explanation_depth"] = "full"
+            profile["force_uncertainty"] = True
+            profile["refuse_speculation"] = True
+    
+    # ________________________________________________________________________
+    # Exploratory queries
+    # ________________________________________________________________________
+    elif query_type == "exploratory":
+        if context_strength == "strong":
+            # Strong context: can compress, skip primers, front-load conclusions
+            profile["verbosity_override"] = "short"
+            profile["explanation_depth"] = "minimal"
+        elif context_strength == "moderate":
+            profile["verbosity_override"] = "normal"
+            profile["explanation_depth"] = "standard"
+        else:  # weak
+            # Weak context: expand to teach mode
+            profile["verbosity_override"] = "long"
+            profile["explanation_depth"] = "full"
+    
+    # ________________________________________________________________________
+    # Corrective queries (always verify, always standard depth)
+    # ________________________________________________________________________
+    elif query_type == "corrective":
+        profile["verbosity_override"] = "normal"
+        profile["explanation_depth"] = "standard"
+        profile["correction_style"] = "factual"
+    
+    # ________________________________________________________________________
+    # Instructional queries (always detailed)
+    # ________________________________________________________________________
+    elif query_type == "instructional":
+        profile["verbosity_override"] = "long"
+        profile["explanation_depth"] = "full"
+    
+    # ________________________________________________________________________
+    # Speculative queries (neutral depth)
+    # ________________________________________________________________________
+    elif query_type == "speculative":
+        profile["verbosity_override"] = "normal"
+        profile["explanation_depth"] = "standard"
+    
+    # ________________________________________________________________________
+    # Other (neutral defaults)
+    # ________________________________________________________________________
+    else:
+        profile["verbosity_override"] = None
+        profile["explanation_depth"] = "standard"
+    
+    return profile
+
+
+# ============================================================================
+# Phase 5B: Familiarity & Trust Layer (Stateful, Earned, Revocable)
+# ============================================================================
+
+# Familiarity level state (persists across turns in a session)
+# Tracks earned personality privilege
+FAMILIARITY_STATE = {
+    "level": "neutral",  # neutral, familiar, trusted
+    "successful_turns": 0,  # Count of turns without violations
+    "violations_count": 0,  # Resets on each violation
+}
+
+
+def update_familiarity(success: bool, violation_type: str | None = None) -> str:
+    """
+    Update familiarity level based on interaction outcomes.
+    
+    Promote:
+    - neutral → familiar after 3 successful turns
+    - familiar → trusted after 5 successful turns
+    
+    Demote:
+    - Any level → neutral on hallucination, uncertainty violation, frame blending
+    - trusted → familiar on personality discipline violation
+    
+    Args:
+        success: Whether interaction succeeded (no violations)
+        violation_type: Type of violation, if any
+        
+    Returns:
+        str: Current familiarity level
+    """
+    if violation_type:
+        # Immediate demotion on violations
+        if violation_type in ("hallucination", "uncertainty_violation", "frame_blending"):
+            FAMILIARITY_STATE["level"] = "neutral"
+            FAMILIARITY_STATE["successful_turns"] = 0
+        elif violation_type == "personality_discipline":
+            FAMILIARITY_STATE["level"] = "familiar"
+            FAMILIARITY_STATE["successful_turns"] = 0
+        FAMILIARITY_STATE["violations_count"] += 1
+    else:
+        # Increment on success
+        FAMILIARITY_STATE["successful_turns"] += 1
+        
+        # Promote if thresholds met
+        if FAMILIARITY_STATE["level"] == "neutral" and FAMILIARITY_STATE["successful_turns"] >= 3:
+            FAMILIARITY_STATE["level"] = "familiar"
+            FAMILIARITY_STATE["successful_turns"] = 0
+        elif FAMILIARITY_STATE["level"] == "familiar" and FAMILIARITY_STATE["successful_turns"] >= 5:
+            FAMILIARITY_STATE["level"] = "trusted"
+            FAMILIARITY_STATE["successful_turns"] = 0
+    
+    return FAMILIARITY_STATE["level"]
+
+
+def get_familiarity_level() -> str:
+    """Return current familiarity level: neutral, familiar, or trusted."""
+    return FAMILIARITY_STATE["level"]
+
+
+# ============================================================================
+# Phase 5B Extension: Casual Question Observational Humor
+# ============================================================================
+
+def is_casual_question(query_text: str) -> bool:
+    """
+    Detect if question is about casual, everyday, or observational topics.
+    
+    Casual questions:
+    - About people behavior, habits, social dynamics
+    - About animals, pets, observable behavior
+    - About meetings, conversations, social situations
+    - About everyday objects and patterns
+    - NOT technical, NOT specialized, NOT expertise-based
+    
+    Args:
+        query_text: User's question
+        
+    Returns:
+        bool: True if casual/observational topic
+    """
+    query_lower = query_text.lower()
+    
+    # Specific casual topic patterns (more precise than simple substring match)
+    casual_patterns = (
+        # Animals/pets
+        "dog", "cat", "pet", "animal",
+        # People/social behavior and psychology
+        "people", "person", "meeting", "conversation", "social",
+        "personality", "introvert", "extrovert", "habit",
+        "procrastination", "why do people", "why do humans", "why do we",
+        # Everyday activities and states
+        "coffee", "sleep", "sleep deprivation",
+        # Generic patterns (but exclude technical contexts)
+        "why do ", "how come ",
+    )
+    
+    # Check if matches casual pattern
+    for pattern in casual_patterns:
+        if pattern in query_lower:
+            # Exclude technical domains (contains technical markers)
+            technical_markers = (
+                "stepper", "motor", "thermistor", "skr", "klipper",
+                "mainboard", "firmware", "code", "program", "algorithm",
+                "function", "class", "method", "api", "database",
+                "works", "mechanism", "process", "system", "architecture",
+            )
+            
+            # If it's a generic "why do/how come" but also mentions technical term, it's technical
+            if pattern in ("why do ", "how come "):
+                if any(tech in query_lower for tech in technical_markers):
+                    return False  # Technical topic
+            
+            return True
+    
+    return False
+
+
+# ============================================================================
+# Phase 5B.2 Patch: Frame Correction & Hallucination Guard
+# ============================================================================
+
+def validate_human_first_sentence(response_text: str, is_casual: bool, primary_frame: str) -> tuple[bool, str]:
+    """
+    PATCH: Human-first sentence enforcement for casual + human frame.
+    
+    For casual questions with 'human' frame (behavior/motivation), 
+    reject academic/technical opening language.
+    
+    Fails if first sentence contains:
+    - Academic nouns: "system", "phenomenon", "aspect", "mechanism", "process"
+    - Technical framing: "involves", "consists of", "characterized by"
+    
+    Forces human-centered opening: "Dogs want...", "People do...", not "The system..."
+    
+    Args:
+        response_text: Model response text
+        is_casual: From is_casual_question()
+        primary_frame: From select_primary_frame()
+        
+    Returns:
+        tuple: (is_human_first: bool, violation: str or "")
+    """
+    # Only enforce for casual + human frame
+    if not (is_casual and primary_frame == "human"):
+        return True, ""
+    
+    first_sentence_end = response_text.find(".")
+    if first_sentence_end <= 0:
+        return True, ""
+    
+    first_sentence = response_text[:first_sentence_end].lower()
+    
+    # Academic/technical opening markers
+    academic_openers = (
+        "the system", "the phenomenon", "the aspect", "the mechanism",
+        "a system", "a process", "an aspect", "a mechanism",
+        "this system", "such mechanisms", "these processes",
+        "involves", "consists of", "characterized by", "comprised of",
+    )
+    
+    for opener in academic_openers:
+        if opener in first_sentence:
+            return False, f"Academic opening in casual human frame: '{opener}'"
+    
+    return True, ""
+
+
+def detect_plausible_hallucination(response_text: str, has_canonical_knowledge: bool, primary_frame: str) -> tuple[bool, str]:
+    """
+    PATCH: Soft hallucination check for "plausible biology" without verification.
+    
+    If explaining everyday behavior using technical biological claims but 
+    WITHOUT strong canonical grounding, downgrade language or flag.
+    
+    Triggers if:
+    - Response claims biological causation ("is because the brain", "due to hormones")
+    - has_canonical_knowledge == False
+    - primary_frame == "human" (behavioral explanation)
+    
+    Soft failure: Requires downgrade to plain language ("mostly because", "it's less about X")
+    
+    Args:
+        response_text: Model response text
+        has_canonical_knowledge: From infer_canonical_knowledge()
+        primary_frame: From select_primary_frame()
+        
+    Returns:
+        tuple: (is_grounded: bool, violation: str or "")
+    """
+    # Only check behavioral explanations without canonical grounding
+    if primary_frame != "human" or has_canonical_knowledge:
+        return True, ""
+    
+    response_lower = response_text.lower()
+    
+    # Plausible-but-unverified biological claims
+    unverified_bio_claims = (
+        "is because the brain", "due to the brain", "because of the brain",
+        "because of hormones", "due to hormones", "because of dopamine",
+        "because of serotonin", "evolutionary reason", "evolutionary trait",
+        "is hardwired", "biologically", "neurological", "brain chemistry",
+        "releases dopamine", "triggers serotonin", "neural pathway",
+    )
+    
+    has_bio_claim = any(claim in response_lower for claim in unverified_bio_claims)
+    
+    if has_bio_claim:
+        # Check if response uses downgrade language (acceptable without verification)
+        downgrade_language = (
+            "mostly because", "largely because", "seems to be",
+            "it's less about", "rather than", "not so much", "less about"
+        )
+        has_downgrade = any(phrase in response_lower for phrase in downgrade_language)
+        
+        if not has_downgrade:
+            return False, "Biological claim without canonical grounding or downgrade language"
+    
+    return True, ""
+
+
+
+def should_inject_observational_humor(familiarity_level: str, is_casual: bool) -> bool:
+    """
+    Determine if observational humor should be suggested.
+    
+    Rules:
+    - Only when familiarity_level == "trusted"
+    - Only when topic is casual/everyday
+    - Humor is optional but missing obvious opportunity = soft failure
+    
+    Args:
+        familiarity_level: From get_familiarity_level()
+        is_casual: From is_casual_question()
+        
+    Returns:
+        bool: True if conditions allow observational humor
+    """
+    return familiarity_level == "trusted" and is_casual
+
+
+def build_casual_humor_instruction(query_text: str) -> str | None:
+    """
+    Create observational humor instruction for casual questions.
+    
+    Returns observation-based humor guide, not punchlines or sarcasm.
+    
+    Example queries and expected openers:
+    - "Why do dogs always put their head on your lap?"
+      → "Dogs aren't subtle about their needs"
+    - "Why do meetings always run over?"
+      → "Nobody's ever walked out of a meeting thinking 'that was concise'"
+    
+    Args:
+        query_text: User's question
+        
+    Returns:
+        str: Humor instruction, or None if no appropriate observation found
+    """
+    query_lower = query_text.lower()
+    
+    # Observation-based openers for common casual topics
+    observations = {
+        "dog": "Dogs aren't shy about what they want.",
+        "cat": "Cats operate on their own schedule.",
+        "pet": "Pet behavior follows its own logic.",
+        "meeting": "Meetings have a way of expanding.",
+        "conversation": "Conversations rarely go where they start.",
+        "habit": "Habits are stickier than they seem.",
+        "sleep": "Sleep deprivation does things to your brain.",
+        "coffee": "Coffee and productivity feel connected until they aren't.",
+        "procrastination": "Procrastination is the most punctual thing ever.",
+        "why do people": "People's logic isn't always obvious.",
+        "why do humans": "Humans are interesting to watch.",
+    }
+    
+    for topic, observation in observations.items():
+        if topic in query_lower:
+            return (
+                f"CASUAL HUMOR (optional): You may open with one observational "
+                f"sentence like '{observation}' Then immediately return to "
+                f"explanation. The humor is about shared observation, not jokes."
+            )
+    
+    return None
+
+
+# ============================================================================
+# Phase 5A: Judgment Gate (Single-Frame Selection)
+# ============================================================================
+
+def select_primary_frame(query_type: str, context_strength: str, is_casual: bool = False) -> str:
+    """
+    Decide which explanation frame to use when multiple are valid.
+    
+    Frames available:
+    - 'practical': How to do it, tools, steps, mechanics
+    - 'structural': How it's organized, processes, relationships
+    - 'human': Why people do it, motivations, behavior, consequences
+    - 'systems': How parts interact, feedback, effects across system
+    
+    Selection rules:
+    - If casual question (animals, people, habits) → force 'human' frame (behavior/motivation)
+    - If why-question + human context → prefer 'human'
+    - If why-question + org/process context → prefer 'structural'
+    - If how/what + tools/systems → prefer 'practical'
+    - Default: 'practical' (not comprehensive)
+    
+    ⚠️ Returns one frame only. No blending.
+    
+    Args:
+        query_type: From classify_query_type()
+        context_strength: "strong", "moderate", or "weak"
+        is_casual: From is_casual_question() - casual topics force 'human' frame
+        
+    Returns:
+        str: One of 'practical', 'structural', 'human', 'systems'
+    """
+    # PATCH: Casual questions (animals, people, habits) → force 'human' frame
+    # This ensures "Why don't cats listen" is about agency, not hearing mechanics
+    # And "Why do people procrastinate" is about incentives, not neurology
+    if is_casual:
+        return "human"
+    
+    # Exploratory queries → choose based on context
+    if query_type == "exploratory":
+        if context_strength == "strong":
+            return "practical"  # Assume user wants practical frame with strong context
+        else:
+            return "structural"  # Assume systems understanding with weak context
+    
+    # Instructional queries → always practical
+    if query_type == "instructional":
+        return "practical"
+    
+    # Factual queries → practical (just the facts)
+    if query_type == "factual":
+        return "practical"
+    
+    # Corrective queries → structural (explain the fix)
+    if query_type == "corrective":
+        return "structural"
+    
+    # Speculative queries → systems (how it would interact)
+    if query_type == "speculative":
+        return "systems"
+    
+    # Default: practical
+    return "practical"
+
+
+def validate_scope(response_text: str) -> tuple[bool, str]:
+    """
+    Validate that response stays within single frame.
+    
+    Soft validator (does not regenerate, only logs).
+    
+    Fails if response:
+    - Introduces multiple perspectives ("another reason is", "from another angle")
+    - Hedges into enumeration ("On the other hand", "However")
+    - Expands scope beyond initial answer
+    
+    Args:
+        response_text: Model response text
+        
+    Returns:
+        tuple: (is_scoped: bool, drift_signal: str or "")
+    """
+    response_lower = response_text.lower()
+    
+    # Multi-perspective markers (scope expansion)
+    multi_perspective_markers = (
+        "another reason",
+        "from another angle",
+        "alternatively",
+        "on the other hand",
+        "conversely",
+        "however, from a different perspective",
+        "but consider also",
+        "additional perspective",
+        "also worth noting is",
+    )
+    
+    for marker in multi_perspective_markers:
+        if marker in response_lower:
+            return False, f"Multi-perspective expansion detected: '{marker}'"
+    
+    # Scope-broadening markers
+    scope_markers = (
+        "more broadly",
+        "in general",
+        "this also applies to",
+        "moreover, we should consider",
+        "additionally, it's important",
+    )
+    
+    for marker in scope_markers:
+        if marker in response_lower:
+            return False, f"Scope expansion detected: '{marker}'"
+    
+    # Essay-ending markers (signals "conclusion" coming)
+    conclusion_markers = (
+        "in conclusion",
+        "in summary",
+        "to summarize",
+        "ultimately",
+        "all things considered",
+    )
+    
+    for marker in conclusion_markers:
+        if marker in response_lower:
+            return False, f"Essay-conclusion pattern detected: '{marker}'"
+    
+    return True, ""
+
+
+def validate_personality_discipline(response_text: str, query_type: str, has_canonical_knowledge: bool, execution_context: str, is_casual: bool = False) -> tuple[bool, str, bool]:
+    """
+    Post-generation personality discipline check.
+    
+    Verify that humor/casual tone doesn't replace explanation, undermine authority,
+    or weaken correctness.
+    
+    Hard fails if:
+    - Humor appears when saying "I don't know"
+    - Sarcasm directed at user
+    - Humor in factual canonical answers
+    - Humor/casual in CLI command responses
+    - Joke substitutes for actual explanation
+    
+    Soft fails (log only, no demotion) if:
+    - Casual question when trusted, but no observational opener used
+    
+    Args:
+        response_text: Model response text
+        query_type: From classify_query_type()
+        has_canonical_knowledge: From infer_canonical_knowledge()
+        execution_context: "cli" or "gui"
+        is_casual: True if is_casual_question() returned True
+        
+    Returns:
+        tuple: (is_disciplined: bool, violation: str or "", soft_failure: bool)
+    """
+    response_lower = response_text.lower()
+    soft_failure = False
+    
+    # NO HUMOR when saying "I don't know" or any uncertainty statement
+    uncertainty_phrases = ("i don't know", "i don't have", "not sure", "unsure", "unclear", "uncertain")
+    if any(phrase in response_lower for phrase in uncertainty_phrases):
+        humor_markers = ("lol", "haha", "😄", ";)", "just kidding", "just messing", "btw", "fyi")
+        for marker in humor_markers:
+            if marker in response_lower:
+                return False, "Humor detected on uncertainty statement", False
+    
+    # NO HUMOR in factual canonical answers
+    if query_type == "factual" and has_canonical_knowledge:
+        joke_indicators = ("apparently", "supposedly", "allegedly", "so-called", "funny thing is")
+        for indicator in joke_indicators:
+            if indicator in response_lower:
+                return False, f"Humor/skepticism in factual canonical answer: '{indicator}'", False
+    
+    # NO SARCASM INDICATORS (applies to all contexts)
+    # These are sarcastic/skeptical markers that weaken credibility
+    sarcasm_indicators = ("so-called", "apparently", "supposedly", "allegedly")
+    for indicator in sarcasm_indicators:
+        if indicator in response_lower:
+            # Already caught above for factual canonical, so this catches casual/other contexts
+            if not (query_type == "factual" and has_canonical_knowledge):
+                return False, f"Sarcasm/skepticism detected: '{indicator}'", False
+    
+    # NO HUMOR in CLI command responses
+    if execution_context == "cli":
+        cli_joke_markers = ("btw", "psst", "fyi", "heads up")
+        for marker in cli_joke_markers:
+            if marker in response_lower:
+                return False, f"Casual tone in CLI command: '{marker}'", False
+    
+    # NO SARCASM aimed at user (check for sarcastic structures)
+    # Only flag if sarcasm is directed AT user ("of course you", "sure you can", etc.)
+    # Don't flag neutral observational use of "obviously" or "naturally"
+    user_directed_sarcasm = ("oh you want", "sure you can", "of course you", "obviously you")
+    for pattern in user_directed_sarcasm:
+        if pattern in response_lower:
+            return False, f"Sarcasm directed at user: '{pattern}'", False
+    
+    # Check if joke replaces explanation (standalone punchline-like structures)
+    if response_text.strip().endswith(("😄", "lol", "haha", "👍", "🤔")):
+        return False, "Emoji used as explanation", False
+    
+    # SOFT FAILURE: Casual question but no observational opener when opportunity is clear
+    # Only flag pure definition/cause openers WITHOUT opinion or judgment
+    # Examples of soft failure (pure definition/cause):
+    # - "Dogs are animals..." (definition)
+    # - "A dog puts its head..." (straight cause, no observation hook)
+    # - "The reason people...is..." (cause explanation)
+    # Examples of NO soft failure (has opinion/observation):
+    # - "Dogs are subtle communicators..." (opinion about dogs)
+    # - "Meetings have a way..." (observation)
+    # - "Honestly, cats are..." (personality)
+    if is_casual:
+        first_sentence_end = response_text.find(".")
+        if first_sentence_end > 0:
+            first_sentence = response_text[:first_sentence_end].lower().strip()
+            
+            # Pattern 1: Simple entity definition ("Dogs are X", "A dog is X")
+            simple_defs = ("dogs are", "cats are", "people are", "meetings are", "conversations are", "a dog ", "a cat ", "a person ")
+            for def_pattern in simple_defs:
+                if first_sentence.startswith(def_pattern):
+                    # Check what comes after
+                    after = first_sentence[len(def_pattern):].strip()
+                    # If it's an opinion word, it's observational
+                    opinion_words = ("subtle", "interesting", "remarkable", "surprising", "curious", "strange")
+                    if not any(word in after[:30] for word in opinion_words):
+                        # No opinion -> pure definition or action without observation
+                        # For "a dog puts..." without observation, this is soft fail
+                        soft_failure = True
+                    break
+            
+            # Pattern 2: Explanation by cause ("The reason X..." typically lacks observation)
+            if first_sentence.startswith("the reason") or first_sentence.startswith("this is because"):
+                soft_failure = True
+    
+    return True, "", soft_failure
+
+
+def build_behavior_instruction(behavior_profile: dict, execution_context: str = "gui", has_canonical_knowledge: bool = True, primary_frame: str = "practical", familiarity_level: str = "neutral", query_text: str = "", is_casual_q: bool = False) -> str:
+    """
+    Build the behavior instruction to inject into the prompt.
+    
+    Translates behavior profile into actionable prompt guidance with Phase 5A judgment gating,
+    Phase 5B conditional personality permission, and Phase 5B.2 casual observational humor.
+    
+    Instructions are ordered by priority (most constraining first):
+    1. Confidence-first bias (Phase 5C) - if trusted + casual, sets first-sentence template
+    2. CRITICAL hard guards (single-frame, speculation refusal, hallucination ban)
+    3. Permission layer (personality permission when trusted)
+    4. Optional guidance (casual humor)
+    5. Standard behavior instructions
+    
+    Does NOT narrate reasoning or internal logic.
+    Does NOT surface tier labels.
+    Does NOT include meta-commentary.
+    
+    Args:
+        behavior_profile: From select_behavior_profile()
+        execution_context: "cli" or "gui" from detect_context()
+        has_canonical_knowledge: From infer_canonical_knowledge()
+        primary_frame: From select_primary_frame() ('practical', 'structural', 'human', 'systems')
+        familiarity_level: From get_familiarity_level() ("neutral", "familiar", "trusted")
+        query_text: User's original question (for casual topic detection)
+        is_casual_q: From is_casual_question(query_text)
+        
+    Returns:
+        str: Instruction text to inject into prompt
+    """
+    priority_instructions = []
+    
+    # ________________________________________________________________________
+    # PRIORITY 1: CONFIDENCE-FIRST BIAS (Phase 5C) - when trusted AND casual
+    # This comes FIRST because it sets the generation frame before anything else
+    # ________________________________________________________________________
+    if familiarity_level == "trusted" and is_casual_q:
+        priority_instructions.append(
+            "CRITICAL - FIRST SENTENCE MUST BE ONE OF:\n"
+            "\"People do this because …\"\n"
+            "\"What's really happening is …\"\n"
+            "\"This happens because …\"\n\n"
+            "YOU MUST NOT START WITH:\n"
+            "\"The phenomenon\", \"In humans\", \"This behavior is often\", \"This can be attributed\", \"Research suggests\"\n\n"
+            "After your opening claim: explain just enough. No numbered lists. No lecture mode. Stay conversational."
+        )
+    
+    # ________________________________________________________________________
+    # PRIORITY 2: CRITICAL HARD GUARDS (honesty, scope, hallucination prevention)
+    # ________________________________________________________________________
+    
+    # CRITICAL: Refusal to speculate on factual non-canonical
+    if behavior_profile.get("refuse_speculation", False):
+        priority_instructions.append(
+            "CRITICAL: You do not have authoritative information for this factual question. "
+            "Respond with 'I don't have verified information on this' and STOP. "
+            "Do not guess. Do not speculate. Do not cite sources. Do not add explanations."
+        )
+    
+    # CRITICAL: Source hallucination ban
+    if not has_canonical_knowledge:
+        priority_instructions.append(
+            "CRITICAL: You do not have access to documentation, manuals, or online sources. "
+            "Never reference 'verified sources', 'documentation', 'tutorials', or similar. "
+            "If information is uncertain, explicitly say 'I don't know'."
+        )
+    
+    # CRITICAL: Single-frame enforcement (Phase 5A judgment gate)
+    priority_instructions.append(
+        "CRITICAL: Choose one explanation frame and answer from it only. "
+        "Do not enumerate alternatives. Do not broaden scope. "
+        f"Use the '{primary_frame}' frame: answer this question from that perspective only."
+    )
+    
+    # CRITICAL: CLI explicit negative formatting constraint
+    if execution_context == "cli":
+        priority_instructions.append(
+            "CRITICAL FORMAT CONSTRAINT:\n"
+            "You MUST NOT use the following in your response:\n"
+            "- numbered lists (e.g. \"1.\", \"2.\")\n"
+            "- bullet points (\"-\", \"*\")\n"
+            "- section headers or labels\n"
+            "- examples blocks\n"
+            "- mitigation or advice sections\n"
+            "If you violate this format, the response is invalid.\n"
+            "Use continuous paragraph prose only."
+        )
+    
+    # ________________________________________________________________________
+    # PRIORITY 3: PERMISSION LAYER (personality permission when trusted)
+    # ________________________________________________________________________
+    if familiarity_level == "trusted":
+        priority_instructions.append(
+            "PERMISSION: You may use light humor, mild sass, or casual phrasing if it improves clarity or trust. "
+            "Never obscure facts. Never override uncertainty or scope constraints. "
+            "No jokes when saying 'I don't know'. No sarcasm aimed at the user. No humor in factual canonical answers."
+        )
+    
+    # ________________________________________________________________________
+    # PRIORITY 4: OPTIONAL GUIDANCE (casual humor)
+    # ________________________________________________________________________
+    if familiarity_level == "trusted" and is_casual_q:
+        casual_humor_instruction = build_casual_humor_instruction(query_text)
+        if casual_humor_instruction:
+            priority_instructions.append(casual_humor_instruction)
+    
+    # ________________________________________________________________________
+    # PRIORITY 5: STANDARD BEHAVIOR INSTRUCTIONS
+    # ________________________________________________________________________
+    
+    # Explanation depth instruction
+    if behavior_profile["explanation_depth"] == "minimal":
+        priority_instructions.append("Provide only the essential facts. Omit elaboration, context, and caveats.")
+    elif behavior_profile["explanation_depth"] == "full":
+        priority_instructions.append("Provide comprehensive explanation. Include context, examples, and caveats.")
+    else:  # standard
+        priority_instructions.append("Provide clear explanation. Include necessary context but avoid excessive detail.")
+    
+    # Reasoning instruction (NEVER force it)
+    priority_instructions.append("Explain conclusions only when necessary for correctness or followability.")
+    
+    # CLI tone tightening
+    if execution_context == "cli":
+        priority_instructions.append("Answer like a competent peer. No summaries. No conclusions. Just the answer.")
+    
+    return "\n".join(priority_instructions)
+
+
+# ============================================================================
 # Logging Infrastructure
 # ============================================================================
 
@@ -301,6 +1300,8 @@ def _append_daily_log(
     persona: str = "neutral",
     verbosity: str = "short",
     replay_policy: dict | None = None,
+    behavior_profile: dict | None = None,
+    honesty_enforcement: dict | None = None,
 ) -> None:
     """
     Append a single interaction record to the daily log file.
@@ -313,6 +1314,8 @@ def _append_daily_log(
     - Replay metadata (whether and how replay was used)
     - Persona and verbosity settings for this turn
     - Replay policy diagnostics (entries used, chars, trimming, reason)
+    - Behavior profile (query type, verbosity override, explanation depth)
+    - Honesty enforcement (uncertainty flags, violations, drift signals)
     
     Log files are organized by date: YYYY-MM-DD.log
     Corrupt lines are silently skipped during reads.
@@ -328,6 +1331,8 @@ def _append_daily_log(
         persona: Persona name used for this interaction (default: "neutral")
         verbosity: Response length control, "short" or "long" (default: "short")
         replay_policy: Dict with replay diagnostics (entries_used, chars_used, trimmed, reason)
+        behavior_profile: Dict with behavior decisions (query_type, verbosity_override, etc.)
+        honesty_enforcement: Dict with honesty violation logs
     """
     log_dir = _get_log_dir()
     os.makedirs(log_dir, exist_ok=True)
@@ -355,6 +1360,14 @@ def _append_daily_log(
     # Add replay policy diagnostics if available
     if replay_policy:
         record["replay_policy"] = replay_policy
+    
+    # Add behavior profile if available
+    if behavior_profile:
+        record["behavior_profile"] = behavior_profile
+    
+    # Add honesty enforcement if available
+    if honesty_enforcement:
+        record["honesty_enforcement"] = honesty_enforcement
 
     # Append as newline-delimited JSON
     with open(file_path, "a", encoding="utf-8", newline="\n") as f:
@@ -683,10 +1696,287 @@ def filter_replay_entries(entries: list[dict], replay_reason: str, entry_types: 
 
 
 # ============================================================================
-# Main Execution
+# Context Detection
 # ============================================================================
 
+def detect_context() -> str:
+    """
+    Detect execution context: CLI vs GUI.
+    
+    CLI context (headless): running from command line, pipe, script
+    GUI context: running in IDE, editor, interactive shell
+    
+    Returns:
+        str: "cli" or "gui"
+    """
+    # Check for headless indicators
+    import platform
+    import subprocess
+    
+    # If stderr is not a TTY, we're likely headless (piped output, script execution)
+    if not sys.stderr.isatty():
+        return "cli"
+    
+    # If running in CI/CD or with NO_INTERACTIVE flags
+    if os.environ.get("CI") or os.environ.get("OLLAMA_NO_INTERACTIVE"):
+        return "cli"
+    
+    # Default to GUI (interactive)
+    return "gui"
+
+# ============================================================================
+# ============================================================================
+# Main Execution with Memory Integration
+# ============================================================================
+
+def detect_recall_query(user_input: str) -> tuple[bool, int | None]:
+    """
+    Detect if user is asking for a retrieval/recall operation.
+    
+    Returns: (is_recall_query, count_requested)
+    
+    Detects patterns like:
+    - "what did we talk about"
+    - "last 3 things we discussed"
+    - "summarize our conversation"
+    - "what did you say about"
+    - "earlier you mentioned"
+    
+    Returns:
+        (True, N) if recall query detected with count
+        (True, None) if recall query but no count specified
+        (False, None) if regular conversation query
+    """
+    ui = user_input.lower().strip()
+    
+    # Meta-query trigger phrases
+    recall_triggers = [
+        "what did we talk about",
+        "what did we discuss",
+        "what have we talked about",
+        "what did you say",
+        "earlier you",
+        "you said",
+        "summarize our conversation",
+        "list the last",
+        "last few things",
+        "the last",
+        "the previous",
+        "recap",
+        "remind me what",
+        "what topics",
+        "things we discussed",
+        "our conversation so far"
+    ]
+    
+    is_recall = any(trigger in ui for trigger in recall_triggers)
+    
+    if not is_recall:
+        return False, None
+    
+    # Try to extract count from "last N things" pattern
+    count = None
+    import re
+    match = re.search(r'last\s+(\d+)\s+(things|topics|items|subjects|conversations|discussions|ideas)', ui)
+    if match:
+        count = int(match.group(1))
+    else:
+        # Check for "last X" where X is a word number
+        word_numbers = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+        for word, num in word_numbers.items():
+            if f"last {word}" in ui:
+                count = num
+                break
+    
+    return True, count
+
+
+def format_recall_response(memory: list, count: int | None = None, prefs: dict | None = None) -> str:
+    """
+    Format memory as deterministic recall output (no narrative synthesis).
+    
+    Returns a simple, factual list of recent topics/queries.
+    
+    DESIGN BOUNDARY (non-negotiable):
+    ================================
+    These are the ONLY two acceptable output formats:
+    
+    1. NEUTRAL (default):
+       Recent topics:
+       1. Topic one
+       2. Topic two
+    
+    2. CASUAL (with tone="casual" preference):
+       Here's what we covered recently:
+       1. Topic one
+       2. Topic two
+    
+    FORBIDDEN: summaries, adjectives, synthesis, narrative preamble.
+    Only ever list topics. Never interpret or elaborate.
+    
+    Args:
+        memory: List of memory entries from load_memory()
+        count: How many items to return (default: all available)
+        prefs: User preferences dict (for tone, optional)
+    
+    Returns:
+        Formatted string with recent topics, or error message if no memory
+    """
+    if not memory:
+        return "I don't have any prior conversation items stored."
+    
+    # Determine how many to show
+    if count is None:
+        count = len(memory)
+    count = min(count, len(memory))  # Cap at available memory
+    
+    # Get the most recent N items (from end of list backwards)
+    recent = memory[-count:][::-1]  # Reverse to show most recent first
+    
+    # Extract topics/queries
+    topics = []
+    for entry in recent:
+        user_q = entry.get("user_input", "").strip()
+        if user_q:
+            topics.append(user_q)
+    
+    if not topics:
+        return "I don't have conversation data to retrieve."
+    
+    # Format as simple list (no narrative)
+    if len(topics) == 1:
+        output = f"Recent topic:\n{topics[0]}"
+    else:
+        output = "Recent topics:\n"
+        for i, topic in enumerate(topics, 1):
+            output += f"{i}. {topic}\n"
+    
+    # Apply preference tone lightly (clean confidence, minimal prose)
+    if prefs and prefs.get("tone") == "casual":
+        output = "Here's what we covered:\n\n" + output
+    elif prefs and prefs.get("tone") == "formal":
+        output = "The following topics were discussed:\n\n" + output
+    
+    return output.strip()
+
+
+def validate_voice_compliance(response_text: str) -> str:
+    """
+    Safety net for voice drift. Think of this like traction control:
+    you don't want it screaming all the time, but you're glad it's there
+    when the road gets slick.
+    
+    This is NOT a style cop. It's a drift alarm.
+    
+    When you notice Argo starting to drift:
+    - Getting too TED Talk-y
+    - Adding fake profundity
+    - Starting five metaphors instead of one
+    - Sounding like a presentation instead of a conversation
+    
+    Then you can tighten constraints here. But right now?
+    Just pass through. Trust your taste.
+    
+    Returns:
+        Response as-is (you're the style arbiter)
+    """
+    return response_text.strip() if response_text else ""
+
+
+
+
+
+
 def run_argo(
+    user_input: str,
+    *,
+    active_mode: str | None = None,
+    replay_n: int | None = None,
+    replay_session: bool = False,
+    strict_mode: bool = True,
+    persona: str = "neutral",
+    verbosity: str = "short",
+    replay_reason: str = "continuation"
+) -> None:
+    """
+    Public entry point for Argo execution.
+    
+    Wraps _run_argo_internal with memory and preference integration:
+    1. Loads and updates user preferences
+    2. Retrieves relevant past interactions
+    3. Injects memory context into the prompt
+    4. Injects preference context into the prompt
+    5. Executes the core logic
+    6. Stores the new interaction to memory
+    
+    Args:
+        user_input: User's raw message
+        active_mode: Conversation mode name or None
+        replay_n: Last N turns to replay or None
+        replay_session: True to replay current session
+        strict_mode: If True, reject low-intent input
+        persona: Tone adjustment ("neutral", etc.)
+        verbosity: Response length control ("short" or "long")
+        replay_reason: Why replay was requested
+    """
+    # Step 1: Load, update, and save user preferences
+    prefs = load_prefs()
+    prefs = update_prefs(user_input, prefs)
+    save_prefs(prefs)
+    
+    # Step 2: Check if this is a recall/retrieval query (meta-question)
+    is_recall, count_requested = detect_recall_query(user_input)
+    
+    if is_recall:
+        # RECALL MODE: User asking for list of previous topics
+        # Load all memory and format deterministically
+        all_memory = load_memory()
+        recall_output = format_recall_response(
+            all_memory, 
+            count=count_requested,
+            prefs=prefs
+        )
+        print(recall_output)
+        # IMPORTANT: Do NOT store recall queries to memory
+        # Recall queries are meta-operations, not conversational content
+        # Storing them would pollute memory with bookkeeping instead of conversation
+        return
+    
+    # GENERATION MODE: Regular conversation
+    # Step 3: Find relevant past interactions
+    relevant_memory = find_relevant_memory(user_input, top_n=2)
+    
+    # Step 4: Build memory context to inject
+    memory_context = ""
+    if relevant_memory:
+        memory_lines = []
+        for item in relevant_memory:
+            memory_lines.append(f"Past: {item['user_input']}")
+            memory_lines.append(f"Response: {item['model_response']}")
+        memory_context = "From your history:\n" + "\n".join(memory_lines) + "\n\n"
+    
+    # Step 5: Build preference context to inject
+    pref_block = build_pref_block(prefs)
+    
+    # Step 6: Compose user input with preference + memory prefixes
+    composed_input = pref_block + memory_context + user_input
+    
+    # Step 7: Execute core logic with composed input
+    _run_argo_internal(
+        composed_input,
+        active_mode=active_mode,
+        replay_n=replay_n,
+        replay_session=replay_session,
+        strict_mode=strict_mode,
+        persona=persona,
+        verbosity=verbosity,
+        replay_reason=replay_reason
+    )
+    
+    # Note: Memory storage happens inside _run_argo_internal after model response is available
+
+
+def _run_argo_internal(
     user_input: str,
     *,
     active_mode: str | None = None,
@@ -802,6 +2092,8 @@ def run_argo(
             verbosity=classified_verbosity,
             replay_policy=None,
         )
+        print(output)
+        return
     # ________________________________________________________________________
     
     replay_block = ""
@@ -845,7 +2137,72 @@ def run_argo(
             replay_lines.append(f"User: {e['user_prompt']}")
             replay_lines.append(f"Assistant: {e['model_response']}")
         replay_block = "\n".join(replay_lines) + "\n\n"
-
+    
+    # ________________________________________________________________________
+    # Step 1.5: CLI Context Guard (Suppress GUI Explanations)
+    # ________________________________________________________________________
+    
+    # In CLI context (headless execution), suppress GUI-specific explanations
+    execution_context = detect_context()
+    if execution_context == "cli":
+        context_strength = "weak"  # Force minimal explanations in headless mode
+    
+    # ________________________________________________________________________
+    # Step 1.6: Phase 4C Behavior Selection
+    # ________________________________________________________________________
+    
+    query_type = classify_query_type(user_input)
+    has_canonical_knowledge = infer_canonical_knowledge(user_input)
+    behavior_profile = select_behavior_profile(query_type, context_strength, has_canonical_knowledge)
+    
+    # ________________________________________________________________________
+    # Step 1.7: Phase 5A Judgment Gate (Single-Frame Selection)
+    # ________________________________________________________________________
+    
+    # PATCH 5B.2: Pass is_casual_q to select_primary_frame for frame correction
+    is_casual_q = is_casual_question(user_input)  # Detect early for frame selection
+    primary_frame = select_primary_frame(query_type, context_strength, is_casual_q)
+    
+    # ________________________________________________________________________
+    # Step 1.8: Phase 5B Familiarity Check & Phase 5B.2 Casual Question Detection
+    # ________________________________________________________________________
+    
+    familiarity_level = get_familiarity_level()
+    # is_casual_q already detected in Step 1.7 for frame correction
+    
+    # ________________________________________________________________________
+    # Step 1.9: Build behavior instruction with frame & personality enforcement
+    # ________________________________________________________________________
+    
+    behavior_instruction = build_behavior_instruction(behavior_profile, execution_context, has_canonical_knowledge, primary_frame, familiarity_level, user_input, is_casual_q)
+    
+    # Phase 4C may override verbosity classification
+    if behavior_profile["verbosity_override"]:
+        classified_verbosity = behavior_profile["verbosity_override"]
+    
+    # ________________________________________________________________________
+    # Step 1.9: Phase 4D Pre-Generation Honesty Enforcement
+    # ________________________________________________________________________
+    
+    drift_monitor = get_drift_monitor()
+    
+    # Check if we should enforce uncertainty
+    query_demands_certainty = query_type == "factual" or query_type == "instructional"
+    uncertainty_enforcement = drift_monitor.check_preconditions_uncertainty(
+        query_type=query_type,
+        has_canonical_knowledge=has_canonical_knowledge,
+        query_demands_certainty=query_demands_certainty,
+    )
+    
+    # Get current corrective behavior overrides (from drift signals)
+    drift_corrections = drift_monitor.apply_corrections()
+    
+    # Apply drift corrections to behavior profile
+    if drift_corrections.get("force_verbosity"):
+        classified_verbosity = drift_corrections["force_verbosity"]
+    if drift_corrections.get("force_explanation_depth"):
+        behavior_profile["explanation_depth"] = drift_corrections["force_explanation_depth"]
+    
     # ________________________________________________________________________
     # Step 2: Build final prompt
     # ________________________________________________________________________
@@ -856,20 +2213,63 @@ def run_argo(
     # Get verbosity text (always present: either concise or detailed instruction)
     verbosity_text = get_verbosity_text(classified_verbosity)
     
+    # Get CLI formatting suppression (if any)
+    cli_formatting_text = get_cli_formatting_suppression(execution_context)
+    
     # Get confidence instruction based on context strength
     confidence_text = get_confidence_instruction(context_strength)
     
-    # Build prompt: mode enforcement (if any) -> persona (if any) -> verbosity -> confidence -> replay -> user input
+    # Get uncertainty enforcement if applicable
+    uncertainty_text = ""
+    if uncertainty_enforcement:
+        uncertainty_text = (
+            "You lack canonical knowledge on this topic. "
+            "Provide only what you can verify. "
+            f"Required phrasing: {uncertainty_enforcement['require_phrases'][0]}. "
+            f"Prohibited: {', '.join(uncertainty_enforcement['prohibit_phrases'])}. "
+            "Declare gaps explicitly."
+        )
+    
+    # Build prompt: mode enforcement (if any) -> persona (if any) -> behavior -> uncertainty (if any) -> verbosity -> cli formatting (if any) -> confidence -> replay -> user input
+    prompt_parts = []
+    
+    # SYSTEM OVERRIDE: Inject confidence-first bias as an ironclad first-line constraint
+    # When trusted + casual, this MUST be the very first thing the model processes
+    if familiarity_level == "trusted" and is_casual_q:
+        prompt_parts.append(
+            "RESPOND ACCORDING TO THIS CONSTRAINT, NO EXCEPTIONS:\n\n"
+            "Your first sentence must be a direct claim about causation.\n"
+            "Your first sentence MUST start with exactly one of these:\n"
+            "1. \"People do this because\"\n"
+            "2. \"What's really happening is\"\n"
+            "3. \"This happens because\"\n\n"
+            "Your first sentence MUST NOT start with any of these:\n"
+            "- \"The phenomenon\"\n"
+            "- \"This behavior\"\n"
+            "- \"In humans\"\n"
+            "- \"This can be attributed\"\n"
+            "- \"Research suggests\"\n\n"
+            "After you answer the first sentence, you can explain as needed.\n"
+            "But DO NOT open with academic framing or neutral exposition.\n"
+            "Stay in human voice from the first word."
+        )
+    
     if active_mode:
-        if persona_text:
-            full_prompt = f"{MODE_ENFORCEMENT}\n\n{persona_text}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
-        else:
-            full_prompt = f"{MODE_ENFORCEMENT}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
-    else:
-        if persona_text:
-            full_prompt = f"{persona_text}\n\n{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
-        else:
-            full_prompt = f"{verbosity_text}\n\n{confidence_text}\n\n{replay_block}{user_input}".encode("utf-8")
+        prompt_parts.append(MODE_ENFORCEMENT)
+    if persona_text:
+        prompt_parts.append(persona_text)
+    prompt_parts.append(behavior_instruction)
+    if uncertainty_text:
+        prompt_parts.append(uncertainty_text)
+    prompt_parts.append(verbosity_text)
+    if cli_formatting_text:
+        prompt_parts.append(cli_formatting_text)
+    prompt_parts.append(confidence_text)
+    if replay_block:
+        prompt_parts.append(replay_block.rstrip())
+    prompt_parts.append(user_input)
+    
+    full_prompt = "\n\n".join(prompt_parts).encode("utf-8")
 
     # ________________________________________________________________________
     # Step 3: Call Ollama (with streaming output)
@@ -969,12 +2369,101 @@ def run_argo(
     
     # Reconstruct full output for logging (preserves everything, even if truncated in terminal)
     output = "".join(output_lines).strip()
+    
+    # VOICE COMPLIANCE: Enforce example constraints (brevity, tone, no hedge)
+    output = validate_voice_compliance(output)
 
     # ________________________________________________________________________
-    # Step 4: Log the interaction
+    # Step 4: Post-Generation Violation Detection & Logging
+    # ________________________________________________________________________
+    
+    # Validate CLI format (if CLI context)
+    cli_format_valid, cli_format_error = validate_cli_format(output, execution_context)
+    if not cli_format_valid:
+        print(f"⚠ CLI Format Violation: {cli_format_error}", file=sys.stderr)
+    
+    # Validate scope (Phase 5A judgment gate)
+    scope_valid, scope_drift = validate_scope(output)
+    if not scope_valid:
+        # Soft failure: log drift, apply temporary compression bias
+        drift_monitor.flag_signal("scope_expansion", {"force_verbosity": "short"}, duration=2)
+    
+    # Validate personality discipline (Phase 5B) and check casual humor (Phase 5B.2)
+    personality_valid, personality_violation, soft_failure = validate_personality_discipline(output, query_type, has_canonical_knowledge, execution_context, is_casual_q)
+    if not personality_valid:
+        # Hard failure: personality violation revokes personality
+        update_familiarity(False, "personality_discipline")
+    elif soft_failure:
+        # Soft failure: casual question where observational opener was missing
+        # Log it but don't demote
+        pass  # Logged implicitly, no state change
+    else:
+        # No violation: update familiarity on success
+        update_familiarity(True)
+    
+    # PATCH 5B.2: Validate human-first sentence for casual + human frame
+    human_first_valid, human_first_violation = validate_human_first_sentence(output, is_casual_q, primary_frame)
+    if not human_first_valid:
+        # Hard failure: casual human frame requires human-centered opening
+        update_familiarity(False, "frame_blending")  # Treat as frame violation
+    
+    # PATCH 5B.2: Check for plausible hallucinations without canonical grounding
+    grounding_valid, grounding_violation = detect_plausible_hallucination(output, has_canonical_knowledge, primary_frame)
+    if not grounding_valid:
+        # Soft failure: biological claim without grounding or downgrade language
+        # Log only, no demotion (user can still use plain-language explanation)
+        pass
+    
+    # Log interaction for drift analysis
+    drift_monitor.log_interaction(
+        user_prompt=user_input,
+        model_response=output,
+        query_type=query_type,
+        has_canonical_knowledge=has_canonical_knowledge,
+        behavior_profile=behavior_profile,
+        verbosity=classified_verbosity,
+    )
+    
+    # Detect violations (post-generation)
+    violations = drift_monitor.detect_violations()
+    
+    # Detect drift signals
+    drift_signals = drift_monitor.detect_drift()
+    
+    # Flag any new drift signals for correction
+    for signal in drift_signals:
+        drift_monitor.flag_signal(
+            signal["signal"],
+            signal["corrective_action"],
+            signal["duration_turns"],
+        )
+    
+    # ________________________________________________________________________
+    # Step 5: Build Final Log Record
     # ________________________________________________________________________
     
     timestamp_iso = datetime.now().isoformat(timespec="seconds")
+    
+    # Build behavior log record
+    behavior_log = {
+        "query_type": query_type,
+        "verbosity_override": behavior_profile["verbosity_override"],
+        "explanation_depth": behavior_profile["explanation_depth"],
+        "correction_style": behavior_profile["correction_style"],
+    }
+    
+    # Build honesty enforcement log
+    honesty_log = {
+        "uncertainty_enforced": uncertainty_enforcement is not None,
+        "violations_detected": len(violations),
+        "drift_signals_detected": len(drift_signals),
+    }
+    
+    if violations:
+        honesty_log["violations"] = [v["type"] for v in violations]
+    if drift_signals:
+        honesty_log["drift_signals"] = [s["signal"] for s in drift_signals]
+    
     _append_daily_log(
         timestamp_iso=timestamp_iso,
         session_id=SESSION_ID,
@@ -986,7 +2475,19 @@ def run_argo(
         persona=persona,
         verbosity=classified_verbosity,
         replay_policy=replay_policy,
+        behavior_profile=behavior_log,
+        honesty_enforcement=honesty_log,
     )
+    
+    # Store to Argo Memory (RAG-based interaction recall)
+    # Strip any composed memory context from the original input before storing
+    original_input = user_input
+    if original_input.startswith("From your history:"):
+        # Extract the original input after the memory context prefix
+        parts = original_input.split("\n\n", 1)
+        if len(parts) > 1:
+            original_input = parts[1]
+    store_interaction(original_input, output)
 
 
 # ============================================================================
@@ -1080,7 +2581,51 @@ if __name__ == "__main__":
                     if not user_input:
                         continue
                     
-                    # Execute query
+                    # Check for conversation browser commands
+                    if user_input.lower().startswith("list conversations"):
+                        print(list_conversations())
+                        continue
+                    
+                    if user_input.lower().startswith("show yesterday"):
+                        print(show_by_date("yesterday"))
+                        continue
+                    
+                    if user_input.lower().startswith("show today"):
+                        print(show_by_date("today"))
+                        continue
+                    
+                    if user_input.lower().startswith("show ") and user_input.lower().count("-") == 2:
+                        # Date format: show YYYY-MM-DD
+                        date_part = user_input[5:].strip()
+                        print(show_by_date(date_part))
+                        continue
+                    
+                    if user_input.lower().startswith("show topic "):
+                        topic = user_input[11:].strip()
+                        print(show_by_topic(topic))
+                        continue
+                    
+                    if user_input.lower().startswith("open "):
+                        topic_or_idx = user_input[5:].strip()
+                        success, msg, context = get_conversation_context(topic_or_idx)
+                        print(msg)
+                        if success and context:
+                            # Load context into memory for continuation
+                            # Inject context as preamble for next query
+                            print("(Ready to continue. Type your next question.)", file=sys.stderr)
+                        continue
+                    
+                    if user_input.lower().startswith("summarize "):
+                        topic_or_idx = user_input[10:].strip()
+                        print(summarize_conversation(topic_or_idx))
+                        continue
+                    
+                    if user_input.lower().startswith("summarize last"):
+                        # Summarize most recent conversation
+                        print(summarize_conversation("last"))
+                        continue
+                    
+                    # Regular query (non-browser command)
                     run_argo(
                         user_input,
                         active_mode=mode_value,

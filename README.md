@@ -1,188 +1,72 @@
-Project Argo
+# Argo
 
-Argo is a local-first, real-time AI assistant focused on streaming interaction, predictable behavior, and explicit user control.
+A local AI conversational system with memory, preferences, and deterministic recall.
 
-It is designed to run persistently in a command-line environment, respond immediately, and behave in ways that are observable, interruptible, and adjustable by the user.
+## What is Argo?
 
-Why Argo Exists
+Argo is a command-line AI assistant that remembers conversations, learns your preferences, and gives you precise control over how it behaves. It runs locally using Ollama and requires no external API calls or subscriptions.
 
-Most AI assistants prioritize novelty over reliability. They buffer responses, hide latency, over-generate output, and blur the line between “thinking” and “finished.”
+## What It Does
 
-Argo takes a different approach:
+- **Memory**: Stores interactions with TF-IDF-based retrieval and topic fallback for context-aware conversations
+- **Preferences**: Learns your tone, verbosity, humor style, and response structure preferences
+- **Recall Mode**: Deterministic meta-query handling (e.g., "what did we talk about?") without model inference
+- **Interactive CLI**: Both single-shot and multi-turn conversation modes with natural flow
+- **Conversation Browsing**: Read-only access to past sessions by date or topic
 
-Responses stream as they are generated
+## Quick Start
 
-Output length is explicitly bounded
+### Prerequisites
 
-Interaction happens in real time
+- Python 3.9+
+- Ollama running (`ollama serve`)
+- llama3.1:8b model (`ollama pull llama3.1`)
 
-Long responses can be interrupted safely
+### Setup
 
-State is maintained intentionally, not implicitly
-
-The goal is an assistant that behaves more like a tool you operate than a service that operates you.
-
-Core Features
-
-Real-time streaming output
-Text is emitted immediately instead of waiting for full completion.
-
-Interactive CLI mode
-Run Argo as a persistent session with shared context across turns.
-
-Output cutoff controls
-Hard limits on characters or paragraphs prevent runaway responses.
-
-Graceful interruption
-Ctrl+C interrupts generation without killing the session.
-
-Local-first execution
-Designed to work with local models and tooling. No required cloud dependency.
-
-Session logging
-Conversations are logged intentionally for replay or inspection.
-
-Modes of Operation
-Single-Shot Mode
-
-Run Argo with a single prompt and exit.
-
-python wrapper/argo.py "Explain photosynthesis"
-
-Interactive Mode
-
-Run Argo as a persistent assistant.
-
-python wrapper/argo.py
-
-
-You’ll see a prompt:
-
-argo >
-
-
-Type prompts continuously, interrupt when needed, and exit cleanly with exit or quit.
-
-Design Principles
-
-Transparency over magic
-What Argo is doing should be obvious from its behavior.
-
-Control over convenience
-The user decides when output stops, not the model.
-
-Predictability over cleverness
-Reliable behavior beats impressive tricks.
-
-Local by default
-Cloud integration is optional, not assumed.
-
-Status
-
-Project Argo is under active development.
-
-Current focus areas:
-
-Interactive UX refinement
-
-Session handling improvements
-
-Modular expansion (voice, tools, automation)
-
-Performance tuning and profiling
-
-
-Quick Start
-Requirements
-
-Python 3.10+
-
-A local model runtime (for example, Ollama)
-
-A terminal that supports UTF-8 output
-
-Clone the Repository
-git clone https://github.com/YOUR_USERNAME/argo.git
+```bash
+git clone https://github.com/YOUR-REPO/argo.git
 cd argo
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+ai
+```
 
-Run in Interactive Mode (Recommended)
+**Windows users:** Run `./setup.ps1` instead for automated setup.
 
-Start Argo as a persistent assistant:
+## Usage
 
-python wrapper/argo.py
+### Single-shot mode
+```powershell
+ai "Why do eggs get hard when boiled?"
+```
 
+### Interactive mode (recommended)
+```powershell
+ai
+argo > Why do eggs get hard when boiled?
+argo > What about frying?
+argo > exit
+```
 
-You’ll see the prompt:
+### Conversation browsing
+```powershell
+ai
+argo > list conversations
+argo > show topic eggs
+argo > summarize eggs
+argo > exit
+```
 
-argo >
+## Exiting
 
+Type `exit` or `quit` in interactive mode. Single-shot mode exits automatically.
 
-Type prompts continuously.
-Interrupt generation with Ctrl+C.
-Exit cleanly with exit or quit.
+## Architecture
 
-Run in Single-Shot Mode
+See [ARCHITECTURE.md](ARCHITECTURE.md) for system design, data flow, and design principles.
 
-Provide a single prompt and exit:
+## License
 
-python wrapper/argo.py "Explain photosynthesis"
-
-
-This mode is backward compatible and useful for scripting or benchmarking.
-
-Measuring Responsiveness (Optional)
-
-To observe real-time streaming behavior:
-
-chcp 65001
-$start = Get-Date
-python wrapper\argo.py "Explain photosynthesis" |
-ForEach-Object {
-    if (-not $first) {
-        $first = Get-Date
-        "FIRST OUTPUT AFTER: $($first - $start)"
-    }
-    $_
-}
-
-
-This shows:
-
-time to first token
-
-continuous streaming output
-
-interruption behavior
-
-Output Control
-
-Argo enforces hard limits to prevent runaway responses:
-
-Maximum characters
-
-Paragraph limits
-
-These limits can be adjusted in configuration and apply to both single-shot and interactive modes.
-
-Roadmap (Near Term)
-
-Configurable profiles (concise vs verbose)
-
-Tool hooks (filesystem, shell, automation)
-
-Voice input/output (optional module)
-
-Improved session indexing
-
-Daemon / background mode
-
-Philosophy (One Sentence)
-
-Argo is built for people who want AI to behave like a tool, not a performance.
-
-This repository represents a stable baseline suitable for experimentation and extension.
-
-License
-
-License to be determined.
-For now, assume all rights reserved.
+MIT

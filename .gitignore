@@ -73,7 +73,6 @@ test_whisper_wrapper.py
 err.txt
 out.txt
 mic_output.txt
-requirements.txt
 inspection/
 policies/
 system/
