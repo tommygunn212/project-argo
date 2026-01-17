@@ -121,36 +121,44 @@
 
 ## 🚧 Current Status
 
-**Production Ready:**
-- ✅ Audio transcription (fully functional, v1.0.0)
-- ✅ Intent parsing (fully functional, v1.1.0)
-- ✅ Executable planning (fully functional, v1.2.0)
-- ✅ Memory system (fully functional, v0.9.0)
-- ✅ Preferences (fully functional, v0.9.0)
-- ✅ Recall mode (fully functional, v0.9.0)
+**Production Ready (OFFICIALLY FROZEN):**
+- ✅ Audio transcription (v1.0.0) — **LOCKED, NO CHANGES**
+- ✅ Intent parsing (v1.1.0) — **LOCKED, NO CHANGES**
+- ✅ Executable planning (v1.2.0) — **LOCKED, NO CHANGES**
+- ✅ Dry-Run Execution Engine (v1.3.0-alpha) — **LOCKED, NO CHANGES**
+- ✅ Memory system (v0.9.0) — **LOCKED, NO CHANGES**
+- ✅ Preferences (v0.9.0) — **LOCKED, NO CHANGES**
+- ✅ Recall mode (v0.9.0) — **LOCKED, NO CHANGES**
+
+**Frozen Status:**
+See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for the official architectural freeze.
+
+These layers are the immutable "constitution" of ARGO. No refactors, no improvements, no behavior changes. If v1.4.0+ needs something different, v1.4.0 adapts. The safety chain does not.
 
 **Ready for Next Phase:**
-- Execution Engine (v1.3.0) - Execute confirmed plans with rollback
+- Real Execution Engine (v1.4.0) - Execute confirmed plans with actual side effects
 
 ---
 
 ## 📋 Next Planned Milestones
 
-### Milestone 4: Execution Engine (v1.3.0) - Planned
+### Milestone 4: Real Execution Engine (v1.4.0) - Planned
 **Status:** 🚧 Not started
 
 **Proposed Deliverables:**
-- ExecutionEngine class that runs confirmed ExecutablePlans
-- Step-by-step execution with state monitoring
+- ExecutionEngine that performs actual operations (not simulation)
+- Step-by-step execution with real file I/O, OS commands, network calls
 - Before/after snapshots for change tracking
-- Failure handling and rollback triggers
-- Execution audit trail (what happened, what didn't)
-- Rollback interface (undo capability)
+- Failure handling and automatic rollback triggers
+- Complete execution audit trail (what happened, what didn't)
+- Rollback interface (undo capability) using rollback procedures from v1.2.0
 
-**Key Constraint:**
+**Key Constraints:**
 - Execution only happens for user-confirmed plans
 - Every step is logged before/after
-- Rollback procedures from v1.2.0 are invoked on failure
+- Only executes operations that passed v1.2.0 planning validation
+- Must respect rollback procedures defined in v1.2.0
+- Must adapt to v1.0.0-v1.3.0 interfaces (not modify them)
 
 ---
 
@@ -159,20 +167,21 @@
 
 **Proposed Deliverables:
 - Actual execution of approved, safe operations
-- File I/O with safety checks
-- OS command execution (sandboxed)
-- Network operations (where safe)
+- File I/O with safety checks (within v1.4.0)
+- OS command execution (sandboxed, within v1.4.0)
+- Network operations (where safe, within v1.4.0)
 - Full transaction logging
-- Automatic rollback on failure
+- Automatic rollback on failure using v1.2.0 procedures
 
-**Key Constraint:**
-- Only executes operations that passed Intent validation
-- Every action reversible or recoverable
+**Key Constraints:**
+- Only executes operations that passed Intent validation (v1.1.0)
+- Every action reversible or recoverable (v1.2.0 rollback procedures)
 - Complete audit trail
+- Must preserve all v1.0.0-v1.3.0 guarantees
 
 ---
 
-### Milestone 6: Smart Home Control (v2.0.0) - Planned
+### Milestone 6: Raspberry Pi Integration (v2.0+) - Planned
 **Status:** 🚧 Not started
 
 **Proposed Deliverables:**
@@ -188,14 +197,15 @@
 
 | Metric | Value |
 |--------|-------|
-| **Current Version** | 1.2.0 |
-| **Lines of Code** | 4,350+ |
-| **Test Coverage** | 100% of critical paths |
-| **Modules** | 8 (memory, prefs, browsing, transcription, intent, executable_intent, argo, system) |
-| **Documentation Files** | 16+ |
+| **Current Version** | 1.3.0-alpha |
+| **Lines of Code** | 5,000+ |
+| **Test Coverage** | 100% of critical paths (96+ tests) |
+| **Modules** | 10 (memory, prefs, browsing, transcription, intent, executable_intent, execution_engine, argo, system, argo_main) |
+| **Documentation Files** | 20+ |
 | **GitHub Issues** | 10 (all closed, showing problem-solving) |
 | **Breaking Changes** | 0 |
 | **Backward Compatibility** | 100% |
+| **Frozen Layers** | v1.0.0, v1.1.0, v1.2.0, v1.3.0-alpha |
 
 ---
 
@@ -232,12 +242,17 @@ Each milestone includes:
 
 | Version | Date | Milestone | Status |
 |---------|------|-----------|--------|
-| 0.9.0 | Jan 2025 | Foundation & Memory | ✅ |
-| 1.0.0 | Jan 17, 2026 | Audio & Transcription | ✅ |
-| 1.1.0 | Jan 17, 2026 | Intent Parsing | ✅ |
-| 1.2.0 | Jan 17, 2026 | Executable Intent | ✅ |
-| 1.3.0 | TBD | Execution Engine | 📋 |
+| 0.9.0 | Jan 2025 | Foundation & Memory | ✅ FROZEN |
+| 1.0.0 | Jan 17, 2026 | Audio & Transcription | ✅ FROZEN |
+| 1.1.0 | Jan 17, 2026 | Intent Parsing | ✅ FROZEN |
+| 1.2.0 | Jan 17, 2026 | Executable Intent | ✅ FROZEN |
+| 1.3.0-alpha | Jan 17, 2026 | Dry-Run Execution Engine | ✅ FROZEN |
+| 1.4.0 | TBD | Real Execution Engine | 📋 |
 | 2.0.0 | TBD | Smart Home Control | 📋 |
+
+**Important:** v1.0.0 through v1.3.0-alpha are **OFFICIALLY FROZEN** as of January 17, 2026.
+
+See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for details on the architectural freeze.
 
 ---
 
@@ -256,9 +271,31 @@ Each "production-ready" milestone means:
 
 ---
 
+## 📝 What "Alpha" Means in ARGO Context
+
+**v1.3.0-alpha is "Alpha" NOT because it's unstable.**
+
+**It's "Alpha" because the power is intentionally disabled.**
+
+```
+v1.3.0-alpha = Safety layer complete, execution disabled
+            = Dry-run only, zero side effects, fully tested
+            = Ready to validate, not ready to act
+```
+
+The safety chain (v1.0.0-v1.3.0-alpha) is **complete and frozen**. It will never execute anything. It only validates that execution would be safe.
+
+v1.4.0+ will add the actual execution capability.
+
+This is honest labeling: "Alpha" means "foundational, power withheld."
+
+---
+
 **For detailed technical information on each milestone, see:**
 - Artifact Chain Architecture (Foundation): [docs/architecture/artifact-chain.md](docs/architecture/artifact-chain.md)
 - Memory: [docs/architecture/architecture.md](docs/architecture/architecture.md)
 - Transcription: [docs/transcription/whisper.md](docs/transcription/whisper.md)
 - Intent: [docs/intent/artifacts.md](docs/intent/artifacts.md)
 - Executable Intent: [docs/intent/executable_intent.md](docs/intent/executable_intent.md)
+- Dry-Run Execution: [docs/execution/dry-run-model.md](docs/execution/dry-run-model.md)
+- Frozen Layers: [FROZEN_LAYERS.md](FROZEN_LAYERS.md)

@@ -67,6 +67,7 @@ explicit permission, auditability, and manual override.
 ## Documentation
 
 - [Artifact Chain Architecture](docs/architecture/artifact-chain.md) — The three-layer artifact system (Transcription, Intent, Planning)
+- [Frozen Layers](FROZEN_LAYERS.md) — Official freeze of v1.0.0-v1.3.0 safety chain
 - [Master Feature List](docs/specs/master-feature-list.md) — Planned capabilities and scope boundaries
 - [Raspberry Pi Architecture](docs/architecture/raspberry-pi-node.md) — Peripheral design and trust boundaries
 - [System Architecture](ARCHITECTURE.md) — Memory, preferences, and voice system design
