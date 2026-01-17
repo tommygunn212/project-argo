@@ -1,0 +1,1 @@
+Local-first AI control system that acts only on explicit instruction. All decisions and memory remain on your hardware. Built for trust, not convenience—with full auditability and zero silent execution.
