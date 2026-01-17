@@ -1,5 +1,7 @@
 ## ARGO Project Milestones
 
+> **Note:** Milestones describe architectural readiness and internal capability maturity, not user-facing feature completeness. Each milestone represents a layer of the system that is deterministic, tested, and auditable — not necessarily polished for end-users.
+
 **Current Version:** 1.1.0  
 **Last Updated:** January 17, 2026
 
@@ -195,6 +197,21 @@ Each milestone includes:
 | 1.2.0 | TBD | Executable Intent | 📋 |
 | 1.3.0 | TBD | Execution Engine | 📋 |
 | 2.0.0 | TBD | Smart Home Control | 📋 |
+
+---
+
+## 📝 What "Production-Ready" Means in ARGO
+
+**Production-Ready (ARGO Definition):**
+
+Deterministic behavior, full test coverage, explicit failure handling, and auditable state transitions. Not feature-complete. Not end-user polished. Suitable for integration into larger systems where behavior must be predictable and trustworthy.
+
+Each "production-ready" milestone means:
+- ✅ Same input always produces same output
+- ✅ All code paths tested
+- ✅ Failures are explicit, never silent
+- ✅ Every action is logged with full context
+- ✅ System behavior can be audited and verified
 
 ---
 
