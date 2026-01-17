@@ -81,43 +81,77 @@
 
 ---
 
+### Milestone 3: Executable Intent (v1.2.0)
+**Status:** ✅ Complete  
+**Date:** January 17, 2026
+
+**Delivered:**
+- ExecutableIntent engine translates intents → plans
+- ExecutableStep and ExecutablePlan classes with full metadata
+- PlanDeriver with rules for 5 intent verbs (write, open, save, show, search)
+- Safety analysis: SAFE, CAUTIOUS, RISKY, CRITICAL levels
+- Rollback capability tracking: FULL, PARTIAL, NONE
+- Confirmation gate counter (tracks confirmations needed pre-execution)
+- `plan_and_confirm()` in argo.py for explicit plan review
+- ExecutablePlanStorage for session-only plan management
+- Comprehensive logging to `runtime/logs/executable_intent.log`
+- 100% test coverage (26/26 tests passing)
+
+**Key Design:**
+- Planning is NOT execution (plans created but not executed)
+- Deterministic: same intent → same plan structure every time
+- All state-changing operations include rollback procedures
+- Explicit confirmation counts (how many approvals needed)
+- Full auditability via JSON logging
+- Zero side effects during planning phase
+
+**Key Constraint:**
+- Still no execution (building the plan, not running it)
+- Preview: "This plan will: [3 steps]. Confirmations needed: 1. Proceed?"
+
+**Tests:** 26/26 passing | **Code:** 700+ lines | **Docs:** Complete
+
+---
+
 ## 🚧 Current Status
 
 **Production Ready:**
-- ✅ Audio transcription (fully functional)
-- ✅ Intent parsing (fully functional)
-- ✅ Memory system (fully functional)
-- ✅ Preferences (fully functional)
-- ✅ Recall mode (fully functional)
+- ✅ Audio transcription (fully functional, v1.0.0)
+- ✅ Intent parsing (fully functional, v1.1.0)
+- ✅ Executable planning (fully functional, v1.2.0)
+- ✅ Memory system (fully functional, v0.9.0)
+- ✅ Preferences (fully functional, v0.9.0)
+- ✅ Recall mode (fully functional, v0.9.0)
 
-**In Development:**
-- 🚧 (Next milestone TBD)
+**Ready for Next Phase:**
+- Execution Engine (v1.3.0) - Execute confirmed plans with rollback
 
 ---
 
 ## 📋 Next Planned Milestones
 
-### Milestone 4: Executable Intent (v1.2.0) - Planned
+### Milestone 4: Execution Engine (v1.3.0) - Planned
 **Status:** 🚧 Not started
 
 **Proposed Deliverables:**
-- ExecutableIntent class (plans, not yet executed)
-- Intent validation against safe operation boundaries
-- Execution risk assessment
-- Rollback capability design
-- Safety constraints enforcement
-- Audit trail for all planned operations
+- ExecutionEngine class that runs confirmed ExecutablePlans
+- Step-by-step execution with state monitoring
+- Before/after snapshots for change tracking
+- Failure handling and rollback triggers
+- Execution audit trail (what happened, what didn't)
+- Rollback interface (undo capability)
 
 **Key Constraint:**
-- Still no execution (building the plan, not running it)
-- Preview: "This will: [list of actions]. Proceed?"
+- Execution only happens for user-confirmed plans
+- Every step is logged before/after
+- Rollback procedures from v1.2.0 are invoked on failure
 
 ---
 
-### Milestone 5: Execution Engine (v1.3.0) - Planned
+### Milestone 5: Smart Home Control (v2.0.0) - Planned
 **Status:** 🚧 Not started
 
-**Proposed Deliverables:**
+**Proposed Deliverables:
 - Actual execution of approved, safe operations
 - File I/O with safety checks
 - OS command execution (sandboxed)
@@ -148,11 +182,11 @@
 
 | Metric | Value |
 |--------|-------|
-| **Current Version** | 1.1.0 |
-| **Lines of Code** | 3,650+ |
+| **Current Version** | 1.2.0 |
+| **Lines of Code** | 4,350+ |
 | **Test Coverage** | 100% of critical paths |
-| **Modules** | 7 (memory, prefs, browsing, transcription, intent, argo, system) |
-| **Documentation Files** | 15+ |
+| **Modules** | 8 (memory, prefs, browsing, transcription, intent, executable_intent, argo, system) |
+| **Documentation Files** | 16+ |
 | **GitHub Issues** | 10 (all closed, showing problem-solving) |
 | **Breaking Changes** | 0 |
 | **Backward Compatibility** | 100% |
@@ -170,6 +204,7 @@ Across all milestones:
 ✅ **Non-Intrusive** — Fails closed, never silent  
 ✅ **User Control** — Authority never transferred to system  
 ✅ **No Anthropomorphism** — System is tool, not agent  
+✅ **Plan Before Execute** — Planning layer separated from execution  
 
 ---
 
@@ -194,7 +229,7 @@ Each milestone includes:
 | 0.9.0 | Jan 2025 | Foundation & Memory | ✅ |
 | 1.0.0 | Jan 17, 2026 | Audio & Transcription | ✅ |
 | 1.1.0 | Jan 17, 2026 | Intent Parsing | ✅ |
-| 1.2.0 | TBD | Executable Intent | 📋 |
+| 1.2.0 | Jan 17, 2026 | Executable Intent | ✅ |
 | 1.3.0 | TBD | Execution Engine | 📋 |
 | 2.0.0 | TBD | Smart Home Control | 📋 |
 
