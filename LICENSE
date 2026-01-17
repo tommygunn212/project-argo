@@ -1,54 +1,47 @@
-ARGO Non-Commercial License
+ARGO NON-COMMERCIAL LICENSE
+Version 1.0
 
-Copyright (c) 2025 Tommy Gunn
+Copyright (c) 2026 Tommy Gunn
 
-================================================================================
-PERMISSIONS
-================================================================================
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, and distribute the Software for NON-COMMERCIAL purposes only,
+subject to the following conditions:
 
-You are free to:
-- Use this software for personal, educational, and research purposes
-- Copy, modify, and distribute the software
-- Study how the software works
-- Share improvements back with the project
+1. NON-COMMERCIAL USE ONLY
 
-================================================================================
-RESTRICTIONS
-================================================================================
+The Software may be used for personal, educational, research, or hobby purposes,
+provided that such use is not primarily intended for or directed toward
+commercial advantage or monetary compensation.
 
-You may not use this software for any commercial purpose, including:
-- Selling products or services built on or derived from this software
-- Using this software to generate revenue or financial benefit
-- Deploying this software in a for-profit organization
-- Licensing this software's functionality to third parties
-- Using this software as part of any revenue-generating activity
+Commercial use of the Software is NOT permitted under this license.
 
-================================================================================
-COMMERCIAL LICENSING
-================================================================================
+Commercial use includes, but is not limited to:
+- Use in a product, service, or platform that is sold, licensed, or monetized
+- Use within a for-profit company for internal operations
+- Use as part of a paid offering, subscription, or revenue-generating activity
+- Use to provide services to third parties for a fee
 
-If you intend to use ARGO for commercial purposes, you must obtain a separate
-commercial license agreement from the copyright holder.
+2. COMMERCIAL LICENSING
 
-Commercial use means:
-- Any deployment that generates revenue
-- Any for-profit internal use
-- Any product or service built on ARGO
-- Any monetization of ARGO's capabilities
+Any use of the Software for commercial purposes requires a separate commercial
+license agreement with the copyright holder.
 
-To request a commercial license: https://github.com/tommygunn212
+To inquire about commercial licensing, contact the project owner via their
+GitHub profile.
 
-Terms are negotiated case-by-case.
+3. ATTRIBUTION
 
-================================================================================
-WARRANTY
-================================================================================
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+4. NO WARRANTY
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN
-ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
 
-================================================================================
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.
