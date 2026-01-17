@@ -2,6 +2,8 @@
 
 This folder contains specifications, architectural decisions, and implementation guides for ARGO.
 
+**Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
+
 ## specs/
 
 **master-feature-list.md** — The canonical scope document. Lists all 200 planned capabilities, grouped by domain (voice, lighting, climate, media, automation, security, etc.). Also defines explicit non-behaviors (what ARGO refuses to do).
