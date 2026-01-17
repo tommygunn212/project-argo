@@ -66,6 +66,18 @@ GitHub: [@tommygunn212](https://github.com/tommygunn212)
 
 December 2025
 
+---
+
+## Licensing
+
+**Non-Commercial:** MIT License (free to use, modify, distribute)
+
+**Commercial:** Dual-licensed. Commercial use requires a separate license agreement.
+
+If you're building a commercial product or service with ARGO, reach out via GitHub to discuss licensing terms.
+
+See [LICENSE](LICENSE) for full details.
+
 ### Conversation browsing
 ```powershell
 ai

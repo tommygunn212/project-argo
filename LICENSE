@@ -1,0 +1,56 @@
+MIT License (Non-Commercial Use)
+
+Copyright (c) 2025 Tommy Gunn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, and sublicense the Software,
+and to permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+1. The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+2. NON-COMMERCIAL USE ONLY: The Software may not be used for any commercial
+   purpose, including but not limited to:
+   - Selling products or services built on or derived from the Software
+   - Using the Software to generate revenue
+   - Using the Software as part of a commercial offering
+   - Licensing or reselling the Software or its derivatives
+
+3. COMMERCIAL USE: If you intend to use this Software for any commercial
+   purpose, you must obtain a separate Commercial License from the author.
+   Please contact: https://github.com/tommygunn212
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+COMMERCIAL LICENSING
+================================================================================
+
+For commercial use of ARGO (Autonomous-Resistant Governed Operator), you must
+obtain a Commercial License.
+
+Commercial use includes:
+- Incorporating ARGO into products or services offered for sale
+- Using ARGO to generate revenue or financial benefit
+- Using ARGO in any for-profit organization's operations
+- Licensing ARGO's functionality to third parties
+
+To request a Commercial License:
+  Email or contact: https://github.com/tommygunn212
+  
+Terms are negotiated case-by-case based on:
+- Scope of use (single product vs. platform)
+- Scale of deployment
+- Revenue model
+- Custom modifications
+
+================================================================================
