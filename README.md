@@ -66,6 +66,7 @@ explicit permission, auditability, and manual override.
 
 ## Documentation
 
+- [Artifact Chain Architecture](docs/architecture/artifact-chain.md) — The three-layer artifact system (Transcription, Intent, Planning)
 - [Master Feature List](docs/specs/master-feature-list.md) — Planned capabilities and scope boundaries
 - [Raspberry Pi Architecture](docs/architecture/raspberry-pi-node.md) — Peripheral design and trust boundaries
 - [System Architecture](ARCHITECTURE.md) — Memory, preferences, and voice system design

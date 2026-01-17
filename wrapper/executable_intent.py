@@ -96,8 +96,12 @@ class ExecutableStep:
 
 
 @dataclass
-class ExecutablePlan:
-    """Complete plan derived from an intent, ready for execution (but not executing)"""
+class ExecutionPlanArtifact:
+    """Complete plan derived from an intent, ready for execution (but not executing)
+    
+    This is an artifact, not an execution. No actions occur during plan creation.
+    Plans are created but NOT executed by this layer.
+    """
     
     plan_id: str
     intent_id: str  # Reference to the IntentArtifact that created this
@@ -219,7 +223,7 @@ class PlanDeriver:
             "search": self._derive_search_plan,
         }
     
-    def derive(self, intent_id: str, intent_text: str, parsed_intent: Dict[str, Any]) -> ExecutablePlan:
+    def derive(self, intent_id: str, intent_text: str, parsed_intent: Dict[str, Any]) -> ExecutionPlanArtifact:
         """
         Main derivation entry point.
         Input: A validated intent from IntentArtifact
@@ -229,7 +233,7 @@ class PlanDeriver:
         verb = parsed_intent.get("verb")
         self.logger.info(f"Deriving plan for intent {intent_id}: {verb}")
         
-        plan = ExecutablePlan(
+        plan = ExecutionPlanArtifact(
             plan_id=self._generate_plan_id(intent_id),
             intent_id=intent_id,
             intent_text=intent_text,
@@ -246,7 +250,7 @@ class PlanDeriver:
         self.logger.info(f"Plan derived: {plan.plan_id} with {len(plan.steps)} steps")
         return plan
     
-    def _derive_write_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_write_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Plan: Create/modify a file with content"""
         
         filepath = intent.get("object", "unknown_file")
@@ -294,7 +298,7 @@ class PlanDeriver:
         
         self.logger.info(f"Write plan: {len(plan.steps)} steps to {filepath}")
     
-    def _derive_open_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_open_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Plan: Open a file or application"""
         
         target = intent.get("object", "unknown")
@@ -326,7 +330,7 @@ class PlanDeriver:
         
         self.logger.info(f"Open plan: {len(plan.steps)} steps to open {target}")
     
-    def _derive_save_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_save_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Plan: Save current document to a location"""
         
         filepath = intent.get("object", "document")
@@ -359,7 +363,7 @@ class PlanDeriver:
         
         self.logger.info(f"Save plan: {len(plan.steps)} steps to save to {filepath}")
     
-    def _derive_show_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_show_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Plan: Display content on screen"""
         
         content = intent.get("object", "unknown")
@@ -391,7 +395,7 @@ class PlanDeriver:
         
         self.logger.info(f"Show plan: {len(plan.steps)} steps to display {content}")
     
-    def _derive_search_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_search_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Plan: Search for something (files, content, etc.)"""
         
         query = intent.get("object", "")
@@ -435,7 +439,7 @@ class PlanDeriver:
         
         self.logger.info(f"Search plan: {len(plan.steps)} steps for '{query}'")
     
-    def _derive_generic_plan(self, plan: ExecutablePlan, intent: Dict[str, Any]) -> None:
+    def _derive_generic_plan(self, plan: ExecutionPlanArtifact, intent: Dict[str, Any]) -> None:
         """Fallback: Generic plan for unknown intents"""
         
         step = ExecutableStep(
@@ -462,36 +466,36 @@ class PlanDeriver:
 # PLAN STORAGE
 # ============================================================================
 
-class ExecutablePlanStorage:
-    """Session-only storage of executable plans"""
+class ExecutionPlanArtifactStorage:
+    """Session-only storage of execution plan artifacts"""
     
     def __init__(self, log_dir: str = "runtime/logs", logger: Optional[logging.Logger] = None):
         self.log_dir = log_dir
         self.logger = logger or logging.getLogger(__name__)
-        self.plans: Dict[str, ExecutablePlan] = {}
+        self.plans: Dict[str, ExecutionPlanArtifact] = {}
         self._ensure_log_dir()
     
     def _ensure_log_dir(self) -> None:
         """Ensure log directory exists"""
         os.makedirs(self.log_dir, exist_ok=True)
     
-    def store(self, plan: ExecutablePlan) -> str:
-        """Store plan and return ID"""
+    def store(self, plan: ExecutionPlanArtifact) -> str:
+        """Store plan artifact and return ID"""
         self.plans[plan.plan_id] = plan
         self._log_plan(plan)
         self.logger.info(f"Stored plan: {plan.plan_id}")
         return plan.plan_id
     
-    def retrieve(self, plan_id: str) -> Optional[ExecutablePlan]:
-        """Retrieve plan by ID"""
+    def retrieve(self, plan_id: str) -> Optional[ExecutionPlanArtifact]:
+        """Retrieve plan artifact by ID"""
         return self.plans.get(plan_id)
     
     def list_plans(self) -> List[str]:
         """List all stored plan IDs"""
         return list(self.plans.keys())
     
-    def _log_plan(self, plan: ExecutablePlan) -> None:
-        """Log plan to file"""
+    def _log_plan(self, plan: ExecutionPlanArtifact) -> None:
+        """Log plan artifact to file"""
         log_file = os.path.join(self.log_dir, "executable_plans.log")
         try:
             with open(log_file, "a") as f:
@@ -516,14 +520,16 @@ class ExecutableIntentEngine:
     """
     Main interface for v1.2.0: Executable Intent Layer
     
-    Converts user intents into explicit, auditable plans.
+    Converts user intents into explicit, auditable execution plans.
     Plans can be reviewed, modified, and confirmed before execution.
+    
+    Plan artifacts are created but NOT executed by this layer.
     """
     
     def __init__(self, log_dir: str = "runtime/logs"):
         self.logger = self._setup_logging(log_dir)
         self.deriver = PlanDeriver(self.logger)
-        self.storage = ExecutablePlanStorage(log_dir, self.logger)
+        self.storage = ExecutionPlanArtifactStorage(log_dir, self.logger)
     
     def _setup_logging(self, log_dir: str) -> logging.Logger:
         """Configure logging for executable intent layer"""
@@ -543,7 +549,7 @@ class ExecutableIntentEngine:
         
         return logger
     
-    def plan_from_intent(self, intent_id: str, intent_text: str, parsed_intent: Dict[str, Any]) -> ExecutablePlan:
+    def plan_from_intent(self, intent_id: str, intent_text: str, parsed_intent: Dict[str, Any]) -> ExecutionPlanArtifact:
         """
         Convert a validated intent into an executable plan.
         
@@ -553,13 +559,13 @@ class ExecutableIntentEngine:
             parsed_intent: Parsed intent from IntentArtifact (verb, object, context, etc.)
         
         Returns:
-            ExecutablePlan: A plan describing what will happen, ready for user review
+            ExecutionPlanArtifact: A plan describing what will happen, ready for user review
         """
         plan = self.deriver.derive(intent_id, intent_text, parsed_intent)
         self.storage.store(plan)
         return plan
     
-    def get_plan(self, plan_id: str) -> Optional[ExecutablePlan]:
+    def get_plan(self, plan_id: str) -> Optional[ExecutionPlanArtifact]:
         """Retrieve a stored plan"""
         return self.storage.retrieve(plan_id)
     

@@ -17,10 +17,10 @@ from datetime import datetime
 
 from wrapper.executable_intent import (
     ExecutableIntentEngine,
-    ExecutablePlan,
+    ExecutionPlanArtifact,
     ExecutableStep,
     PlanDeriver,
-    ExecutablePlanStorage,
+    ExecutionPlanArtifactStorage,
     ActionType,
     SafetyLevel,
     RollbackCapability,
@@ -65,11 +65,11 @@ class TestExecutableStep:
 
 
 class TestExecutablePlan:
-    """Test plan creation and management"""
+    """Test plan artifact creation and management"""
     
     def test_plan_creation(self):
-        """Plan can be created with metadata"""
-        plan = ExecutablePlan(
+        """Plan artifact can be created with metadata"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Write a file",
@@ -80,8 +80,8 @@ class TestExecutablePlan:
         assert len(plan.steps) == 0
     
     def test_add_step_updates_metadata(self):
-        """Adding steps updates plan risk level and confirmation count"""
-        plan = ExecutablePlan(
+        """Adding steps updates plan artifact metadata"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Do something",
@@ -117,8 +117,8 @@ class TestExecutablePlan:
         assert plan.total_confirmations_needed == 2
     
     def test_irreversible_action_detection(self):
-        """Plan detects actions that cannot be fully rolled back"""
-        plan = ExecutablePlan(
+        """Plan artifact detects actions that cannot be fully rolled back"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Delete permanently",
@@ -150,8 +150,8 @@ class TestExecutablePlan:
         assert plan.has_irreversible_actions is True
     
     def test_plan_summary(self):
-        """Plan summary is human readable"""
-        plan = ExecutablePlan(
+        """Plan artifact summary is human readable"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Write a test file",
@@ -297,11 +297,11 @@ class TestExecutablePlanStorage:
     @pytest.fixture
     def storage(self, tmp_path):
         """Create storage with temporary directory"""
-        return ExecutablePlanStorage(log_dir=str(tmp_path))
+        return ExecutionPlanArtifactStorage(log_dir=str(tmp_path))
     
     def test_store_and_retrieve(self, storage):
-        """Store plan and retrieve it"""
-        plan = ExecutablePlan(
+        """Store plan artifact and retrieve it"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Test plan",
@@ -316,9 +316,9 @@ class TestExecutablePlanStorage:
         assert retrieved.intent_text == "Test plan"
     
     def test_list_plans(self, storage):
-        """List all stored plans"""
-        plan1 = ExecutablePlan("plan_001", "intent_001", "Test 1")
-        plan2 = ExecutablePlan("plan_002", "intent_002", "Test 2")
+        """List all stored plan artifacts"""
+        plan1 = ExecutionPlanArtifact("plan_001", "intent_001", "Test 1")
+        plan2 = ExecutionPlanArtifact("plan_002", "intent_002", "Test 2")
         
         storage.store(plan1)
         storage.store(plan2)
@@ -335,8 +335,8 @@ class TestExecutablePlanStorage:
         assert result is None
     
     def test_plan_logging(self, storage, tmp_path):
-        """Plans are logged to file"""
-        plan = ExecutablePlan(
+        """Plan artifacts are logged to file"""
+        plan = ExecutionPlanArtifact(
             plan_id="plan_test_001",
             intent_id="intent_test_001",
             intent_text="Test logging",
@@ -376,7 +376,7 @@ class TestExecutableIntentEngine:
         assert engine.logger is not None
     
     def test_plan_from_intent(self, engine):
-        """Engine converts intent to plan"""
+        """Engine converts intent to plan artifact"""
         intent = {
             "verb": "write",
             "object": "test.txt",
@@ -393,7 +393,7 @@ class TestExecutableIntentEngine:
         assert len(plan.steps) > 0
     
     def test_plan_retrieval(self, engine):
-        """Engine can retrieve stored plans"""
+        """Engine can retrieve stored plan artifacts"""
         intent = {
             "verb": "open",
             "object": "file.txt",

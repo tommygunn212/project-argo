@@ -240,9 +240,10 @@ def main():
         try:
             issue = repo.create_issue(
                 title=issue_data["title"],
-                body=issue_data["body"],
-                state="closed"
+                body=issue_data["body"]
             )
+            # Close the issue after creation
+            issue.edit(state="closed")
             print(f"✅ [{i}/10] {issue_data['title']}")
             print(f"   → {issue.html_url}\n")
         except Exception as e:

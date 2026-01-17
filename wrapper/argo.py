@@ -122,7 +122,7 @@ except ImportError:
 try:
     from executable_intent import (
         ExecutableIntentEngine,
-        ExecutablePlan
+        ExecutionPlanArtifact
     )
     EXECUTABLE_INTENT_AVAILABLE = True
 except ImportError:
@@ -2120,25 +2120,25 @@ def intent_and_confirm(raw_text: str, source_type: str = "typed") -> tuple:
 
 def plan_and_confirm(intent_artifact: IntentArtifact) -> tuple:
     """
-    Derive an executable plan from a confirmed intent and request plan confirmation.
+    Derive an execution plan artifact from a confirmed intent and request plan confirmation.
     
     ARGO's philosophy on planning (v1.2.0):
-      1. Intent in → executable plan out (planning only, no execution)
+      1. Intent in → execution plan artifact out (planning only, no execution)
       2. Analyze risks, rollback procedures, confirmations needed
       3. Display plan summary to user
       4. Wait for explicit plan confirmation
       5. Only confirmed plans advance to execution layer (v1.3.0)
     
-    Plans describe WHAT will happen and HOW it will happen.
+    Plan artifacts describe WHAT will happen and HOW it will happen.
     Plans do NOT execute anything.
     
     Args:
         intent_artifact: Confirmed IntentArtifact from intent_and_confirm()
     
     Returns:
-        tuple: (confirmed: bool, plan: ExecutablePlan)
+        tuple: (confirmed: bool, plan: ExecutionPlanArtifact)
                - confirmed: True if user approved plan, False if rejected
-               - plan: Full plan with steps, risks, rollback procedures
+               - plan: Full plan artifact with steps, risks, rollback procedures
     
     Example:
         confirmed, artifact = intent_and_confirm(user_text)
@@ -2155,7 +2155,7 @@ def plan_and_confirm(intent_artifact: IntentArtifact) -> tuple:
     # Initialize engine
     engine = ExecutableIntentEngine()
     
-    # Derive plan from intent
+    # Derive plan artifact from intent
     plan = engine.plan_from_intent(
         intent_id=intent_artifact.id,
         intent_text=intent_artifact.raw_text,

@@ -257,6 +257,8 @@ Each "production-ready" milestone means:
 ---
 
 **For detailed technical information on each milestone, see:**
+- Artifact Chain Architecture (Foundation): [docs/architecture/artifact-chain.md](docs/architecture/artifact-chain.md)
 - Memory: [docs/architecture/architecture.md](docs/architecture/architecture.md)
 - Transcription: [docs/transcription/whisper.md](docs/transcription/whisper.md)
 - Intent: [docs/intent/artifacts.md](docs/intent/artifacts.md)
+- Executable Intent: [docs/intent/executable_intent.md](docs/intent/executable_intent.md)
