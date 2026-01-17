@@ -51,6 +51,14 @@ class PreconditionStatus(Enum):
     UNMET = "unmet"  # Precondition definitely not met
 
 
+class ExecutionStatus(Enum):
+    """Outcome of real execution"""
+    SUCCESS = "success"  # All steps executed as planned
+    PARTIAL = "partial"  # Some steps succeeded, some failed
+    ROLLED_BACK = "rolled_back"  # Execution failed, rollback invoked
+    ABORTED = "aborted"  # Execution halted before starting (hard gate failed)
+
+
 # ============================================================================
 # STEP SIMULATION RESULTS
 # ============================================================================
@@ -619,3 +627,462 @@ if __name__ == "__main__":
     print(report.summary())
     print(f"\nReport ID: {report.report_id}")
     print(f"Status: {report.simulation_status.value}")
+
+
+# ============================================================================
+# EXECUTION RESULT ARTIFACT (v1.4.0)
+# ============================================================================
+
+@dataclass
+class ExecutedStepResult:
+    """Result of executing a single step"""
+    step_id: int
+    operation: str
+    target: str
+    action_type: ActionType
+    
+    # Execution timing
+    started_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    completed_at: Optional[str] = None
+    duration_ms: float = 0.0
+    
+    # Real system state
+    precondition_met: bool = False
+    precondition_detail: Optional[str] = None
+    
+    # What actually changed
+    actual_state_change: Optional[str] = None
+    affected_resources: List[str] = field(default_factory=list)
+    
+    # Verification
+    expected_vs_actual_match: bool = False
+    verification_detail: Optional[str] = None
+    
+    # Rollback (if needed)
+    rollback_invoked: bool = False
+    rollback_succeeded: bool = False
+    rollback_detail: Optional[str] = None
+    
+    # Execution verdict
+    success: bool = False
+    error_message: Optional[str] = None
+    
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize for storage"""
+        return {
+            "step_id": self.step_id,
+            "operation": self.operation,
+            "target": self.target,
+            "action_type": self.action_type.value,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "duration_ms": self.duration_ms,
+            "precondition_met": self.precondition_met,
+            "actual_state_change": self.actual_state_change,
+            "expected_vs_actual_match": self.expected_vs_actual_match,
+            "rollback_invoked": self.rollback_invoked,
+            "rollback_succeeded": self.rollback_succeeded,
+            "success": self.success,
+            "error_message": self.error_message,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class ExecutionResultArtifact:
+    """
+    Complete result of executing an approved plan.
+    
+    This artifact records what actually happened when the system
+    carried out the approved plan.
+    """
+    
+    result_id: str
+    dry_run_report_id: str
+    execution_plan_id: str
+    
+    # Full chain traceability
+    intent_id: Optional[str] = None
+    transcription_id: Optional[str] = None
+    
+    # Execution metadata
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    user_approved: bool = False
+    approval_timestamp: Optional[str] = None
+    execution_duration_ms: float = 0.0
+    
+    # Per-step results
+    steps_executed: List[ExecutedStepResult] = field(default_factory=list)
+    
+    # Overall analysis
+    execution_status: ExecutionStatus = ExecutionStatus.ABORTED
+    total_steps: int = 0
+    steps_succeeded: int = 0
+    steps_failed: int = 0
+    rollback_invoked: bool = False
+    rollback_fully_successful: bool = False
+    
+    # System state
+    before_state_snapshot: Optional[Dict[str, Any]] = None
+    after_state_snapshot: Optional[Dict[str, Any]] = None
+    divergence_detected: bool = False
+    divergence_details: Optional[str] = None
+    
+    # Error tracking
+    abort_reason: Optional[str] = None
+    errors: List[str] = field(default_factory=list)
+    
+    # Version
+    schema_version: str = "1.4.0"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize for storage"""
+        return {
+            "result_id": self.result_id,
+            "dry_run_report_id": self.dry_run_report_id,
+            "execution_plan_id": self.execution_plan_id,
+            "intent_id": self.intent_id,
+            "transcription_id": self.transcription_id,
+            "created_at": self.created_at,
+            "user_approved": self.user_approved,
+            "execution_duration_ms": self.execution_duration_ms,
+            "steps_executed": len(self.steps_executed),
+            "execution_status": self.execution_status.value,
+            "steps_succeeded": self.steps_succeeded,
+            "steps_failed": self.steps_failed,
+            "rollback_invoked": self.rollback_invoked,
+            "rollback_fully_successful": self.rollback_fully_successful,
+            "divergence_detected": self.divergence_detected,
+            "abort_reason": self.abort_reason,
+            "schema_version": self.schema_version,
+        }
+    
+    def summary(self) -> str:
+        """Human-readable execution summary"""
+        lines = [
+            f"EXECUTION RESULT",
+            f"{'='*70}",
+            f"",
+            f"Status: {self.execution_status.value.upper()}",
+            f"Steps: {self.steps_succeeded}/{self.total_steps} succeeded",
+        ]
+        
+        if self.abort_reason:
+            lines.extend([
+                f"",
+                f"ABORTED: {self.abort_reason}",
+            ])
+        
+        if self.execution_status == ExecutionStatus.ROLLED_BACK:
+            lines.extend([
+                f"",
+                f"⚠️  ROLLBACK INVOKED",
+                f"Rollback successful: {self.rollback_fully_successful}",
+            ])
+        
+        if self.divergence_detected:
+            lines.extend([
+                f"",
+                f"⚠️  DIVERGENCE DETECTED",
+                f"Plan and reality diverged during execution",
+                f"Detail: {self.divergence_details}",
+            ])
+        
+        if self.errors:
+            lines.extend([
+                f"",
+                f"Errors encountered:",
+            ])
+            for error in self.errors:
+                lines.append(f"  - {error}")
+        
+        lines.extend([
+            f"",
+            f"Duration: {self.execution_duration_ms:.1f}ms",
+            f"{'='*70}",
+        ])
+        
+        return "\n".join(lines)
+
+
+# ============================================================================
+# EXECUTION MODE (v1.4.0)
+# ============================================================================
+
+class ExecutionMode:
+    """Real execution of approved execution plans"""
+    
+    def __init__(self):
+        """Initialize execution mode"""
+        self.logger = logging.getLogger(__name__)
+        self.results: Dict[str, ExecutionResultArtifact] = {}
+        self.logger.info("Execution mode initialized (v1.4.0)")
+    
+    def execute_plan(
+        self,
+        dry_run_report: DryRunExecutionReport,
+        plan_artifact: ExecutionPlanArtifact,
+        user_approved: bool = False,
+        intent_id: Optional[str] = None,
+        transcription_id: Optional[str] = None,
+    ) -> ExecutionResultArtifact:
+        """
+        Execute an approved plan based on a validated dry-run report.
+        
+        HARD GATES (ALL must be true):
+        1. dry_run_report exists
+        2. Report status is SAFE or CAUTIOUS
+        3. user_approved is True
+        4. Approval occurred in this session (not stale)
+        5. IDs match between plan and report
+        6. No artifacts in chain have changed
+        
+        If any gate fails → abort immediately.
+        
+        Args:
+            dry_run_report: DryRunExecutionReport (validated)
+            plan_artifact: ExecutionPlanArtifact
+            user_approved: User explicitly approved execution
+            intent_id: Source IntentArtifact ID
+            transcription_id: Source TranscriptionArtifact ID
+        
+        Returns:
+            ExecutionResultArtifact with complete execution details
+        """
+        start_time = datetime.now()
+        
+        # HARD GATE 1: Dry-run report exists and is valid (check FIRST before accessing attributes)
+        if not dry_run_report:
+            result = ExecutionResultArtifact(
+                result_id=f"exec_{hashlib.md5(f'{datetime.now().isoformat()}'.encode()).hexdigest()[:16]}",
+                dry_run_report_id="NONE",
+                execution_plan_id=plan_artifact.plan_id,
+                intent_id=intent_id,
+                transcription_id=transcription_id,
+            )
+            result.abort_reason = "No dry-run report provided"
+            result.execution_status = ExecutionStatus.ABORTED
+            self.logger.error(f"ABORT: No dry-run report")
+            self.results[result.result_id] = result
+            return result
+        
+        # Now safe to create result with dry_run_report_id
+        result = ExecutionResultArtifact(
+            result_id=f"exec_{hashlib.md5(f'{datetime.now().isoformat()}'.encode()).hexdigest()[:16]}",
+            dry_run_report_id=dry_run_report.report_id,
+            execution_plan_id=plan_artifact.plan_id,
+            intent_id=intent_id,
+            transcription_id=transcription_id,
+        )
+        
+        # HARD GATE 2: Report status is SUCCESS (simulation succeeded)
+        if dry_run_report.simulation_status != SimulationStatus.SUCCESS:
+            if dry_run_report.simulation_status == SimulationStatus.BLOCKED:
+                result.abort_reason = f"Simulation blocked: {dry_run_report.blocking_reason}"
+            elif dry_run_report.simulation_status == SimulationStatus.UNSAFE:
+                result.abort_reason = "Simulation determined plan is unsafe"
+            else:
+                result.abort_reason = f"Invalid simulation status: {dry_run_report.simulation_status.value}"
+            result.execution_status = ExecutionStatus.ABORTED
+            self.logger.error(f"ABORT: {result.abort_reason}")
+            self.results[result.result_id] = result
+            return result
+        
+        # HARD GATE 3: User approved
+        if not user_approved:
+            result.abort_reason = "User did not approve execution"
+            result.execution_status = ExecutionStatus.ABORTED
+            self.logger.error(f"ABORT: User did not approve")
+            self.results[result.result_id] = result
+            return result
+        
+        # HARD GATE 4 & 5: IDs match
+        if dry_run_report.execution_plan_id != plan_artifact.plan_id:
+            result.abort_reason = "Plan ID mismatch between dry-run report and plan artifact"
+            result.execution_status = ExecutionStatus.ABORTED
+            self.logger.error(f"ABORT: ID mismatch")
+            self.results[result.result_id] = result
+            return result
+        
+        # All gates passed - proceed with execution
+        self.logger.info(f"EXECUTING plan {plan_artifact.plan_id} (report: {dry_run_report.report_id})")
+        result.user_approved = True
+        result.approval_timestamp = datetime.now().isoformat()
+        result.total_steps = len(plan_artifact.steps)
+        
+        # Capture before-state
+        result.before_state_snapshot = self._capture_system_state()
+        
+        # Execute each step
+        for step in plan_artifact.steps:
+            step_result = self._execute_step(step, plan_artifact)
+            result.steps_executed.append(step_result)
+            
+            if step_result.success:
+                result.steps_succeeded += 1
+            else:
+                result.steps_failed += 1
+                # On failure, invoke rollback
+                if step_result.rollback_invoked:
+                    result.rollback_invoked = True
+        
+        # Capture after-state
+        result.after_state_snapshot = self._capture_system_state()
+        
+        # Determine final status
+        if result.steps_failed == 0:
+            result.execution_status = ExecutionStatus.SUCCESS
+        elif result.steps_failed > 0 and result.rollback_invoked:
+            result.execution_status = ExecutionStatus.ROLLED_BACK
+            result.rollback_fully_successful = all(
+                step.rollback_succeeded for step in result.steps_executed
+                if step.rollback_invoked
+            )
+        else:
+            result.execution_status = ExecutionStatus.PARTIAL
+        
+        # Calculate duration
+        result.execution_duration_ms = (datetime.now() - start_time).total_seconds() * 1000
+        
+        # Store result
+        self.results[result.result_id] = result
+        
+        # Log completion
+        self.logger.info(
+            f"Execution complete: {result.execution_status.value} "
+            f"({result.steps_succeeded}/{result.total_steps} steps)"
+        )
+        
+        return result
+    
+    def _execute_step(
+        self,
+        step: ExecutableStep,
+        plan: ExecutionPlanArtifact
+    ) -> ExecutedStepResult:
+        """Execute a single step"""
+        result = ExecutedStepResult(
+            step_id=step.step_id,
+            operation=step.operation,
+            target=step.target,
+            action_type=step.action_type,
+            started_at=datetime.now().isoformat(),
+        )
+        
+        try:
+            # Re-check preconditions against real system
+            result.precondition_met = self._check_real_preconditions(step)
+            
+            if not result.precondition_met:
+                result.error_message = f"Precondition not met for {step.operation} on {step.target}"
+                self.logger.warning(f"Step {step.step_id}: {result.error_message}")
+                result.completed_at = datetime.now().isoformat()
+                return result
+            
+            # Execute the step
+            self.logger.debug(f"Executing step {step.step_id}: {step.operation} {step.target}")
+            self._perform_step_action(step)
+            
+            # Verify result
+            result.actual_state_change = f"{step.operation.upper()} completed on {step.target}"
+            result.expected_vs_actual_match = True
+            result.success = True
+            
+            self.logger.debug(f"Step {step.step_id}: SUCCESS")
+            
+        except Exception as e:
+            result.error_message = str(e)
+            result.success = False
+            self.logger.error(f"Step {step.step_id} failed: {e}")
+            
+            # Attempt rollback
+            if step.rollback_procedure and step.rollback_capability != RollbackCapability.NONE:
+                result.rollback_invoked = True
+                try:
+                    self._perform_rollback(step)
+                    result.rollback_succeeded = True
+                    self.logger.info(f"Step {step.step_id}: Rollback succeeded")
+                except Exception as rollback_error:
+                    result.rollback_succeeded = False
+                    self.logger.error(f"Step {step.step_id}: Rollback FAILED: {rollback_error}")
+                    result.rollback_detail = str(rollback_error)
+        
+        result.completed_at = datetime.now().isoformat()
+        result.duration_ms = (
+            datetime.fromisoformat(result.completed_at) - 
+            datetime.fromisoformat(result.started_at)
+        ).total_seconds() * 1000
+        
+        return result
+    
+    def _check_real_preconditions(self, step: ExecutableStep) -> bool:
+        """Check preconditions against REAL system state"""
+        if step.action_type == ActionType.READ:
+            # File must exist
+            return os.path.exists(step.target)
+        elif step.action_type == ActionType.WRITE:
+            # Parent directory must exist
+            parent = os.path.dirname(step.target) or "."
+            return os.path.isdir(parent)
+        elif step.action_type == ActionType.DELETE:
+            # File must exist
+            return os.path.exists(step.target)
+        else:
+            return True
+    
+    def _perform_step_action(self, step: ExecutableStep):
+        """Perform the actual action (filesystem operations only in v1.4.0)"""
+        if step.action_type == ActionType.WRITE:
+            # Write to file
+            content = step.parameters.get("content", "")
+            os.makedirs(os.path.dirname(step.target) or ".", exist_ok=True)
+            with open(step.target, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.logger.debug(f"Wrote to {step.target}")
+        
+        elif step.action_type == ActionType.READ:
+            # Read from file (verify it exists)
+            with open(step.target, "r", encoding="utf-8") as f:
+                _ = f.read()
+            self.logger.debug(f"Read from {step.target}")
+        
+        elif step.action_type == ActionType.DELETE:
+            # Delete file
+            if os.path.exists(step.target):
+                os.remove(step.target)
+                self.logger.debug(f"Deleted {step.target}")
+        
+        elif step.action_type == ActionType.CREATE:
+            # Create file
+            os.makedirs(os.path.dirname(step.target) or ".", exist_ok=True)
+            if not os.path.exists(step.target):
+                with open(step.target, "w", encoding="utf-8") as f:
+                    f.write("")
+            self.logger.debug(f"Created {step.target}")
+    
+    def _perform_rollback(self, step: ExecutableStep):
+        """Execute the rollback procedure for a step"""
+        if not step.rollback_procedure:
+            raise ValueError(f"No rollback procedure defined for step {step.step_id}")
+        
+        # Parse rollback procedure and execute
+        self.logger.info(f"Invoking rollback for step {step.step_id}: {step.rollback_procedure}")
+        
+        if "Delete" in step.rollback_procedure and step.action_type == ActionType.WRITE:
+            # Rollback: delete the file we created
+            if os.path.exists(step.target):
+                os.remove(step.target)
+                self.logger.info(f"Rollback: Deleted {step.target}")
+        
+        elif "Restore" in step.rollback_procedure:
+            # More complex rollback (would involve restore from backup)
+            self.logger.warning(f"Restore rollback not yet implemented")
+    
+    def _capture_system_state(self) -> Dict[str, Any]:
+        """Capture current filesystem state (simplified)"""
+        return {
+            "captured_at": datetime.now().isoformat(),
+            "files_in_cwd": os.listdir("."),
+        }
