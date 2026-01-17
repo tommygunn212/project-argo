@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-ARGO Conversation Browser — Read-Only Memory Access
+ARGO (Autonomous-Resistant Governed Operator)
+Conversation Browser — Read-Only Memory Access
 ================================================================================
 
 Module:      browsing.py

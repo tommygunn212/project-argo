@@ -1,4 +1,4 @@
-# ARGO
+# ARGO (Autonomous-Resistant Governed Operator)
 
 ARGO is a local-first AI control system designed to act only when explicitly instructed. It runs on your main PC and uses Raspberry Pi nodes as sensory peripherals, but all decisions, memory, and authority remain on the core system.
 

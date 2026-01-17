@@ -1,6 +1,7 @@
 """
 ================================================================================
-ARGO User Preferences Module — Automatic Personalization
+ARGO (Autonomous-Resistant Governed Operator)
+User Preferences Module — Automatic Personalization
 ================================================================================
 
 Module:      prefs.py

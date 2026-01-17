@@ -1,6 +1,7 @@
 """
 ================================================================================
-ARGO Memory Module — Context-Aware Interaction Retrieval
+ARGO (Autonomous-Resistant Governed Operator)
+Memory Module — Context-Aware Interaction Retrieval
 ================================================================================
 
 Module:      memory.py

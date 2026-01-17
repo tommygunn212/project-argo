@@ -1,6 +1,7 @@
 """
 ================================================================================
-ARGO — Local-First AI Control System
+ARGO (Autonomous-Resistant Governed Operator)
+Local-First AI Control System
 ================================================================================
 
 Module:      argo.py (Main Execution Engine)
