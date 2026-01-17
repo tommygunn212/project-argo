@@ -43,13 +43,23 @@ Dictation support for Word and email composition. Rewriting and summarization of
 **System Monitoring**
 CPU, GPU, disk, network, and printer status reporting. Health checks for connected sensors and devices.
 
-## Architecture Overview
+## Architecture
 
-ARGO Core runs on your main PC and handles all intelligence, memory, and decision-making. Raspberry Pi nodes act as sensory peripherals—they capture audio and video, display content, control lights and TVs, and output speech, but they have no authority, no memory, and no independent logic. All Pis report back to Core for decisions.
+ARGO is designed around explicit control boundaries and local-first execution.
 
-This design keeps trust simple: one place where authority lives, zero ability for peripherals to act autonomously, and clear audit trails for every action.
+System design, data flow, and trust boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-→ See: [docs/architecture/raspberry-pi-node.md](docs/architecture/raspberry-pi-node.md) for how the distributed system works.
+## Licensing
+
+ARGO is available under a dual-licensing model.
+
+**Non-commercial use:** Free for personal, educational, and research use under the ARGO Non-Commercial License.  
+**Commercial use:** Requires a separate commercial license agreement.
+
+Commercial use includes any revenue-generating product, service, or internal business deployment.
+
+See `LICENSE` for full terms.  
+For commercial licensing inquiries, contact the project owner via GitHub.
 
 ## Documentation
 
@@ -57,6 +67,7 @@ This design keeps trust simple: one place where authority lives, zero ability fo
 - **[Raspberry Pi Architecture](docs/architecture/raspberry-pi-node.md)** — How the sensory nodes integrate with the core system
 - **[System Architecture](ARCHITECTURE.md)** — Memory, preferences, recall mode, and voice system design
 - **[Docs Index](docs/README.md)** — Where to find specs, philosophy, and usage guides
+- **[Usage Guide](docs/usage/cli.md)** — Interactive commands and examples
 
 ---
 
@@ -65,40 +76,3 @@ This design keeps trust simple: one place where authority lives, zero ability fo
 GitHub: [@tommygunn212](https://github.com/tommygunn212)
 
 December 2025
-
----
-
-## Licensing
-
-**Non-Commercial:** MIT License (free to use, modify, distribute)
-
-**Commercial:** Dual-licensed. Commercial use requires a separate license agreement.
-
-If you're building a commercial product or service with ARGO, reach out via GitHub to discuss licensing terms.
-
-See [LICENSE](LICENSE) for full details.
-
-### Conversation browsing
-```powershell
-ai
-argo > list conversations
-argo > show topic eggs
-argo > summarize eggs
-argo > exit
-```
-
-## Exiting
-
-Type `exit` or `quit` in interactive mode. Single-shot mode exits automatically.
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for system design, data flow, and design principles.
-
-## Licensing
-
-ARGO is available under a dual-licensing model.
-
-**Non-commercial use:** Free for personal, educational, and research use. See [LICENSE](LICENSE) for terms.
-
-**Commercial use:** Requires a separate commercial license agreement. Commercial use includes any revenue-generating product, service, or internal business deployment. Contact the project owner via GitHub to discuss terms.
