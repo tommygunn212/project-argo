@@ -118,6 +118,17 @@ except ImportError:
     INTENT_AVAILABLE = False
     # Intent system optional; graceful degradation if not installed
 
+# Import Executable Intent System (plans from intents, no execution)
+try:
+    from executable_intent import (
+        ExecutableIntentEngine,
+        ExecutablePlan
+    )
+    EXECUTABLE_INTENT_AVAILABLE = True
+except ImportError:
+    EXECUTABLE_INTENT_AVAILABLE = False
+    # Executable intent system optional; graceful degradation if not installed
+
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
 # ============================================================================
@@ -2105,6 +2116,85 @@ def intent_and_confirm(raw_text: str, source_type: str = "typed") -> tuple:
         intent_storage.reject(artifact.id)
         print(f"❌ Rejected. Please try again.\n", file=sys.stderr)
         return False, artifact
+
+
+def plan_and_confirm(intent_artifact: IntentArtifact) -> tuple:
+    """
+    Derive an executable plan from a confirmed intent and request plan confirmation.
+    
+    ARGO's philosophy on planning (v1.2.0):
+      1. Intent in → executable plan out (planning only, no execution)
+      2. Analyze risks, rollback procedures, confirmations needed
+      3. Display plan summary to user
+      4. Wait for explicit plan confirmation
+      5. Only confirmed plans advance to execution layer (v1.3.0)
+    
+    Plans describe WHAT will happen and HOW it will happen.
+    Plans do NOT execute anything.
+    
+    Args:
+        intent_artifact: Confirmed IntentArtifact from intent_and_confirm()
+    
+    Returns:
+        tuple: (confirmed: bool, plan: ExecutablePlan)
+               - confirmed: True if user approved plan, False if rejected
+               - plan: Full plan with steps, risks, rollback procedures
+    
+    Example:
+        confirmed, artifact = intent_and_confirm(user_text)
+        if confirmed:
+            plan_confirmed, plan = plan_and_confirm(artifact)
+            if plan_confirmed:
+                # Ready for v1.3.0 execution layer
+                execute_plan(plan)
+    """
+    if not EXECUTABLE_INTENT_AVAILABLE:
+        print("⚠ Executable intent system not available.", file=sys.stderr)
+        return False, None
+    
+    # Initialize engine
+    engine = ExecutableIntentEngine()
+    
+    # Derive plan from intent
+    plan = engine.plan_from_intent(
+        intent_id=intent_artifact.id,
+        intent_text=intent_artifact.raw_text,
+        parsed_intent=intent_artifact.parsed_intent
+    )
+    
+    # Display plan confirmation gate
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"Here's the plan:", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\n{plan.summary()}", file=sys.stderr)
+    print(f"\n{'='*70}", file=sys.stderr)
+    
+    if plan.has_irreversible_actions:
+        print(f"⚠️  WARNING: This plan includes irreversible actions (no undo).", file=sys.stderr)
+    
+    if plan.total_confirmations_needed > 0:
+        print(f"ℹ️  This plan requires {plan.total_confirmations_needed} confirmation(s) during execution.", file=sys.stderr)
+    
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"Proceed with this plan? (yes/no): ", end="", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Get user confirmation
+    try:
+        response = input().strip().lower()
+    except EOFError:
+        # Piped input: assume no confirmation
+        response = "no"
+    
+    # Process confirmation
+    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
+        plan.status = "awaiting_execution"
+        print(f"✅ Plan approved. Ready for execution.\n", file=sys.stderr)
+        return True, plan
+    else:
+        plan.status = "rejected"
+        print(f"❌ Plan rejected. No changes will be made.\n", file=sys.stderr)
+        return False, plan
 
 
 def run_argo(

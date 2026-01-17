@@ -2,6 +2,59 @@
 
 All notable changes to Argo are documented here.
 
+## [1.2.0] – 2026-01-17
+
+### Added
+- **Executable Intent System** (Planning Layer, No Execution)
+  - ExecutableIntent engine translates confirmed intents → executable plans
+  - ExecutablePlan class with full step decomposition and metadata
+  - ExecutableStep with action types, safety levels, and rollback procedures
+  - PlanDeriver with derivation rules for 5 intent verbs (write, open, save, show, search)
+  - Safety analysis: SAFE, CAUTIOUS, RISKY, CRITICAL levels
+  - Rollback capability tracking: FULL, PARTIAL, NONE
+  - Confirmation gate counter: tracks confirmations needed before execution
+  - `plan_and_confirm()` function in argo.py with explicit review gate
+  - ExecutablePlanStorage for session-only plan management
+  - Full audit logging to `runtime/logs/executable_intent.log`
+  - Complete test suite (26/26 tests passing, test_executable_intent.py)
+
+- Planning Features
+  - Deterministic plan derivation (same intent → same plan)
+  - Step-by-step plan decomposition with metadata
+  - Risk analysis and mitigation strategies
+  - Rollback procedures defined for state-changing operations
+  - Fallback for unknown intents (generic planning)
+  - Plan status tracking: derived → awaiting_confirmation → ready_for_execution
+  - Full plan summary() with human-readable format
+
+- Safety Features
+  - Zero execution (plans created but not executed)
+  - Explicit confirmation counts (how many approvals needed)
+  - Irreversible action detection
+  - Rollback procedures for all reversible operations
+  - Session isolation (plans not persisted across sessions)
+
+### Design Philosophy
+- Planning is NOT execution
+- Plans are deterministic and predictable
+- All state-changing operations include rollback procedures
+- Confirmation gates are explicit and counted
+- Auditability: full JSON logging of all plans
+- No side effects during planning
+
+### Integration Points
+- Executable intent engine integrated into wrapper/argo.py
+- New function: `plan_and_confirm(intent_artifact)` for plan review
+- New module: wrapper/executable_intent.py (700+ lines)
+- New documentation: docs/intent/executable_intent.md
+- Full API reference with examples and usage patterns
+
+### Architecture
+- v1.0.0: Audio → TranscriptionArtifact
+- v1.1.0: Text → IntentArtifact (parsed intent)
+- v1.2.0: IntentArtifact → ExecutablePlan (planning, no execution)
+- v1.3.0: ExecutablePlan → Execution (future)
+
 ## [1.1.0] – 2026-01-17
 
 ### Added
