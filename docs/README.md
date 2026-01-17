@@ -4,6 +4,17 @@ This folder contains specifications, architectural decisions, and implementation
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
+## intent/
+
+**artifacts.md** — Complete guide to ARGO's Intent Artifact system. Covers deterministic intent parsing without execution, confirmation gates, supported verb grammar, ambiguity preservation, and the clean pipeline from transcription through future execution.
+
+Use this to:
+- Understand how text becomes structured intent
+- Learn why execution is explicitly excluded
+- Design future Executable Intent and Execution layers
+- Understand confirmation gates
+- Debug intent parsing issues
+
 ## transcription/
 
 **whisper.md** — Complete guide to ARGO's Whisper audio transcription module. Covers the transcription-only design philosophy, input/output contracts, confirmation gate flow, failure handling, and logging/auditability.
@@ -39,14 +50,14 @@ Use this to:
 
 *Existing architecture documentation*
 
-**architecture.md** — Technical overview of memory system (TF-IDF + topic fallback), preference detection and storage, recall mode mechanics, voice system, conversation browsing, and transcription artifacts.
+**architecture.md** — Technical overview of memory system (TF-IDF + topic fallback), preference detection and storage, recall mode mechanics, voice system, conversation browsing, transcription artifacts, and intent artifacts.
 
 Use this to:
 - Understand how memory retrieval works
 - Learn preference detection patterns
 - Understand recall mode formatting rules
 - Understand voice compliance enforcement
-- Learn transcription artifact architecture
+- Learn transcription and intent artifact architecture
 
 ## decisions/
 

@@ -35,6 +35,7 @@ It refuses to act beyond the boundaries you set.
 
 - **Voice-based interaction** with preference-aware responses
 - **Audio transcription** with explicit user confirmation (Whisper)
+- **Intent parsing** from confirmed text (deterministic, no execution)
 - **Conversation browsing and recall** (deterministic, no model re-inference)
 - **Explicit memory storage** and preference management
 - **Smart home control foundations** (via Raspberry Pi peripherals)

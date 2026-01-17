@@ -2,6 +2,45 @@
 
 All notable changes to Argo are documented here.
 
+## [1.1.0] – 2026-01-17
+
+### Added
+- **Intent Artifact System** (Non-Executable Parsing Layer)
+  - IntentArtifact class for structured intent representation
+  - Deterministic command grammar parser (write, open, save, show, search)
+  - CommandParser with ambiguity preservation (never guesses)
+  - IntentStorage for session-only artifact management
+  - `intent_and_confirm()` function with explicit confirmation gate
+  - Zero side effects: parsing only, no execution whatsoever
+  - Full audit trail logging to `runtime/logs/intent.log`
+  - Complete test suite (test_intent_artifacts.py)
+
+- Intent Parsing Features
+  - Supported verbs: write, open, save, show, search
+  - Structured output: {verb, target, object, parameters, ambiguity}
+  - Confidence scoring (0.0-1.0)
+  - Ambiguity preservation for user clarity
+  - Clean pipeline: Audio → Transcription → Intent → (future) Execution
+
+- Confirmation Gate for Intent
+  - Display parsed intent structure to user
+  - Require explicit approval before downstream processing
+  - Approved status is NOT execution (preparation only)
+  - All confirmation outcomes tracked
+
+### Design Philosophy
+- Status "approved" means "user said yes" NOT "execute"
+- Ambiguity is preserved, never inferred
+- Only confirmed sources allowed (typed or transcription)
+- Session-only storage (no auto-save to memory)
+- Pure parsing layer with zero side effects
+
+### Integration Points
+- Imports added to wrapper/argo.py
+- New module: wrapper/intent.py (600+ lines)
+- New documentation: docs/intent/artifacts.md
+- Full API reference with examples
+
 ## [1.0.0] – 2026-01-17
 
 ### Added

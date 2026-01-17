@@ -48,6 +48,14 @@ FEATURES
    - Deterministic transcription (same audio → same text)
    - Comprehensive logging of all transcription events
 
+7. INTENT PARSING (No Execution)
+   - Structured intent parsing from confirmed text
+   - IntentArtifact with {verb, target, object, parameters}
+   - Ambiguity preserved (never guessed)
+   - Zero side effects: parsing only, no execution
+   - Confirmation gate before downstream processing
+   - Clean handoff to future execution layer
+
 ================================================================================
 DEPENDENCIES
 ================================================================================
@@ -60,6 +68,7 @@ DEPENDENCIES
 - prefs.py (Preference detection and application)
 - browsing.py (Conversation browser)
 - transcription.py (Whisper integration with TranscriptionArtifact)
+- intent.py (Intent parsing without execution)
 
 ================================================================================
 """
@@ -96,6 +105,18 @@ try:
 except ImportError:
     WHISPER_AVAILABLE = False
     # Whisper optional; graceful degradation if not installed
+
+# Import Intent Artifact System (structured intent parsing, no execution)
+try:
+    from intent import (
+        create_intent_artifact,
+        intent_storage,
+        IntentArtifact
+    )
+    INTENT_AVAILABLE = True
+except ImportError:
+    INTENT_AVAILABLE = False
+    # Intent system optional; graceful degradation if not installed
 
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
@@ -2009,6 +2030,81 @@ def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> 
         return False, "", artifact
 
 
+# ============================================================================
+# INTENT ARTIFACT CONFIRMATION GATE
+# ============================================================================
+
+def intent_and_confirm(raw_text: str, source_type: str = "typed") -> tuple:
+    """
+    Parse user input into structured intent and request confirmation.
+    
+    ARGO's philosophy on intent parsing:
+      1. Text in → structured intent out (pure parsing)
+      2. Display parsed structure to user
+      3. Wait for explicit confirmation
+      4. Only confirmed intents advance to future execution layer
+    
+    This function enforces the confirmation gate: users must see what the
+    intent parser understood before any downstream processing. No blind
+    automation. No guessing.
+    
+    Args:
+        raw_text: Confirmed user input (typed or from transcription)
+        source_type: "typed" (default) or "transcription"
+    
+    Returns:
+        tuple: (confirmed: bool, artifact: IntentArtifact)
+               - confirmed: True if user approved, False if rejected
+               - artifact: Full artifact with parsed intent (for audit/logging)
+    
+    Example:
+        confirmed, artifact = intent_and_confirm(user_text)
+        
+        if confirmed:
+            # Safe to pass to future execution layer
+            # artifact.parsed_intent contains {verb, target, object, ...}
+            process_approved_intent(artifact)
+        else:
+            print("Intent rejected. Please try again.")
+    """
+    if not INTENT_AVAILABLE:
+        print("⚠ Intent system not available. Run: pip install (already in requirements.txt)", file=sys.stderr)
+        return False, None
+    
+    # Parse intent deterministically
+    artifact = create_intent_artifact(raw_text, source_type=source_type)
+    
+    # Display confirmation gate
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"Is this what you want to do?", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\nRaw text: \"{artifact.raw_text}\"", file=sys.stderr)
+    print(f"\nIntent: {json.dumps(artifact.parsed_intent, indent=2)}", file=sys.stderr)
+    print(f"\nConfidence: {artifact.confidence:.0%}", file=sys.stderr)
+    
+    if artifact.parsed_intent.get("ambiguity"):
+        print(f"⚠ Ambiguities: {', '.join(artifact.parsed_intent['ambiguity'])}", file=sys.stderr)
+    
+    print(f"\n{'='*70}", file=sys.stderr)
+    print(f"Approve? (yes/no): ", end="", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Get user confirmation
+    try:
+        response = input().strip().lower()
+    except EOFError:
+        # Piped input: assume no confirmation
+        response = "no"
+    
+    # Process confirmation
+    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
+        intent_storage.approve(artifact.id)
+        print(f"✅ Approved. Intent will be processed.\n", file=sys.stderr)
+        return True, artifact
+    else:
+        intent_storage.reject(artifact.id)
+        print(f"❌ Rejected. Please try again.\n", file=sys.stderr)
+        return False, artifact
 
 
 def run_argo(
