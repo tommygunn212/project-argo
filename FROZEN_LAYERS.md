@@ -115,3 +115,7 @@ These invariants are now **law**. Not suggestions. Not guidelines. Law.
 
 **Frozen until**: The entire architecture is redesigned (v2.0+)
 
+---
+
+**Any change to a frozen layer requires a new major version and explicit constitutional amendment.**
+
