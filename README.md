@@ -95,6 +95,10 @@ Type `exit` or `quit` in interactive mode. Single-shot mode exits automatically.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for system design, data flow, and design principles.
 
-## License
+## Licensing
 
-MIT
+ARGO is available under a dual-licensing model.
+
+**Non-commercial use:** Free for personal, educational, and research use. See [LICENSE](LICENSE) for terms.
+
+**Commercial use:** Requires a separate commercial license agreement. Commercial use includes any revenue-generating product, service, or internal business deployment. Contact the project owner via GitHub to discuss terms.
