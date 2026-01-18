@@ -168,6 +168,20 @@ except ImportError:
     STATE_MACHINE_AVAILABLE = False
     # State machine optional; graceful degradation if not installed
 
+# Import Command Parser (Phase 7B-3: Deterministic command classification)
+try:
+    from core.command_parser import (
+        CommandClassifier,
+        CommandType,
+        ParsedCommand,
+        get_classifier as get_command_classifier,
+        set_classifier as set_command_classifier
+    )
+    COMMAND_PARSER_AVAILABLE = True
+except ImportError:
+    COMMAND_PARSER_AVAILABLE = False
+    # Command parser optional; graceful degradation if not installed
+
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
 # ============================================================================
@@ -244,6 +258,17 @@ if STATE_MACHINE_AVAILABLE:
     except Exception as e:
         print(f"⚠ State machine initialization error: {e}", file=sys.stderr)
         STATE_MACHINE_AVAILABLE = False
+
+# Initialize command parser (Phase 7B-3)
+_command_parser: CommandClassifier | None = None
+"""Global command parser for deterministic classification."""
+
+if COMMAND_PARSER_AVAILABLE:
+    try:
+        _command_parser = get_command_classifier(state_machine=_state_machine)
+    except Exception as e:
+        print(f"⚠ Command parser initialization error: {e}", file=sys.stderr)
+        COMMAND_PARSER_AVAILABLE = False
 
 
 def _get_log_dir() -> str:
@@ -2518,69 +2543,8 @@ def execute_and_confirm(
 # ============================================================================
 # PHASE 7B: STATE MACHINE INTEGRATION HELPERS
 # ============================================================================
-
-def _process_wake_word(text: str) -> bool:
-    """
-    Detect and process wake word ("ARGO").
-    
-    Returns True if wake word was detected and processed.
-    """
-    if not STATE_MACHINE_AVAILABLE or not _state_machine:
-        return False
-    
-    # Check for exact match (case-insensitive)
-    if text.strip().upper() == "ARGO":
-        if _state_machine.wake():
-            print("[STATE] Woke up (SLEEP -> LISTENING)", file=sys.stderr)
-            return True
-    
-    return False
-
-
-def _process_sleep_command(text: str) -> bool:
-    """
-    Detect and process sleep command ("go to sleep").
-    
-    Returns True if sleep command was detected and processed.
-    """
-    if not STATE_MACHINE_AVAILABLE or not _state_machine:
-        return False
-    
-    # Check for exact match (case-insensitive)
-    if text.strip().lower() == "go to sleep":
-        if _state_machine.sleep():
-            print("[STATE] Going to sleep (-> SLEEP)", file=sys.stderr)
-            return True
-    
-    return False
-
-
-def _process_stop_command(text: str) -> bool:
-    """
-    Detect and process stop command ("stop").
-    
-    Returns True if stop command was detected and processed.
-    """
-    if not STATE_MACHINE_AVAILABLE or not _state_machine:
-        return False
-    
-    # Check for exact match (case-insensitive)
-    if text.strip().lower() == "stop":
-        # [Phase 7B] Hard stop: Call OutputSink.stop() immediately
-        if OUTPUT_SINK_AVAILABLE:
-            try:
-                sink = get_output_sink()
-                sink.stop()
-                print("[AUDIO] Stopped playback (hard stop, <50ms latency)", file=sys.stderr)
-            except Exception as e:
-                print(f"⚠ OutputSink.stop() error: {e}", file=sys.stderr)
-        
-        # Transition state to LISTENING
-        if _state_machine.stop_audio():
-            print("[STATE] Stopped audio (SPEAKING -> LISTENING)", file=sys.stderr)
-            return True
-    
-    return False
+# Note: Command detection now handled by Phase 7B-3 CommandClassifier
+# These helpers perform state transitions only
 
 
 def _transition_to_thinking() -> bool:
@@ -2652,13 +2616,43 @@ def run_argo(
     prefs = update_prefs(user_input, prefs)
     save_prefs(prefs)
     
-    # [Phase 7B] Step 1b: Process special commands (wake, sleep, stop)
-    if _process_wake_word(user_input):
-        return
-    if _process_sleep_command(user_input):
-        return
-    if _process_stop_command(user_input):
-        return
+    # [Phase 7B-3] Step 1b: Parse and classify command
+    if COMMAND_PARSER_AVAILABLE and _command_parser:
+        parsed = _command_parser.parse(user_input)
+        
+        # Handle control commands (never reach LLM)
+        if parsed.command_type == CommandType.STOP:
+            # Hard stop: call OutputSink.stop() immediately
+            if OUTPUT_SINK_AVAILABLE:
+                try:
+                    sink = get_output_sink()
+                    sink.stop()
+                    print("[AUDIO] Stopped playback (hard stop, <50ms latency)", file=sys.stderr)
+                except Exception as e:
+                    print(f"⚠ OutputSink.stop() error: {e}", file=sys.stderr)
+            # Transition state
+            if STATE_MACHINE_AVAILABLE and _state_machine:
+                if _state_machine.stop_audio():
+                    print("[STATE] Stopped audio (SPEAKING -> LISTENING)", file=sys.stderr)
+            return
+        
+        elif parsed.command_type == CommandType.SLEEP:
+            # Sleep command
+            if STATE_MACHINE_AVAILABLE and _state_machine:
+                if _state_machine.sleep():
+                    print("[STATE] Going to sleep (-> SLEEP)", file=sys.stderr)
+            return
+        
+        elif parsed.command_type == CommandType.WAKE:
+            # Wake command
+            if STATE_MACHINE_AVAILABLE and _state_machine:
+                if _state_machine.wake():
+                    print("[STATE] Woke up (SLEEP -> LISTENING)", file=sys.stderr)
+            return
+        
+        # For ACTION and QUESTION, continue with cleaned text
+        if parsed.command_type in (CommandType.ACTION, CommandType.QUESTION):
+            user_input = parsed.cleaned_text
     
     # [Phase 7B] Step 1c: Transition to THINKING if we have a valid command in LISTENING state
     if STATE_MACHINE_AVAILABLE and _state_machine:
