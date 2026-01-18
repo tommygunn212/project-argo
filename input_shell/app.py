@@ -36,6 +36,7 @@ import json
 import uuid
 import tempfile
 import base64
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -62,6 +63,32 @@ try:
 except Exception:
     HAL_AVAILABLE = False
     print("⚠️ WARNING: hal_chat not available. Q&A routing disabled.")
+
+# Import latency controller for performance instrumentation
+sys.path.insert(0, str(Path(__file__).parent.parent / "runtime"))
+from latency_controller import (
+    LatencyController,
+    LatencyProfile,
+    new_controller,
+    checkpoint,
+)
+
+# Load latency profile from environment
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except Exception:
+    print("⚠️ WARNING: python-dotenv not available, using default latency profile")
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+latency_profile_name = os.getenv("ARGO_LATENCY_PROFILE", "ARGO").upper()
+try:
+    latency_profile = LatencyProfile[latency_profile_name]
+except KeyError:
+    print(f"⚠️ WARNING: Invalid latency profile '{latency_profile_name}', using ARGO")
+    latency_profile = LatencyProfile.ARGO
 
 # ============================================================================
 # INITIALIZATION
@@ -246,6 +273,9 @@ async def transcribe_audio(file: UploadFile = File(...)):
     
     Process: WebM → WAV (explicit conversion) → Whisper
     """
+    # Initialize latency controller for this request
+    controller = new_controller(latency_profile)
+    checkpoint("input_received")
     webm_path = None
     wav_path = None
     
@@ -307,6 +337,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         
         # Step 4: Call Whisper with validated WAV
         transcript_artifact = transcription_engine.transcribe(audio_path=wav_path)
+        checkpoint("transcription_complete")
         
         # Step 5: Check result
         if not transcript_artifact.transcript_text:
@@ -380,6 +411,10 @@ async def confirm_transcript():
         raise HTTPException(status_code=400, detail="No transcript to confirm")
     
     try:
+        # Initialize latency controller for this request
+        controller = new_controller(latency_profile)
+        checkpoint("input_received")
+        
         log_action("CONFIRM_TRANSCRIPT", {})
         
         transcript = session_state["transcript"]
@@ -387,6 +422,7 @@ async def confirm_transcript():
         # Check if this is a question
         if is_question(transcript):
             answer = route_to_qa(transcript)
+            checkpoint("intent_classified")
             if answer:
                 log_action("QA_ROUTED", {"question": transcript})
                 return {
@@ -403,6 +439,7 @@ async def confirm_transcript():
         intent_dict = intent_engine.parse(
             raw_text=transcript
         )
+        checkpoint("intent_classified")
         
         # Create intent artifact
         intent_artifact = IntentArtifact()
@@ -455,6 +492,11 @@ async def confirm_intent():
         raise HTTPException(status_code=400, detail="No intent to confirm")
     
     try:
+        # Initialize latency controller for this request
+        controller = new_controller(latency_profile)
+        checkpoint("input_received")
+        checkpoint("model_selected")
+        
         log_action("CONFIRM_INTENT", {})
         
         # Generate plan from intent
@@ -543,6 +585,11 @@ async def execute_plan():
         raise HTTPException(status_code=400, detail="No plan to execute")
     
     try:
+        # Initialize latency controller for this request
+        controller = new_controller(latency_profile)
+        checkpoint("input_received")
+        checkpoint("ollama_request_start")
+        
         log_action("EXECUTE", {
             "plan_id": session_state["plan_id"],
             "intent_id": session_state["intent_id"],
@@ -560,6 +607,10 @@ async def execute_plan():
             user_approved=True,  # User clicked the button
             intent_id=session_state["intent_id"],
         )
+        
+        checkpoint("first_token_received")
+        checkpoint("stream_complete")
+        checkpoint("processing_complete")
         
         # Store result
         session_state["execution_result"] = result

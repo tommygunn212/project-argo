@@ -1,0 +1,29 @@
+{
+  "scenario_1_root_endpoint": {
+    "description": "Root endpoint (framework test)",
+    "endpoint": "/",
+    "runs": [
+      {
+        "run": 1,
+        "status_code": 200,
+        "elapsed_ms": 2.3126,
+        "timestamp": "2026-01-18T13:33:36.370087",
+        "success": true
+      },
+      {
+        "run": 2,
+        "status_code": 200,
+        "elapsed_ms": 14.2036,
+        "timestamp": "2026-01-18T13:33:36.884613",
+        "success": true
+      },
+      {
+        "run": 3,
+        "status_code": 200,
+        "elapsed_ms": 18.5895,
+        "timestamp": "2026-01-18T13:33:37.404229",
+        "success": true
+      }
+    ]
+  }
+}
