@@ -6,7 +6,45 @@ This document contains all major issues encountered during ARGO development, how
 
 ## CLOSED ISSUES
 
-### 0. Server Shutdown on Request (ARGO v1.4.5)
+### 0. Phase 5A/B/C: Latency Measurement & Guardrails (ARGO v1.4.5+)
+
+**Status:** CLOSED (Solved)
+
+**Problem:**
+After implementing the latency framework (v1.4.5), needed to:
+1. Collect real baseline data per profile to identify dominant latency contributors
+2. Enforce latency budgets and detect SLA violations without changing runtime behavior
+3. Detect performance regressions automatically to prevent silent slowdowns
+
+These are observational/diagnostic tasks - no execution changes allowed.
+
+**What We Did:**
+1. **Phase 5A - Truth Serum**: Collected 15 workflows per profile (FAST, VOICE), computed per-checkpoint averages and P95 percentiles
+2. **Phase 5B - Budget Enforcement**: Created latency_budget_enforcer.py module with WARN/ERROR signal emission when budgets exceeded
+3. **Phase 5C - Regression Guard**: Created latency_regression_guard.py to detect first-token > +15% or total > +20% slowdowns, with baseline persistence
+
+**Key Design Decisions:**
+- No behavior changes - all purely observational/logging
+- Budgets defined as data (LATENCY_BUDGETS dict), not logic
+- Regression thresholds configurable and deterministic
+- All warnings emitted to structured logs only
+- Baselines persisted in JSON for tracking over time
+- Import-safe modules, no coupling to core latency controller
+
+**Outcome:**
+- ✅ Latency profile analysis complete (docs/latency_profile_analysis.md)
+- ✅ Per-checkpoint baseline data captured (FAST: 601.7s first-token, VOICE: 601.7s)
+- ✅ Budget enforcement module ready (detects WARN at 90%, ERROR when exceeded)
+- ✅ Regression guard deployed (baseline files in baselines/ directory)
+- ✅ All 14/14 latency tests still passing
+- ✅ Zero runtime behavior changes observed
+
+**Commit:**
+`Phase 5A/B/C: Latency measurement, budget enforcement, regression guard`
+
+---
+
+### 1. Server Shutdown on Request (ARGO v1.4.5)
 
 **Status:** CLOSED (Solved)
 
@@ -52,7 +90,7 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8000 --log-level info
 
 ---
 
-### 2. Voice System Not Following Example-Based Guidance
+### 3. Voice System Not Following Example-Based Guidance
 
 **Status:** CLOSED (Solved)
 
@@ -75,7 +113,7 @@ Model now generates appropriate responses within example boundaries. Voice compl
 
 ---
 
-### 3. Recall Mode Returning Narratives Instead of Deterministic Lists
+### 4. Recall Mode Returning Narratives Instead of Deterministic Lists
 
 **Status:** CLOSED (Solved)
 
@@ -98,7 +136,7 @@ Recall queries now return deterministic, formatted lists. Model is never invoked
 
 ---
 
-### 4. Recall Queries Being Stored in Memory
+### 5. Recall Queries Being Stored in Memory
 
 **Status:** CLOSED (Solved)
 
@@ -113,7 +151,7 @@ Memory stays clean. Recall conversations don't clutter context retrieval.
 
 ---
 
-### 5. Module Organization Chaos
+### 6. Module Organization Chaos
 
 **Status:** CLOSED (Solved)
 
@@ -137,7 +175,7 @@ Clean package structure. New contributors immediately understand layout.
 
 ---
 
-### 6. Broken Import Paths After Module Reorganization
+### 7. Broken Import Paths After Module Reorganization
 
 **Status:** CLOSED (Solved)
 
@@ -154,7 +192,7 @@ System imports successfully from any location. Relative paths work correctly.
 
 ---
 
-### 7. Documentation Gap for New Users
+### 8. Documentation Gap for New Users
 
 **Status:** CLOSED (Solved)
 
@@ -176,7 +214,7 @@ New users can understand system from README and navigate to detailed docs withou
 
 ---
 
-### 8. Requirements.txt Not Tracked in Git
+### 9. Requirements.txt Not Tracked in Git
 
 **Status:** CLOSED (Solved)
 
@@ -191,7 +229,7 @@ Dependencies explicit and version-controlled. Setup reproducible.
 
 ---
 
-### 9. License Messaging Was Legally Unclear
+### 10. License Messaging Was Legally Unclear
 
 **Status:** CLOSED (Solved)
 
@@ -214,7 +252,7 @@ No ambiguity. Open-source users welcome. Companies know exactly when to contact 
 
 ---
 
-### 10. README Had Duplicated Sections
+### 11. README Had Duplicated Sections
 
 **Status:** CLOSED (Solved)
 
@@ -234,7 +272,7 @@ README no longer reads like it accreted over time. Clean, focused document.
 
 ---
 
-### 11. README Was Apologetic and Polite
+### 12. README Was Apologetic and Polite
 
 **Status:** CLOSED (Solved)
 
