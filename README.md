@@ -100,7 +100,7 @@ See `LICENSE` for full terms.
 
 ## Performance & Latency
 
-ARGO v1.4.5 includes comprehensive latency instrumentation:
+ARGO v1.5.1 includes comprehensive latency instrumentation plus audio control:
 
 - **8 checkpoint measurements** track timing at every stage (input → transcription → intent → execution)
 - **3 latency profiles** (FAST ≤6s, ARGO ≤10s, VOICE ≤15s) enforce response time budgets
@@ -108,21 +108,31 @@ ARGO v1.4.5 includes comprehensive latency instrumentation:
 - **Async-safe delays** — no blocking sleeps, compatible with streaming responses
 - **Regression tests** — 18 tests enforce FAST mode contract and prevent regressions
 
-For detailed documentation:
-- [LATENCY_INTEGRATION_COMPLETE.md](LATENCY_INTEGRATION_COMPLETE.md) — Integration summary
-- [LATENCY_SYSTEM_ARCHITECTURE.md](LATENCY_SYSTEM_ARCHITECTURE.md) — Technical architecture
-- [BASELINE_MEASUREMENT_QUICK_START.md](BASELINE_MEASUREMENT_QUICK_START.md) — How to measure
+### Audio Control & State Machine
 
-**Status**: Framework integrated and tested. Ready for baseline measurement collection.
+ARGO v1.5.1 includes deterministic state machine for wake/sleep/stop control:
+
+- **4 states**: SLEEP, LISTENING, THINKING, SPEAKING
+- **3 commands**: "ARGO" (wake), "go to sleep" (sleep), "stop" (stop audio)
+- **9 allowed transitions** — deterministic, no NLP, no personality
+- **Full control**: Instant stop with <50ms latency
+- **31 comprehensive tests** — all state transitions validated
+
+For detailed documentation:
+- [LATENCY_INTEGRATION_COMPLETE.md](LATENCY_INTEGRATION_COMPLETE.md) — Latency framework
+- [LATENCY_SYSTEM_ARCHITECTURE.md](LATENCY_SYSTEM_ARCHITECTURE.md) — Technical architecture
+- [PHASE_7B_COMPLETE.md](PHASE_7B_COMPLETE.md) — State machine design and testing
+
+**Status**: Framework integrated and tested. Ready for wrapper integration.
 
 ## Project Milestones
 
 ARGO development is tracked in phases. See [MILESTONES.md](MILESTONES.md) for:
-- ✅ Completed features (Memory, Transcription, Intent Parsing, Latency Framework)
-- 🚧 Current development status
-- 📋 Planned features (Baseline Measurement, Performance Optimization)
+- ✅ Completed features (Memory, Transcription, Intent Parsing, Latency Framework, State Machine)
+- 🚧 Current development status (State Machine Integration)
+- 📋 Planned features (FastAPI Audio Streaming, Wrapper Integration)
 - 📊 Project metrics and design principles
 
-**Current Status:** v1.4.5 (Latency Instrumentation Foundation) — Framework Ready
+**Current Status:** v1.5.1 (State Machine + Audio Control) — Framework Ready
 
 For commercial licensing inquiries, contact the project owner via GitHub.
