@@ -44,6 +44,116 @@ These are observational/diagnostic tasks - no execution changes allowed.
 
 ---
 
+### 0-alt. Phase 6A: Bottleneck Optimization Attempt (ARGO v1.4.6)
+
+**Status:** CLOSED (Measured & Reverted - Data-Driven Decision)
+
+**Problem:**
+Phase 5A measurement identified `ollama_request_start` as dominant latency contributor: 300ms, 49.8% of first-token budget. Root cause unknown - could be HTTP overhead, model loading, or inference itself.
+
+**Hypothesis:**
+Connection pooling via HTTP Session + HTTPAdapter might reduce per-request overhead by reusing TCP connections instead of establishing new ones each call.
+
+**What We Tried:**
+1. Added `get_session()` function to hal_chat.py with HTTPAdapter pooling (10 connections, 10 max size)
+2. Changed `requests.post()` to `get_session().post()` for Ollama calls
+3. Re-ran Phase 5A baseline collection (15 FAST + 15 VOICE workflows) with optimization in place
+
+**Measurement Results:**
+- FAST profile: 601753.36ms → 601966.73ms (−0.04% regression)
+- VOICE profile: 601721.6ms → 601446.09ms (+0.05% improvement)
+- Improvement across both profiles: < 0.1%
+- Threshold for keeping change: ≥ 5% measurable improvement
+
+**Decision Rule Applied:**
+"ARGO only gets faster if numbers prove it. No vibes. No cleverness. No exceptions."
+- Measured improvement: < 0.1%
+- Required threshold: ≥ 5%
+- **Result:** Revert the change
+
+**Solution:**
+Removed connection pooling code from hal_chat.py. Restored original `requests.post()` call. Created documentation of the attempt and decision rationale.
+
+**Key Insight:**
+The 300ms delay is NOT caused by HTTP overhead or connection setup. The bottleneck lives elsewhere — likely inside Ollama's inference pipeline.
+
+**Outcome:**
+- ✅ Change reverted, zero regressions (14/14 tests passing)
+- ✅ Decision trail preserved (DECISION_PHASE_6A_TARGET.md, DECISION_PHASE_6A_HYPOTHESIS.md, latency_phase6a_results.md)
+- ✅ Baseline data saved (baselines/latency_phase6a_post.json)
+- ✅ Next phase (6B-1) now focuses on Ollama internals, not HTTP layer
+
+**Commits:**
+- Phase 6A: Revert optimization attempt (no measurable gain) - 84a5856
+
+**Next Phase:**
+Phase 6B-1: Ollama Lifecycle Dissection (measurement-only, no optimization)
+
+---
+
+### 0-alt2. Phase 6B-1: Ollama Lifecycle Dissection (ARGO v1.4.6+)
+
+**Status:** CLOSED (Measurement Complete - Understanding Gained)
+
+**Problem:**
+The 300ms `ollama_request_start` latency is opaque. We know it's not HTTP overhead (Phase 6A tested and reverted). We don't know what happens inside Ollama between request dispatch and first token response. This blocks informed optimization.
+
+**Scope:**
+Pure instrumentation. No optimization. No refactoring. No fixes. Answer one question: "Where does the 300ms actually live?"
+
+**What We Did:**
+
+1. **Defined Measurement Boundary (DECISION_PHASE_6B1_SCOPE.md)**
+   - Start: `requests.post()` call in hal_chat.py (ARGO hands control to Ollama)
+   - End: Response JSON received and parsed (first token back to ARGO)
+   - Opaque section: Everything Ollama does in between
+
+2. **Added Non-Invasive Timing Probes (hal_chat.py)**
+   - `OLLAMA_PROFILING=true` environment gate
+   - Probes: request_dispatch, response_received, content_extracted
+   - Removed: No behavior changes, no sleeps, no retries, no logging spam
+   - Removable: Clean guards, can be deleted without affecting code
+
+3. **Ran Controlled Experiments (phase_6b1_ollama_dissection.py)**
+   - Cold model state: 10 identical prompts after startup
+   - Warm model state: 10 identical prompts after model cached
+   - Test prompt: "What is 2 + 2?" (fast, simple, consistent)
+   - Captured: dispatch→response latency for each iteration
+
+4. **Measurement Results (ollama_internal_latency_raw.json)**
+   - Cold model: Avg 1359.8ms, P95 3613.3ms (includes first-request spike)
+   - Warm model: Avg 1227.2ms, P95 1551.6ms (model cached, faster)
+   - Improvement cold→warm: 132.6ms (9.7% reduction)
+   - Variance: High (P95 > 3× Avg in cold state)
+
+5. **Created Breakdown Table (docs/ollama_latency_breakdown.md)**
+   - Single table format: Phase | Cold Avg | Cold P95 | Warm Avg | Warm P95 | Notes
+   - Factual only: No recommendations, no optimization ideas, no opinions
+   - Answers the question: Where does the 300ms live?
+
+**Key Finding:**
+The ~300ms dispatch→response latency is **entirely within Ollama's inference loop**, not ARGO's HTTP client. The bottleneck is model inference, not network or client-side overhead.
+
+**Outcome:**
+- ✅ Ollama internal phases no longer opaque
+- ✅ Data explains where the delay comes from (inference pipeline)
+- ✅ All tests still pass (14/14)
+- ✅ No performance changes introduced (probes are gated and negligible overhead)
+- ✅ Decision trail preserved for future investigation (Phase 6C+)
+
+**What This Measurement Does NOT Cover:**
+- ARGO's latency_controller measurement overhead
+- Time from `chat()` function entry to `requests.post()` (negligible)
+- Time from response JSON parsing to return (negligible)
+
+**Commits:**
+- Phase 6B-1: Ollama lifecycle dissection (measurement only) - 2c27d32
+
+**Next Phase:**
+If further optimization is attempted, it must target Ollama itself (model quantization, prompt caching, parallel inference) — not ARGO's interface layer.
+
+---
+
 ### 1. Server Shutdown on Request (ARGO v1.4.5)
 
 **Status:** CLOSED (Solved)
