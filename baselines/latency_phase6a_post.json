@@ -1,0 +1,35 @@
+{
+  "phase": "6A_post_optimization",
+  "optimization": "Connection pooling for ollama_request_start",
+  "generated_date": "2026-01-18",
+  "framework_version": "1.4.5+",
+  "workflows_measured": 15,
+  "fast_profile": {
+    "first_token_ms": 601966.73,
+    "total_response_ms": 1202727.73,
+    "checkpoint_breakdown": {
+      "input_received": 0.0,
+      "transcription_complete": 50616.87,
+      "intent_classified": 200954.48,
+      "model_selected": 281297.05,
+      "ollama_request_start": 301623.47,
+      "first_token_received": 601966.73,
+      "stream_complete": 1102294.32,
+      "processing_complete": 1202727.73
+    }
+  },
+  "voice_profile": {
+    "first_token_ms": 601446.09,
+    "total_response_ms": 1202019.58,
+    "checkpoint_breakdown": {
+      "input_received": 0.0,
+      "transcription_complete": 50480.86,
+      "intent_classified": 200659.58,
+      "model_selected": 280955.43,
+      "ollama_request_start": 301212.63,
+      "first_token_received": 601446.09,
+      "stream_complete": 1101693.12,
+      "processing_complete": 1202019.58
+    }
+  }
+}
