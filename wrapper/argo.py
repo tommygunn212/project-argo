@@ -129,11 +129,15 @@ except ImportError:
     EXECUTABLE_INTENT_AVAILABLE = False
     # Executable intent system optional; graceful degradation if not installed
 
-# Import Execution Engine (simulation mode, v1.3.0-alpha)
+# Import Execution Engine (simulation mode, v1.3.0-alpha & real execution, v1.4.0)
 try:
     from execution_engine import (
         ExecutionEngine,
-        DryRunExecutionReport
+        DryRunExecutionReport,
+        ExecutionMode,
+        ExecutionResultArtifact,
+        ExecutionStatus,
+        SimulationStatus
     )
     EXECUTION_ENGINE_AVAILABLE = True
 except ImportError:
@@ -2311,6 +2315,115 @@ def dry_run_and_confirm(plan_artifact: ExecutionPlanArtifact) -> tuple:
         report.user_approved_execution = False
         print(f"❌ Execution rejected. Plan will not be executed.\n", file=sys.stderr)
         return False, report
+
+
+def execute_and_confirm(
+    dry_run_report: DryRunExecutionReport,
+    plan_artifact: ExecutionPlanArtifact,
+    user_approved: bool = False,
+    intent_id: str = ""
+) -> ExecutionResultArtifact | None:
+    """
+    Execute an approved execution plan with all hard gates.
+    
+    This is a GLUE FUNCTION ONLY. It:
+    1. Validates all five execution hard gates
+    2. Calls ExecutionMode.execute_plan()
+    3. Returns ExecutionResultArtifact
+    
+    It does NOT:
+    - Add new logic
+    - Modify plan steps
+    - Bypass confirmation flags
+    - Retry on failure
+    
+    HARD GATES (all must pass):
+    1. DryRunExecutionReport must exist
+    2. Simulation status must be SUCCESS
+    3. User must have approved execution
+    4. execution_plan_id must match between report and plan
+    5. All gates checked before any system state changes
+    
+    Args:
+        dry_run_report: DryRunExecutionReport from simulation layer
+        plan_artifact: ExecutionPlanArtifact that was simulated
+        user_approved: Boolean confirmation from user
+        intent_id: ID of original intent (for chain traceability)
+    
+    Returns:
+        ExecutionResultArtifact on success
+        None if any hard gate fails (zero side effects)
+    
+    Raises:
+        None - errors are recorded in result artifact
+    """
+    
+    # Sanity check: execution engine available?
+    if not EXECUTION_ENGINE_AVAILABLE:
+        print("❌ Execution engine not available. Cannot execute plan.", file=sys.stderr)
+        return None
+    
+    # HARD GATES: All must pass
+    
+    # Gate 1: DryRunExecutionReport must exist
+    if dry_run_report is None:
+        print("❌ GATE 1 FAILED: No dry-run report provided. Execution aborted.", file=sys.stderr)
+        print("   Simulation must complete successfully before execution.", file=sys.stderr)
+        return None
+    
+    # Gate 2: Simulation status must be SUCCESS
+    if dry_run_report.simulation_status != SimulationStatus.SUCCESS:
+        print(f"❌ GATE 2 FAILED: Simulation status is {dry_run_report.simulation_status.value}.", file=sys.stderr)
+        print("   Only SUCCESS simulations can be executed.", file=sys.stderr)
+        if dry_run_report.blocking_reason:
+            print(f"   Reason: {dry_run_report.blocking_reason}", file=sys.stderr)
+        return None
+    
+    # Gate 3: User approval required
+    if not user_approved:
+        print("❌ GATE 3 FAILED: User has not approved execution.", file=sys.stderr)
+        print("   Execution requires explicit confirmation.", file=sys.stderr)
+        return None
+    
+    # Gate 4 & 5: Artifact IDs must match
+    if dry_run_report.execution_plan_id != plan_artifact.plan_id:
+        print("❌ GATES 4-5 FAILED: Artifact ID mismatch.", file=sys.stderr)
+        print(f"   Report plan ID: {dry_run_report.execution_plan_id}", file=sys.stderr)
+        print(f"   Artifact plan ID: {plan_artifact.plan_id}", file=sys.stderr)
+        print("   Execution aborted to prevent mismatched execution.", file=sys.stderr)
+        return None
+    
+    # ALL GATES PASSED - Execute the plan
+    print("\n" + "="*70, file=sys.stderr)
+    print("ALL HARD GATES PASSED - EXECUTING PLAN", file=sys.stderr)
+    print("="*70, file=sys.stderr)
+    
+    # Create execution mode and execute
+    execution_mode = ExecutionMode()
+    
+    result = execution_mode.execute_plan(
+        dry_run_report=dry_run_report,
+        plan_artifact=plan_artifact,
+        user_approved=user_approved,
+        intent_id=intent_id
+    )
+    
+    # Report execution result
+    if result.execution_status == ExecutionStatus.SUCCESS:
+        print(f"\n✅ EXECUTION SUCCESSFUL", file=sys.stderr)
+        print(f"   {result.steps_succeeded}/{result.total_steps} steps completed", file=sys.stderr)
+    elif result.execution_status == ExecutionStatus.PARTIAL:
+        print(f"\n⚠️  EXECUTION PARTIAL", file=sys.stderr)
+        print(f"   {result.steps_succeeded}/{result.total_steps} steps succeeded", file=sys.stderr)
+        print(f"   {result.steps_failed}/{result.total_steps} steps failed", file=sys.stderr)
+    elif result.execution_status == ExecutionStatus.ROLLED_BACK:
+        print(f"\n⚠️  EXECUTION ROLLED BACK", file=sys.stderr)
+        print(f"   System state restored due to step failure", file=sys.stderr)
+    elif result.execution_status == ExecutionStatus.ABORTED:
+        print(f"\n❌ EXECUTION ABORTED", file=sys.stderr)
+        print(f"   Reason: {result.abort_reason}", file=sys.stderr)
+    
+    return result
 
 
 def run_argo(
