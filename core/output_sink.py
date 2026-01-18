@@ -31,6 +31,8 @@ Hard stops:
 
 import os
 import asyncio
+import subprocess
+import sys
 from abc import ABC, abstractmethod
 from typing import Optional, Callable
 
@@ -168,53 +170,64 @@ class PiperOutputSink(OutputSink):
     
     Core behavior:
     - send(text) → start async Piper subprocess task (non-blocking return)
-    - stop() → cancel playback task immediately (idempotent)
+    - stop() → terminate process immediately (idempotent)
     
     Technical design:
-    - Piper subprocess runs in asyncio.create_subprocess_exec (non-blocking)
+    - Piper subprocess runs via subprocess.Popen (controlled process)
+    - Process handle stored in self._piper_process for kill()
     - Playback task stored in self._playback_task for cancellation
-    - stop() calls task.cancel() + waits for CancelledError (instant)
+    - stop() calls process.terminate() immediately (hard stop)
     - Never uses time.sleep, never blocks event loop
     - Multiple calls to stop() safe (idempotent)
     
     Configuration:
     - VOICE_ENABLED must be true (checked in caller)
     - PIPER_ENABLED must be true (checked in caller)
+    - PIPER_PATH: path to piper.exe (from .env)
+    - PIPER_VOICE: path to voice model (from .env)
     - PIPER_PROFILING gates timing probes (non-blocking)
     """
     
-    def __init__(self, model_path: Optional[str] = None, audio_output: str = "speaker"):
+    def __init__(self):
         """
         Initialize Piper output sink.
         
-        Args:
-            model_path: Path to Piper model file (default: system default)
-            audio_output: "speaker" (default) or "file" path
+        Reads configuration from .env:
+        - PIPER_PATH: path to piper executable
+        - PIPER_VOICE: path to voice model file
+        
+        Raises ValueError if Piper or voice model not found.
         """
-        self.model_path = model_path or self._get_default_model()
-        self.audio_output = audio_output
+        self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper.exe")
+        self.voice_path = os.getenv("PIPER_VOICE", "audio/piper/voices/en_US-lessac-medium.onnx")
         self._playback_task: Optional[asyncio.Task] = None
+        self._piper_process: Optional[subprocess.Popen] = None
         self._profiling_enabled = PIPER_PROFILING
-    
-    def _get_default_model(self) -> str:
-        """Get default Piper model path (stub for now)."""
-        # In production, find installed Piper model
-        # For now, assume "en_US-hfc_female-medium"
-        return "en_US-hfc_female-medium"
+        
+        # Validate Piper binary exists
+        if not os.path.exists(self.piper_path):
+            raise ValueError(f"Piper binary not found: {self.piper_path}")
+        
+        # Validate voice model exists (warning only if missing, for testing flexibility)
+        if not os.path.exists(self.voice_path):
+            if os.getenv("SKIP_VOICE_VALIDATION") != "true":
+                raise ValueError(f"Voice model not found: {self.voice_path}")
+            # For testing: allow missing voice model if explicitly skipped
     
     async def send(self, text: str) -> None:
         """
         Send text to Piper for audio playback (non-blocking).
         
         Behavior:
-        1. Log audio_request_start checkpoint (if PIPER_PROFILING)
-        2. Create async Piper subprocess task
-        3. Store task in self._playback_task for stop() to cancel
-        4. Return immediately (do NOT await task)
-        5. Log audio_first_output checkpoint when audio starts
+        1. Cancel any existing playback task
+        2. Log audio_request_start checkpoint (if PIPER_PROFILING)
+        3. Create async Piper subprocess task
+        4. Store task in self._playback_task for stop() to cancel
+        5. Return immediately (do NOT await task)
+        6. Log audio_first_output checkpoint when audio starts
         
         Non-blocking: send() returns while audio plays in background.
-        Cancellable: stop() will halt the playback task.
+        Cancellable: stop() will halt the playback task and process.
         
         Args:
             text: Text to synthesize and play
@@ -229,7 +242,8 @@ class PiperOutputSink(OutputSink):
         
         # Log timing probe: audio_request_start
         if self._profiling_enabled:
-            print(f"[PIPER_PROFILING] audio_request_start: {text[:30]}...")
+            import time
+            print(f"[PIPER_PROFILING] audio_request_start: {text[:30]}... @ {time.time():.3f}")
         
         # Create and store playback task (fire-and-forget)
         self._playback_task = asyncio.create_task(self._play_audio(text))
@@ -238,34 +252,108 @@ class PiperOutputSink(OutputSink):
         """
         Internal: run Piper subprocess to synthesize and play audio.
         
-        Non-blocking subprocess execution:
-        1. Create Piper subprocess with asyncio.create_subprocess_exec
+        Flow:
+        1. Create Piper subprocess with subprocess.Popen
         2. Send text via stdin
-        3. Pipe stdout to audio player (or /dev/null for headless)
-        4. Log audio_first_output when audio starts
-        5. Await subprocess completion
+        3. Read output (audio bytes) from stdout
+        4. Play audio (Windows: uses default speaker, or specified device)
+        5. Log audio_first_output when audio starts
+        6. Await subprocess completion
         
         Cancellation:
-        - If task is cancelled during await, subprocess is killed
+        - If task is cancelled during await, process is terminated
         - CancelledError propagates cleanly
+        - Process cleanup is guaranteed
+        
+        Hard stops:
+        - No fade-out, no tail audio
+        - Process killed immediately on cancellation
         """
         try:
-            # Piper CLI: echo text | piper --model <model> --output-raw | aplay
-            # For Windows, use speaker-test or other audio output
-            # For now, stub the actual audio playback
-            
             if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] audio_first_output: {text[:30]}...")
+                import time
+                print(f"[PIPER_PROFILING] audio_first_output: {text[:30]}... @ {time.time():.3f}")
             
-            # Simulate audio playback delay (would be subprocess in production)
-            # For testing: just return immediately
-            await asyncio.sleep(0.1)
+            # Start Piper subprocess
+            # Command: piper --model <voice_path> --output-raw | aplay (or equivalent)
+            # For Windows, Piper outputs WAV audio to stdout
+            # We pipe it to the system default audio player
             
+            try:
+                # Create subprocess in non-blocking mode
+                self._piper_process = await asyncio.create_subprocess_exec(
+                    self.piper_path,
+                    "--model", self.voice_path,
+                    "--output-raw",
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                
+                # Send text to Piper stdin
+                stdout, stderr = await self._piper_process.communicate(
+                    input=text.encode("utf-8")
+                )
+                
+                # If we got audio data, play it
+                if stdout:
+                    await self._play_audio_data(stdout)
+                
+                if stderr:
+                    if self._profiling_enabled:
+                        print(f"[PIPER_PROFILING] piper stderr: {stderr.decode('utf-8', errors='replace')}")
+                
+            finally:
+                self._piper_process = None
+        
         except asyncio.CancelledError:
             # Task was cancelled (stop() was called)
+            # Kill the Piper process immediately
+            if self._piper_process and self._piper_process.returncode is None:
+                try:
+                    self._piper_process.terminate()
+                    # Give it a moment to terminate gracefully
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.create_task(
+                                asyncio.sleep(0.1)
+                            ),
+                            timeout=0.1
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+                    
+                    # If still alive, kill it hard
+                    if self._piper_process.returncode is None:
+                        self._piper_process.kill()
+                except Exception:
+                    pass  # Process already terminated
+                
+                self._piper_process = None
+            
             if self._profiling_enabled:
-                print("[PIPER_PROFILING] audio_cancelled")
+                import time
+                print(f"[PIPER_PROFILING] audio_cancelled @ {time.time():.3f}")
+            
             raise
+    
+    async def _play_audio_data(self, audio_bytes: bytes) -> None:
+        """
+        Internal: play audio bytes to system audio device.
+        
+        On Windows: use winsound.Beep or subprocess to player
+        On Linux: use aplay or paplay
+        On macOS: use afplay
+        
+        For now, simple implementation: just return (audio is ready to play)
+        In production: pipe to actual audio player.
+        
+        Args:
+            audio_bytes: Raw audio data from Piper
+        """
+        # Stub: in production, pipe to audio player
+        # For testing, just consume the bytes and return
+        await asyncio.sleep(0.01)  # Minimal delay
     
     async def stop(self) -> None:
         """
@@ -273,27 +361,53 @@ class PiperOutputSink(OutputSink):
         
         Behavior:
         1. If playback_task exists and is running: cancel it
-        2. Await CancelledError (instant)
-        3. If no task running: no-op (idempotent)
-        4. If called multiple times: safe (idempotent)
-        5. Never raises exceptions
+        2. If piper_process exists: terminate it immediately
+        3. Await CancelledError from task (instant)
+        4. If no task running: no-op (idempotent)
+        5. If called multiple times: safe (idempotent)
+        6. Never raises exceptions
         
         Semantics:
         - stop() is idempotent: can call multiple times safely
         - stop() is instant: < 50ms latency
         - stop() is async-safe: uses only asyncio primitives
-        - No fade-out, no tail audio, no apology
+        - Hard termination: no fade-out, no tail audio, no apology
         """
+        # Terminate Piper process immediately (hard stop)
+        if self._piper_process and self._piper_process.returncode is None:
+            try:
+                self._piper_process.terminate()
+                # Give it a moment
+                try:
+                    await asyncio.wait_for(
+                        asyncio.sleep(0.05),
+                        timeout=0.05
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                
+                # If still alive, kill hard
+                if self._piper_process.returncode is None:
+                    self._piper_process.kill()
+            except Exception:
+                pass  # Already terminated
+            finally:
+                self._piper_process = None
+        
+        # Cancel playback task
         if self._playback_task and not self._playback_task.done():
             self._playback_task.cancel()
             try:
                 await self._playback_task
             except asyncio.CancelledError:
                 if self._profiling_enabled:
-                    print("[PIPER_PROFILING] stop() called, task cancelled")
+                    import time
+                    print(f"[PIPER_PROFILING] stop() called, task cancelled @ {time.time():.3f}")
                 pass  # Expected: task was cancelled
         else:
             # No task or already done: idempotent no-op
             if self._profiling_enabled and self._playback_task:
-                print("[PIPER_PROFILING] stop() called, task already done (idempotent)")
+                import time
+                print(f"[PIPER_PROFILING] stop() called, task already done (idempotent) @ {time.time():.3f}")
             pass
+

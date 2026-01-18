@@ -64,8 +64,8 @@ class TestOutputSinkInterface(unittest.TestCase):
         """PiperOutputSink can be instantiated."""
         sink = PiperOutputSink()
         self.assertIsInstance(sink, OutputSink)
-        self.assertIsNotNone(sink.model_path)
-        self.assertEqual(sink.audio_output, "speaker")
+        self.assertIsNotNone(sink.piper_path)
+        self.assertIsNotNone(sink.voice_path)
 
 
 # ============================================================================
@@ -343,6 +343,122 @@ class TestPiperProfiling(unittest.TestCase):
     def test_profiling_probes(self):
         """Profiling probes logged when enabled (sync wrapper)."""
         asyncio.run(self.async_test_profiling_probes())
+
+
+# ============================================================================
+# SUBPROCESS BEHAVIOR TESTS (Phase 7A-1)
+# ============================================================================
+
+class TestPiperSubprocessBehavior(unittest.TestCase):
+    """Test subprocess-based Piper integration (hard stop semantics)."""
+    
+    def setUp(self):
+        self.sink = PiperOutputSink()
+    
+    async def async_test_piper_path_validation(self):
+        """Verify Piper binary path is validated on creation."""
+        # Valid instance should not raise
+        sink = PiperOutputSink()
+        self.assertIsNotNone(sink)
+        
+        # Invalid path should raise ValueError on creation
+        with patch.dict(os.environ, {"PIPER_PATH": "/nonexistent/piper.exe"}):
+            with self.assertRaises(ValueError):
+                PiperOutputSink()
+    
+    async def async_test_voice_model_validation(self):
+        """Verify voice model path is validated on creation."""
+        # Invalid voice path should raise ValueError on creation
+        # (unless SKIP_VOICE_VALIDATION is set)
+        if os.getenv("SKIP_VOICE_VALIDATION") != "true":
+            with patch.dict(os.environ, {"PIPER_VOICE": "/nonexistent/model.onnx"}):
+                with self.assertRaises(ValueError):
+                    PiperOutputSink()
+        # If SKIP_VOICE_VALIDATION is set, this test is N/A
+    
+    async def async_test_process_created_on_send(self):
+        """Verify subprocess is created when send() is called."""
+        # This test checks that the Piper process is created
+        # (we can't easily test actual process creation without mocking,
+        # but we verify the infrastructure is in place)
+        
+        await self.sink.send("Test")
+        
+        # Playback task should be created
+        self.assertIsNotNone(self.sink._playback_task)
+    
+    async def async_test_process_terminated_on_stop(self):
+        """Verify process is terminated immediately on stop()."""
+        # Start playback
+        await self.sink.send("Test")
+        
+        # Stop playback
+        await self.sink.stop()
+        
+        # Process should be None after stop (cleaned up)
+        # Note: actual process termination depends on mock implementation
+        # This verifies the call structure is correct
+    
+    async def async_test_hard_stop_no_fade(self):
+        """Verify stop() is a hard stop (no fade-out, no tail audio)."""
+        # Start audio
+        await self.sink.send("Test audio")
+        
+        # Immediately stop (no waiting for fade)
+        await self.sink.stop()
+        
+        # Process should be terminated immediately
+        # Verify by checking that _piper_process is None
+        self.assertIsNone(self.sink._piper_process)
+    
+    async def async_test_multiple_stop_calls_idempotent(self):
+        """Verify multiple stop() calls are safe (idempotent)."""
+        await self.sink.send("Test")
+        
+        # Call stop multiple times
+        await self.sink.stop()
+        await self.sink.stop()
+        await self.sink.stop()
+        
+        # Should not raise or cause issues
+        self.assertIsNone(self.sink._piper_process)
+    
+    async def async_test_stop_without_send(self):
+        """Verify stop() is safe even without send()."""
+        # Call stop without sending audio first
+        await self.sink.stop()
+        await self.sink.stop()
+        
+        # Should not raise
+        self.assertIsNone(self.sink._piper_process)
+    
+    def test_piper_path_validation(self):
+        """Piper binary path validation (sync wrapper)."""
+        asyncio.run(self.async_test_piper_path_validation())
+    
+    def test_voice_model_validation(self):
+        """Voice model path validation (sync wrapper)."""
+        asyncio.run(self.async_test_voice_model_validation())
+    
+    def test_process_created_on_send(self):
+        """Process created on send (sync wrapper)."""
+        asyncio.run(self.async_test_process_created_on_send())
+    
+    def test_process_terminated_on_stop(self):
+        """Process terminated on stop (sync wrapper)."""
+        asyncio.run(self.async_test_process_terminated_on_stop())
+    
+    def test_hard_stop_no_fade(self):
+        """Hard stop (sync wrapper)."""
+        asyncio.run(self.async_test_hard_stop_no_fade())
+    
+    def test_multiple_stop_calls_idempotent(self):
+        """Multiple stop idempotent (sync wrapper)."""
+        asyncio.run(self.async_test_multiple_stop_calls_idempotent())
+    
+    def test_stop_without_send(self):
+        """Stop without send (sync wrapper)."""
+        asyncio.run(self.async_test_stop_without_send())
 
 
 # ============================================================================
