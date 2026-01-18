@@ -153,6 +153,21 @@ except ImportError:
     OUTPUT_SINK_AVAILABLE = False
     # Output sink optional; graceful degradation if not installed
 
+# Import State Machine (Phase 7B: Wake/sleep/stop control)
+try:
+    from core.state_machine import (
+        State,
+        StateMachine,
+        get_state_machine,
+        set_state_machine,
+        WAKE_WORD_ENABLED,
+        SLEEP_WORD_ENABLED
+    )
+    STATE_MACHINE_AVAILABLE = True
+except ImportError:
+    STATE_MACHINE_AVAILABLE = False
+    # State machine optional; graceful degradation if not installed
+
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
 # ============================================================================
@@ -218,6 +233,17 @@ def _send_to_output_sink(text: str) -> None:
 # Define a system-wide session identifier
 SESSION_ID = str(uuid.uuid4())
 """Unique identifier for this execution. Set in __main__ based on CLI args."""
+
+# Initialize state machine (Phase 7B)
+_state_machine: StateMachine | None = None
+"""Global state machine for wake/sleep/stop control."""
+
+if STATE_MACHINE_AVAILABLE:
+    try:
+        _state_machine = get_state_machine()
+    except Exception as e:
+        print(f"⚠ State machine initialization error: {e}", file=sys.stderr)
+        STATE_MACHINE_AVAILABLE = False
 
 
 def _get_log_dir() -> str:
@@ -2069,6 +2095,12 @@ def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> 
         else:
             print("Transcript rejected. Please try again.")
     """
+    # [Phase 7B] Gate: Check if listening is enabled
+    if STATE_MACHINE_AVAILABLE and _state_machine:
+        if not _state_machine.listening_enabled():
+            print("⚠ Microphone input blocked: not in LISTENING state", file=sys.stderr)
+            return False, "", None
+    
     if not WHISPER_AVAILABLE:
         print("⚠ Whisper not installed. Run: pip install openai-whisper", file=sys.stderr)
         return False, "", None
@@ -2483,6 +2515,106 @@ def execute_and_confirm(
     return result
 
 
+# ============================================================================
+# PHASE 7B: STATE MACHINE INTEGRATION HELPERS
+# ============================================================================
+
+def _process_wake_word(text: str) -> bool:
+    """
+    Detect and process wake word ("ARGO").
+    
+    Returns True if wake word was detected and processed.
+    """
+    if not STATE_MACHINE_AVAILABLE or not _state_machine:
+        return False
+    
+    # Check for exact match (case-insensitive)
+    if text.strip().upper() == "ARGO":
+        if _state_machine.wake():
+            print("[STATE] Woke up (SLEEP -> LISTENING)", file=sys.stderr)
+            return True
+    
+    return False
+
+
+def _process_sleep_command(text: str) -> bool:
+    """
+    Detect and process sleep command ("go to sleep").
+    
+    Returns True if sleep command was detected and processed.
+    """
+    if not STATE_MACHINE_AVAILABLE or not _state_machine:
+        return False
+    
+    # Check for exact match (case-insensitive)
+    if text.strip().lower() == "go to sleep":
+        if _state_machine.sleep():
+            print("[STATE] Going to sleep (-> SLEEP)", file=sys.stderr)
+            return True
+    
+    return False
+
+
+def _process_stop_command(text: str) -> bool:
+    """
+    Detect and process stop command ("stop").
+    
+    Returns True if stop command was detected and processed.
+    """
+    if not STATE_MACHINE_AVAILABLE or not _state_machine:
+        return False
+    
+    # Check for exact match (case-insensitive)
+    if text.strip().lower() == "stop":
+        # [Phase 7B] Hard stop: Call OutputSink.stop() immediately
+        if OUTPUT_SINK_AVAILABLE:
+            try:
+                sink = get_output_sink()
+                sink.stop()
+                print("[AUDIO] Stopped playback (hard stop, <50ms latency)", file=sys.stderr)
+            except Exception as e:
+                print(f"⚠ OutputSink.stop() error: {e}", file=sys.stderr)
+        
+        # Transition state to LISTENING
+        if _state_machine.stop_audio():
+            print("[STATE] Stopped audio (SPEAKING -> LISTENING)", file=sys.stderr)
+            return True
+    
+    return False
+
+
+def _transition_to_thinking() -> bool:
+    """
+    Transition to THINKING state when command is accepted.
+    
+    Returns True if transition succeeded.
+    """
+    if not STATE_MACHINE_AVAILABLE or not _state_machine:
+        return False
+    
+    if _state_machine.accept_command():
+        print("[STATE] Accepted command (LISTENING -> THINKING)", file=sys.stderr)
+        return True
+    
+    return False
+
+
+def _transition_to_speaking() -> bool:
+    """
+    Transition to SPEAKING state when audio playback starts.
+    
+    Returns True if transition succeeded.
+    """
+    if not STATE_MACHINE_AVAILABLE or not _state_machine:
+        return False
+    
+    if _state_machine.start_audio():
+        print("[STATE] Starting audio (THINKING -> SPEAKING)", file=sys.stderr)
+        return True
+    
+    return False
+
+
 def run_argo(
     user_input: str,
     *,
@@ -2520,6 +2652,19 @@ def run_argo(
     prefs = update_prefs(user_input, prefs)
     save_prefs(prefs)
     
+    # [Phase 7B] Step 1b: Process special commands (wake, sleep, stop)
+    if _process_wake_word(user_input):
+        return
+    if _process_sleep_command(user_input):
+        return
+    if _process_stop_command(user_input):
+        return
+    
+    # [Phase 7B] Step 1c: Transition to THINKING if we have a valid command in LISTENING state
+    if STATE_MACHINE_AVAILABLE and _state_machine:
+        if _state_machine.is_listening:
+            _transition_to_thinking()
+    
     # Step 2: Check if this is a recall/retrieval query (meta-question)
     is_recall, count_requested = detect_recall_query(user_input)
     
@@ -2556,6 +2701,9 @@ def run_argo(
     
     # Step 6: Compose user input with preference + memory prefixes
     composed_input = pref_block + memory_context + user_input
+    
+    # [Phase 7B] Step 6b: Transition to SPEAKING before generating response
+    _transition_to_speaking()
     
     # Step 7: Execute core logic with composed input
     _run_argo_internal(
