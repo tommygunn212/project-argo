@@ -1,7 +1,17 @@
 """
-LOCAL INPUT SHELL (v1.4.2)
+LOCAL INPUT SHELL (v1.4.4)
 
 A testing interface for the ARGO artifact chain.
+
+NEW IN v1.4.4:
+- Humanized read-only Q&A responses (natural tone, no manual voice)
+- System prompt enforces conversational style
+- Bans corporate/instructional language patterns
+
+NEW IN v1.4.3:
+- Read-only Q&A path for questions (no artifacts created)
+- Press-to-talk fixed: mousedown/mouseup/mouseleave
+- ANSWER panel displays both Q&A responses and execution results
 
 STRICT RULES:
 - No frozen layers modified
@@ -13,6 +23,8 @@ STRICT RULES:
 
 This shell mirrors the artifact chain:
   Transcription → Intent → Plan → Execution
+           ↓
+          Q&A (read-only, routing to hal_chat.py)
 
 Each stage must be confirmed before the next appears.
 Rejection clears that stage and below.
@@ -33,13 +45,23 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-# Add wrapper to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'wrapper'))
+# Add argo root to path so imports work
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transcription import TranscriptionEngine
-from intent import IntentEngine
-from executable_intent import ExecutableIntentEngine
-from execution_engine import ExecutionMode
+from wrapper.transcription import WhisperTranscriber, TranscriptionArtifact
+from wrapper.intent import CommandParser, IntentArtifact
+from wrapper.executable_intent import ExecutableIntentEngine
+from wrapper.execution_engine import ExecutionMode
+from wrapper.argo import execute_and_confirm
+
+# Import hal_chat for Q&A routing
+sys.path.insert(0, str(Path(__file__).parent.parent / "runtime" / "ollama"))
+try:
+    import hal_chat
+    HAL_AVAILABLE = True
+except Exception:
+    HAL_AVAILABLE = False
+    print("⚠️ WARNING: hal_chat not available. Q&A routing disabled.")
 
 # ============================================================================
 # INITIALIZATION
@@ -52,8 +74,8 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Engines
-transcription_engine = TranscriptionEngine()
-intent_engine = IntentEngine()
+transcription_engine = WhisperTranscriber()
+intent_engine = CommandParser()
 executable_intent_engine = ExecutableIntentEngine()
 execution_mode = ExecutionMode()
 
@@ -96,6 +118,98 @@ def abort_execution(reason: str):
     session_state["execution_result"] = None
 
 
+def is_question(text: str) -> bool:
+    """
+    Check if text is a question.
+    Detects: explicit ? or question word patterns (what, how, why, is, can, do, etc.)
+    Handles Whisper's punctuation quirks.
+    """
+    text = text.strip().lower()
+    
+    # Explicit question mark
+    if text.endswith("?"):
+        return True
+    
+    # Question word patterns at the start (handles Whisper's missing punctuation)
+    question_words = ["what ", "how ", "why ", "when ", "where ", "which ",
+                     "who ", "whom ", "is it", "can i", "can you", "could you",
+                     "would you", "do you", "did you", "should i", "does it"]
+    
+    for word in question_words:
+        if text.startswith(word):
+            return True
+    
+    return False
+
+
+def route_to_qa(text: str) -> Optional[str]:
+    """
+    Route text to Q&A if it's a question and hal_chat is available.
+    Returns the answer text or None if not routable.
+    Enforces humanized tone (no manual voice, no corporate language).
+    """
+    if not HAL_AVAILABLE:
+        return None
+    
+    if not is_question(text):
+        return None
+    
+    try:
+        log_action("QA_ROUTE", {"text": text})
+        
+        # System prompt: Calm, confident, lived-experience voice with contained personality
+        system_prompt = """You are responding in READ-ONLY mode. No actions will be taken.
+
+VOICE & PERSONALITY:
+- Sound like a person who has actually done this many times
+- Calm, confident, conversational tone
+- Show genuine expertise through details, not enthusiasm
+- No performance energy, no "let's go", no hype language
+- No mascot voice or YouTube intro energy
+- Keep it grounded and useful
+
+CONTENT STRUCTURE:
+- One primary method (not multiple paths)
+- One sensory cue (visual, sound, texture, timing)
+- One practical trick from lived experience
+- Clean, direct explanation
+
+EMOJI USAGE (Rare & Contained):
+- Maximum 1-2 emojis per response
+- Only if it reinforces tone or subject (🔥 for heat, 🍳 for cooking—not 😋 or 🤯)
+- Emojis at end or mid-sentence, never every paragraph
+- NEVER: emoji clusters, emojis + hype language, emojis + lists + jokes together
+- NEVER: emotional emojis (😋, 🤯, 😱, etc.) or emoji narration
+
+OPTIONAL PREFERENCE HOOK:
+- One question at the end if relevant
+- Examples: "Crispy or chewy?", "Pan or oven?"
+- No emoji in the question itself
+
+NEVER:
+- Disclaimers, safety lectures, regulatory language
+- Corporate, instructional, or teaching-class tone
+- Numbered recipe-card steps (unless explicitly asked)
+- Apologetic or hedging language
+- Recipe-blog filler or over-explanation
+- Multi-question endings
+
+QUALITY TEST:
+✔️ Pass: Sounds like a person who cooks (calm, specific, knows what works)
+❌ Fail: Sounds like a food blogger (flowery, performative, backstory)
+❌ Fail: Sounds like a YouTube intro (hype, energy, "buckle up")
+❌ Fail: Sounds like a mascot (emojis everywhere, exclamation marks, "let's go")
+
+BE REAL. BE USEFUL. SOUND EXPERIENCED."""
+        
+        answer = hal_chat.chat(text, context=system_prompt)
+        log_action("QA_ANSWER_GENERATED", {"length": len(answer)})
+        return answer
+    except Exception as e:
+        log_action("QA_ERROR", {"error": str(e)})
+        return None
+
+
 # ============================================================================
 # API ENDPOINTS
 # ============================================================================
@@ -127,54 +241,121 @@ async def transcribe_audio(file: UploadFile = File(...)):
     """
     Stage 1: Transcribe audio (Whisper)
     
-    Input: Audio file (WAV)
+    Input: WebM audio from browser microphone
     Output: Transcript + TranscriptionArtifact
+    
+    Process: WebM → WAV (explicit conversion) → Whisper
     """
+    webm_path = None
+    wav_path = None
+    
     try:
-        log_action("TRANSCRIBE", {"filename": file.filename})
+        log_action("TRANSCRIBE", {"filename": file.filename, "format": "webm"})
         
         # Read audio file
         contents = await file.read()
         if not contents:
-            log_action("ERROR", {"reason": "Empty audio file"})
-            raise HTTPException(status_code=400, detail="Empty audio file")
+            log_action("TRANSCRIBE_ERROR", {"reason": "Empty audio file"})
+            raise HTTPException(status_code=400, detail="No audio data received")
         
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        # Step 1: Save WebM from browser as temporary file
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
             tmp.write(contents)
-            tmp_path = tmp.name
+            webm_path = tmp.name
+        
+        log_action("AUDIO_SAVED", {"format": "webm", "size": len(contents)})
+        
+        # Step 2: Convert WebM → WAV (explicit parameters)
+        wav_path = webm_path.replace(".webm", ".wav")
         
         try:
-            # Call Whisper via transcription engine
-            transcript_artifact = transcription_engine.transcribe(
-                audio_path=tmp_path,
-                source="push-to-talk"
-            )
+            from pydub import AudioSegment
             
-            # Store in session
-            session_state["transcription_id"] = transcript_artifact.transcription_id
-            session_state["transcript"] = transcript_artifact.transcript_text
+            # Load WebM
+            audio = AudioSegment.from_file(webm_path, format="webm")
             
-            log_action("TRANSCRIBE_SUCCESS", {
-                "transcription_id": transcript_artifact.transcription_id,
-                "text": transcript_artifact.transcript_text[:50] + "..." if len(transcript_artifact.transcript_text) > 50 else transcript_artifact.transcript_text,
+            # Export as WAV with explicit parameters
+            # 16kHz mono, PCM S16LE (standard for Whisper)
+            audio_mono = audio.set_channels(1)  # Mono
+            audio_16k = audio_mono.set_frame_rate(16000)  # 16kHz
+            
+            audio_16k.export(wav_path, format="wav")
+            
+            log_action("AUDIO_CONVERTED", {
+                "from": "webm",
+                "to": "wav",
+                "duration_ms": len(audio),
+                "sample_rate": 16000,
+                "channels": 1,
             })
-            
-            return {
-                "status": "transcribed",
-                "transcription_id": transcript_artifact.transcription_id,
-                "transcript": transcript_artifact.transcript_text,
-                "message": "✓ Transcript ready. Review and confirm or reject.",
-            }
         
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        except Exception as e:
+            log_action("CONVERSION_FAILED", {"error": str(e)})
+            raise HTTPException(status_code=400, detail=f"Could not convert audio: {str(e)}")
+        
+        # Step 3: Validate WAV file BEFORE Whisper
+        if not os.path.exists(wav_path):
+            log_action("WAV_NOT_CREATED", {})
+            raise HTTPException(status_code=500, detail="WAV file creation failed")
+        
+        wav_size = os.path.getsize(wav_path)
+        if wav_size < 1000:  # Less than 1KB is suspicious
+            log_action("WAV_TOO_SMALL", {"size": wav_size})
+            raise HTTPException(status_code=400, detail="Audio file too small (< 1KB)")
+        
+        log_action("WAV_VALIDATED", {"size": wav_size})
+        
+        # Step 4: Call Whisper with validated WAV
+        transcript_artifact = transcription_engine.transcribe(audio_path=wav_path)
+        
+        # Step 5: Check result
+        if not transcript_artifact.transcript_text:
+            log_action("WHISPER_EMPTY", {
+                "status": transcript_artifact.status,
+                "error": transcript_artifact.error_detail,
+            })
+            raise HTTPException(
+                status_code=400,
+                detail=f"No speech detected: {transcript_artifact.error_detail}"
+            )
+        
+        # Step 6: Success - store in session
+        session_state["transcription_id"] = transcript_artifact.id
+        session_state["transcript"] = transcript_artifact.transcript_text
+        
+        text_preview = transcript_artifact.transcript_text[:50]
+        if len(transcript_artifact.transcript_text) > 50:
+            text_preview += "..."
+        
+        log_action("TRANSCRIBE_SUCCESS", {
+            "transcription_id": transcript_artifact.id,
+            "text": text_preview,
+            "language": transcript_artifact.language_detected,
+            "confidence": f"{transcript_artifact.confidence:.2f}",
+        })
+        
+        return {
+            "status": "transcribed",
+            "transcription_id": transcript_artifact.id,
+            "transcript": transcript_artifact.transcript_text,
+            "message": "✓ Transcript ready. Review and confirm or reject.",
+        }
+    
+    except HTTPException:
+        raise
     
     except Exception as e:
-        log_action("TRANSCRIBE_ERROR", {"error": str(e)})
+        log_action("TRANSCRIBE_EXCEPTION", {"error": str(e), "type": type(e).__name__})
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    
+    finally:
+        # Step 7: Clean up both temp files (always)
+        for path in [webm_path, wav_path]:
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except Exception as e:
+                    logger.warning(f"Failed to delete temp file {path}: {e}")
 
 
 @app.post("/api/reject-transcript")
@@ -190,9 +371,10 @@ async def reject_transcript():
 @app.post("/api/confirm-transcript")
 async def confirm_transcript():
     """
-    Confirm transcript → generate intent
+    Confirm transcript → generate intent OR route to Q&A
     
-    Transition: Transcription → Intent
+    Transition: Transcription → Intent (if command)
+                Transcription → Q&A (if question, read-only)
     """
     if not session_state["transcript"]:
         raise HTTPException(status_code=400, detail="No transcript to confirm")
@@ -200,24 +382,48 @@ async def confirm_transcript():
     try:
         log_action("CONFIRM_TRANSCRIPT", {})
         
+        transcript = session_state["transcript"]
+        
+        # Check if this is a question
+        if is_question(transcript):
+            answer = route_to_qa(transcript)
+            if answer:
+                log_action("QA_ROUTED", {"question": transcript})
+                return {
+                    "status": "qa_answered",
+                    "is_question": True,
+                    "question": transcript,
+                    "answer": answer,
+                    "answer_text": f"READ-ONLY RESPONSE\n(No actions executed)\n\n{answer}",
+                    "message": "✓ Question answered. Review the response below.",
+                }
+        
+        # Not a question, or Q&A unavailable → proceed with intent generation
         # Generate intent from transcript
-        intent_artifact = intent_engine.parse_intent(
-            text=session_state["transcript"],
-            source="transcription",
+        intent_dict = intent_engine.parse(
+            raw_text=transcript
         )
         
+        # Create intent artifact
+        intent_artifact = IntentArtifact()
+        intent_artifact.source_type = "transcription"
+        intent_artifact.source_artifact_id = session_state["transcription_id"]
+        intent_artifact.raw_text = transcript
+        intent_artifact.parsed_intent = intent_dict
+        intent_artifact.status = "proposed"
+        
         # Store in session
-        session_state["intent_id"] = intent_artifact.intent_id
+        session_state["intent_id"] = intent_artifact.id
         session_state["intent_artifact"] = intent_artifact
         
         log_action("INTENT_GENERATED", {
-            "intent_id": intent_artifact.intent_id,
-            "intent": str(intent_artifact.identified_intent),
+            "intent_id": intent_artifact.id,
+            "intent": str(intent_dict),
         })
         
         return {
             "status": "intent_generated",
-            "intent_id": intent_artifact.intent_id,
+            "intent_id": intent_artifact.id,
             "intent": intent_artifact.to_dict(),
             "message": "✓ Intent parsed. Review and confirm or reject.",
         }
@@ -254,8 +460,8 @@ async def confirm_intent():
         # Generate plan from intent
         plan_artifact = executable_intent_engine.plan_from_intent(
             intent_id=session_state["intent_id"],
-            title="User Request",
-            intent=session_state["intent_artifact"].identified_intent,
+            intent_text=session_state["intent_artifact"].raw_text,
+            parsed_intent=session_state["intent_artifact"].parsed_intent,
         )
         
         # Store in session
@@ -278,6 +484,33 @@ async def confirm_intent():
         log_action("PLAN_ERROR", {"error": str(e)})
         abort_execution(f"Plan generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+
+@app.post("/api/confirm-plan")
+async def confirm_plan():
+    """
+    Confirm plan → ready for execution
+    
+    Transition: Plan → Execution (dry-run)
+    """
+    if not session_state["plan_artifact"]:
+        raise HTTPException(status_code=400, detail="No plan to confirm")
+    
+    try:
+        log_action("CONFIRM_PLAN", {})
+        
+        # Plan is confirmed, ready for execution
+        # Frontend will now show the execution panel
+        
+        return {
+            "status": "plan_confirmed",
+            "plan_id": session_state["plan_id"],
+            "message": "✓ Plan confirmed. Ready for execution.",
+        }
+    
+    except Exception as e:
+        log_action("CONFIRM_PLAN_ERROR", {"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Plan confirmation failed: {str(e)}")
 
 
 @app.post("/api/abort-plan")
@@ -303,6 +536,8 @@ async def execute_plan():
       2. Simulation must be SUCCESS
       3. User must approve (implicit - we only reach here if they clicked)
       4-5. IDs must match
+    
+    Response includes answer_text for UI display (read-only).
     """
     if not session_state["plan_artifact"]:
         raise HTTPException(status_code=400, detail="No plan to execute")
@@ -316,7 +551,6 @@ async def execute_plan():
         
         # THIS IS THE CRITICAL CALL
         # All safety gates are enforced inside execute_and_confirm()
-        from argo import execute_and_confirm
         
         # We pass user_approved=True because they explicitly clicked the button
         # But execute_and_confirm() will still verify the approval against the dry-run report
@@ -330,14 +564,44 @@ async def execute_plan():
         # Store result
         session_state["execution_result"] = result
         
+        # Handle gate failure (result is None)
+        if result is None:
+            answer_text = "⚠️ EXECUTION BLOCKED\n\n"
+            answer_text += "Gate 1 failed: No dry-run simulation was provided.\n"
+            answer_text += "The safety gates require a successful dry-run before real execution.\n\n"
+            answer_text += "This is expected in the Input Shell prototype.\n"
+            answer_text += "Full dry-run simulation will be added in v1.4.3."
+            
+            log_action("EXECUTION_BLOCKED", {
+                "reason": "Gate 1: No dry-run report",
+            })
+            
+            return {
+                "status": "blocked",
+                "result": None,
+                "answer_text": answer_text,
+                "message": "⚠️ Execution blocked by safety gate.",
+            }
+        
+        # Generate answer text from execution result
+        answer_text = f"Execution Status: {result.execution_status.value}\n"
+        answer_text += f"Steps Executed: {result.steps_executed}/{result.total_steps}\n"
+        if result.errors:
+            answer_text += f"\nErrors:\n"
+            for error in result.errors:
+                answer_text += f"  - {error}\n"
+        if result.steps_executed and result.steps_executed > 0:
+            answer_text += f"\nSuccessful: {result.steps_succeeded}/{result.steps_executed}\n"
+        
         log_action("EXECUTION_COMPLETE", {
-            "status": result.execution_status.value if result else "ABORTED",
-            "result_id": result.result_id if result else None,
+            "status": result.execution_status.value,
+            "result_id": result.result_id,
         })
         
         return {
             "status": "executed",
-            "result": result.to_dict() if result else None,
+            "result": result.to_dict(),
+            "answer_text": answer_text,
             "message": "✓ Execution complete. See log below.",
         }
     
@@ -369,6 +633,55 @@ async def speak(text: str):
     except Exception as e:
         log_action("SPEAK_ERROR", {"error": str(e)})
         raise HTTPException(status_code=500, detail=f"Speech failed: {str(e)}")
+
+
+@app.post("/api/qa")
+async def answer_question(text: str):
+    """
+    Read-only Q&A path (v1.4.3)
+    
+    If text is a question:
+    - Does NOT create IntentArtifact
+    - Does NOT create Plan
+    - Does NOT touch execution
+    - Routes to hal_chat for read-only answer
+    - Answer appears ONLY in ANSWER panel
+    
+    Rules:
+    - No confirmation required (output only)
+    - No artifact advancement
+    - No execution risk
+    """
+    try:
+        if not is_question(text):
+            return {
+                "status": "not_a_question",
+                "message": "Text does not end with '?'",
+            }
+        
+        answer = route_to_qa(text)
+        
+        if answer is None:
+            return {
+                "status": "qa_unavailable",
+                "message": "Q&A service not available. Use commands instead.",
+            }
+        
+        log_action("QA_COMPLETE", {
+            "question_length": len(text),
+            "answer_length": len(answer),
+        })
+        
+        return {
+            "status": "answered",
+            "question": text,
+            "answer": answer,
+            "answer_text": f"READ-ONLY RESPONSE\n(No actions executed)\n\n{answer}",
+        }
+    
+    except Exception as e:
+        log_action("QA_ERROR", {"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Q&A failed: {str(e)}")
 
 
 @app.post("/api/reset")

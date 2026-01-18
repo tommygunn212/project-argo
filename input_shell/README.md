@@ -1,4 +1,4 @@
-# ARGO Input Shell (v1.4.2)
+# ARGO Input Shell (v1.4.4)
 
 ## What This Is
 
@@ -7,9 +7,14 @@ A **local testing interface** for the ARGO artifact chain.
 It mirrors the workflow:
 ```
 Transcription → Intent → Plan → Execution
+           ↓
+          Q&A (read-only, humanized answers)
 ```
 
 Each stage requires **explicit confirmation** before proceeding.
+
+### v1.4.4 Update
+Q&A responses now use humanized tone—conversational, natural, without corporate or manual voice.
 
 ---
 
@@ -45,6 +50,45 @@ This shell has zero special authority. It is a **mirror of the artifact chain**,
 - No new APIs
 - No new execution logic
 - This is a UI wrapper, not a capability upgrade
+
+---
+
+## v1.4.3 Features
+
+### Press-to-Talk (PTT) Fixed
+- **mousedown** → start recording
+- **mouseup** → stop and submit
+- **mouseleave** → safety stop (if outside button while recording)
+- **ESC** → cancel current recording
+- **CANCEL button** → visible while recording, discards audio without transcription
+
+This is real push-to-talk, not toggle mode.
+
+### Q&A Routing (Read-Only)
+Questions (text ending with `?`) are routed to a separate path:
+- Does NOT create IntentArtifact
+- Does NOT create ExecutablePlan
+- Does NOT touch execution
+- Answers appear in the ANSWER panel (read-only)
+- Labeled: "READ-ONLY RESPONSE (No actions executed)"
+
+Commands (no `?`) proceed normally through the artifact chain.
+
+Example:
+```
+User says: "How do you make eggs?"
+→ is_question() returns True
+→ Routed to hal_chat.py
+→ Answer displays in ANSWER panel
+→ No intent, no plan, no execution
+```
+
+### ANSWER Panel
+Displays both:
+1. **Q&A responses** - from read-only queries
+2. **Execution results** - from command execution
+
+Clearly labeled to avoid confusion.
 
 ---
 

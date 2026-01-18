@@ -140,6 +140,20 @@ button:active {
     background-color: #ff0000;
     border-color: #ff0000;
     color: #0a0a0a;
+    box-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
+    animation: pulse 0.5s infinite;
+}
+
+.btn-ptt:hover {
+    background-color: #0088ff;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px rgba(0, 136, 255, 0.5);
+}
+
+.btn-ptt.recording {
+    background-color: #ff0000;
+    border-color: #ff0000;
+    color: #0a0a0a;
 }
 
 .btn-success {
@@ -236,6 +250,41 @@ button:active {
     color: #0088ff;
 }
 
+/* ANSWER BOX (Read-only) */
+.answer-box {
+    background-color: #0a0a0a;
+    border: 1px solid #00ff00;
+    padding: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #00ff00;
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: default;
+    user-select: text;
+}
+
+.answer-box::-webkit-scrollbar {
+    width: 8px;
+}
+
+.answer-box::-webkit-scrollbar-track {
+    background: #0a0a0a;
+}
+
+.answer-box::-webkit-scrollbar-thumb {
+    background: #00ff00;
+    border-radius: 4px;
+}
+
+.answer-box:empty::before {
+    content: "(no response)";
+    color: #666;
+    font-style: italic;
+}
+
 /* RECORDING STATUS */
 #recording-status {
     margin-top: 10px;
@@ -253,6 +302,15 @@ button:active {
     to {
         opacity: 1;
         transform: translateX(0);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        box-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
+    }
+    50% {
+        box-shadow: 0 0 30px rgba(255, 0, 0, 1);
     }
 }
 

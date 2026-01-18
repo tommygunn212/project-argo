@@ -1,11 +1,11 @@
-# ARGO SYSTEM STATUS - JANUARY 17, 2026
+# ARGO SYSTEM STATUS - JANUARY 18, 2026
 
 ## 🎯 CURRENT STATE
 
-**Overall Status:** ✅ Safety Layer Complete & Frozen  
-**Version:** 1.3.0-alpha  
-**Date Frozen:** January 17, 2026  
-**Last Commit:** b747755  
+**Overall Status:** ✅ Input Shell v1.4.4 Live  
+**Version:** 1.4.4 (Input Shell UI)  
+**Date Updated:** January 18, 2026  
+**Last Commit:** Input Shell humanized Q&A  
 
 ---
 
@@ -18,6 +18,8 @@
 - ✅ Deterministic recall mode
 - ✅ Conversation browsing and search
 - **Status:** FROZEN - No changes permitted
+
+**Recent Update (v1.4.4):** Q&A responses now humanized—natural conversational tone, no manual/corporate voice.
 
 ### Layer 2: Audio Transcription (v1.0.0)
 - ✅ Whisper integration with deterministic output

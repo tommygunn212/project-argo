@@ -2,7 +2,7 @@
 
 > **Note:** Milestones describe architectural readiness and internal capability maturity, not user-facing feature completeness. Each milestone represents a layer of the system that is deterministic, tested, and auditable — not necessarily polished for end-users.
 
-**Current Version:** 1.4.1  
+**Current Version:** 1.4.4  
 **Last Updated:** January 18, 2026
 
 ---
@@ -28,7 +28,7 @@
 - Memory never auto-saves (explicit only)
 - Human control over all inference
 
-**Tests:** All passing | **Code:** 2,600+ lines | **Docs:** Complete
+**Recent Update (v1.4.4):** Humanized Q&A tone—read-only answers now sound natural, conversational, without manual/corporate voice.**Tests:** All passing | **Code:** 2,600+ lines | **Docs:** Complete
 
 ---
 
@@ -202,6 +202,25 @@ These layers are the immutable "constitution" of ARGO. No refactors, no improvem
 ---
 
 ## 📋 Next Planned Milestones
+
+### v1.4.4 Enhancement: READ-ONLY Tone Tuning (Deferred)
+**Status:** 📋 Deferred for future iteration
+
+**Current State (v1.4.4):**
+- ✅ Q&A routing works (questions detected, routed to read-only answers)
+- ✅ Tone is acceptable (calm, human, no hype)
+- ✅ Emojis restrained (max 1-2 per response, subject-reinforcing only)
+
+**Future Refinement (when scheduled):**
+- Refine opening hooks for consistency
+- Adjust depth vs brevity balance based on real-world usage
+- Evaluate emoji usage patterns after extended testing
+- Consider category-specific tone variants (cooking, troubleshooting, etc.)
+
+**Why Deferred:**
+Tone tuning is iterative and benefits from real-world feedback. Current implementation is stable and usable. Perfection can wait.
+
+---
 
 ### Milestone 6: Smart Home Control (v2.0.0) - Planned
 **Status:** 📋 Planned
