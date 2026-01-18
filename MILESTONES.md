@@ -2,7 +2,7 @@
 
 > **Note:** Milestones describe architectural readiness and internal capability maturity, not user-facing feature completeness. Each milestone represents a layer of the system that is deterministic, tested, and auditable — not necessarily polished for end-users.
 
-**Current Version:** 1.4.4  
+**Current Version:** 1.4.5  
 **Last Updated:** January 18, 2026
 
 ---
@@ -29,6 +29,38 @@
 - Human control over all inference
 
 **Recent Update (v1.4.4):** Humanized Q&A tone—read-only answers now sound natural, conversational, without manual/corporate voice.**Tests:** All passing | **Code:** 2,600+ lines | **Docs:** Complete
+
+---
+
+### Milestone 5: Latency Framework (v1.4.5)
+**Status:** ✅ Complete  
+**Date:** January 18, 2026
+
+**Delivered:**
+- LatencyController module (220 lines) with 8 integrated checkpoints
+- 3 configurable latency profiles (FAST ≤4s, ARGO ≤10s, VOICE ≤15s)
+- Checkpoint instrumentation: input_received → first_token → processing_complete
+- .env-based configuration system with profile switching
+- HTTP baseline measurements (2.3-18.6ms avg 11.7ms)
+- Static audit: zero blocking sleep violations
+- Server persistence fix: Windows batch + process isolation
+- Comprehensive test suite (19 tests, all passing)
+- Full documentation (12 guides + architecture + quick references)
+
+**Key Design:**
+- Non-blocking latency tracking with async checkpoint system
+- Profile-based budget enforcement (FAST < ARGO < VOICE)
+- Zero impact on application logic (instrumentation layer)
+- Deterministic measurements (same input → consistent latencies)
+- Real-time logging with JSON baseline output
+
+**Infrastructure:**
+- Resolved critical server shutdown issue (PowerShell signal propagation)
+- Implemented isolated Windows process launcher (run_server.bat)
+- Server now persistent, handles unlimited concurrent requests
+- HTTP baseline harness with subprocess lifecycle management
+
+**Tests:** 19/19 passing (14 unit + 5 integration) | **Code:** 900+ lines new | **Docs:** Complete
 
 ---
 
@@ -309,7 +341,7 @@ Each milestone includes:
 | 1.4.0 | Jan 17, 2026 | Real Execution Engine | ✅ FROZEN |
 | 1.4.1 | Jan 18, 2026 | Integration Layer (PART A) | 🚧 In Progress |
 | 1.4.2 | TBD | Input Shell | 📋 Planned |
-| 2.0.0 | TBD | Smart Home Control | 📋 Planned |
+| 1.4.5 | Jan 18, 2026 | Latency Framework | ✅ COMPLETE |
 
 **Important:** v1.0.0 through v1.4.0 are **OFFICIALLY FROZEN** as of January 18, 2026.
 
