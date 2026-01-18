@@ -4,6 +4,21 @@ This folder contains specifications, architectural decisions, and implementation
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
+---
+
+## Getting Started
+
+**[← GETTING_STARTED.md](../GETTING_STARTED.md)** — Installation, setup, and first run instructions
+
+Start here if you're new to ARGO. Covers:
+- System requirements (Python, Ollama, Windows)
+- Step-by-step setup via `setup.ps1` or manual installation
+- Running ARGO CLI and web interface
+- Test suite verification
+- Troubleshooting common issues
+
+---
+
 ## intent/
 
 **artifacts.md** — Complete guide to ARGO's Intent Artifact system. Covers deterministic intent parsing without execution, confirmation gates, supported verb grammar, ambiguity preservation, and the clean pipeline from transcription through future execution.
