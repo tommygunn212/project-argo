@@ -2,8 +2,8 @@
 
 > **Note:** Milestones describe architectural readiness and internal capability maturity, not user-facing feature completeness. Each milestone represents a layer of the system that is deterministic, tested, and auditable — not necessarily polished for end-users.
 
-**Current Version:** 1.1.0  
-**Last Updated:** January 17, 2026
+**Current Version:** 1.4.1  
+**Last Updated:** January 18, 2026
 
 ---
 
@@ -126,58 +126,98 @@
 - ✅ Intent parsing (v1.1.0) — **LOCKED, NO CHANGES**
 - ✅ Executable planning (v1.2.0) — **LOCKED, NO CHANGES**
 - ✅ Dry-Run Execution Engine (v1.3.0-alpha) — **LOCKED, NO CHANGES**
+- ✅ Real Execution Engine (v1.4.0) — **LOCKED, NO CHANGES**
 - ✅ Memory system (v0.9.0) — **LOCKED, NO CHANGES**
 - ✅ Preferences (v0.9.0) — **LOCKED, NO CHANGES**
 - ✅ Recall mode (v0.9.0) — **LOCKED, NO CHANGES**
 
+**In Development (NOT FROZEN):**
+- 🚧 Integration Layer (v1.4.1) - execute_and_confirm() with hard gates
+
 **Frozen Status:**
 See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for the official architectural freeze.
 
-These layers are the immutable "constitution" of ARGO. No refactors, no improvements, no behavior changes. If v1.4.0+ needs something different, v1.4.0 adapts. The safety chain does not.
+These layers are the immutable "constitution" of ARGO. No refactors, no improvements, no behavior changes. If v1.4.1 needs something different, v1.4.1 adapts. The safety chain does not.
 
 **Ready for Next Phase:**
-- Real Execution Engine (v1.4.0) - Execute confirmed plans with actual side effects
+- v1.4.1: Integration layer (execute_and_confirm() function + human approval shell)
+- v1.4.2: Localhost input shell with push-to-talk and audio output
 
 ---
 
-## 📋 Next Planned Milestones
+### Milestone 4: Real Execution Engine (v1.4.0)
+**Status:** ✅ Complete  
+**Date:** January 17, 2026
 
-### Milestone 4: Real Execution Engine (v1.4.0) - Planned
-**Status:** 🚧 Not started
-
-**Proposed Deliverables:**
+**Delivered:**
 - ExecutionEngine that performs actual operations (not simulation)
 - Step-by-step execution with real file I/O, OS commands, network calls
 - Before/after snapshots for change tracking
 - Failure handling and automatic rollback triggers
 - Complete execution audit trail (what happened, what didn't)
 - Rollback interface (undo capability) using rollback procedures from v1.2.0
+- Five hard gates for safety validation before execution
+- ExecutionResultArtifact for auditable execution results
 
-**Key Constraints:**
+**Key Design:**
 - Execution only happens for user-confirmed plans
 - Every step is logged before/after
 - Only executes operations that passed v1.2.0 planning validation
-- Must respect rollback procedures defined in v1.2.0
-- Must adapt to v1.0.0-v1.3.0 interfaces (not modify them)
+- All rollback procedures from v1.2.0 implemented and tested
+- Five hard gates prevent execution unless all criteria met:
+  - Gate 1: DryRunExecutionReport must exist (no execution without simulation)
+  - Gate 2: Simulation status must be SUCCESS (blocks UNSAFE, BLOCKED plans)
+  - Gate 3: User must explicitly approve (user_approved = True)
+  - Gate 4-5: Artifact IDs must match (plan and report are synchronized)
+
+**Tests:** 13/13 passing | **Code:** 800+ lines | **Docs:** Complete
 
 ---
 
-### Milestone 5: Smart Home Control (v2.0.0) - Planned
-**Status:** 🚧 Not started
+### Milestone 5: Integration Layer (v1.4.1)
+**Status:** 🚧 In Development
 
-**Proposed Deliverables:
-- Actual execution of approved, safe operations
-- File I/O with safety checks (within v1.4.0)
-- OS command execution (sandboxed, within v1.4.0)
-- Network operations (where safe, within v1.4.0)
-- Full transaction logging
-- Automatic rollback on failure using v1.2.0 procedures
+**Deliverables (PART A - Core Integration - COMPLETE):**
+- execute_and_confirm() function in argo.py for user approval integration
+- Hard gate validation before any system execution
+- End-to-end test suite validating full artifact chain
+- Zero side effects guarantee on gate failure
+- Complete audit trail of approval decisions
+
+**Planned Deliverables (PART B - Localhost Input Shell - v1.4.2):**
+- FastAPI localhost interface for interactive control
+- Text input and push-to-talk audio input (Whisper)
+- Plan preview and explicit confirmation flow
+- Piper audio output for results
+- Session management and replay capability
+
+**Key Constraints:**
+- Integration layer only (no new core capabilities)
+- No architectural changes (adapts to v1.0.0-v1.4.0)
+- Hard gates cannot be bypassed
+- All execution goes through execute_and_confirm()
+
+**Tests (PART A):** 4/4 passing | **Code (PART A):** 350+ lines (new) | **Docs:** In Progress
+
+---
+
+## 📋 Next Planned Milestones
+
+### Milestone 6: Smart Home Control (v2.0.0) - Planned
+**Status:** 📋 Planned
+
+**Proposed Deliverables:**
+- Raspberry Pi peripheral integration
+- Lighting control (on/off, brightness, color)
+- Temperature control
+- Device discovery and pairing
+- Safety interlocks (don't turn off critical systems)
 
 **Key Constraints:**
 - Only executes operations that passed Intent validation (v1.1.0)
 - Every action reversible or recoverable (v1.2.0 rollback procedures)
 - Complete audit trail
-- Must preserve all v1.0.0-v1.3.0 guarantees
+- Must preserve all v1.0.0-v1.4.0 guarantees
 
 ---
 
@@ -197,15 +237,15 @@ These layers are the immutable "constitution" of ARGO. No refactors, no improvem
 
 | Metric | Value |
 |--------|-------|
-| **Current Version** | 1.3.0-alpha |
-| **Lines of Code** | 5,000+ |
-| **Test Coverage** | 100% of critical paths (96+ tests) |
-| **Modules** | 10 (memory, prefs, browsing, transcription, intent, executable_intent, execution_engine, argo, system, argo_main) |
-| **Documentation Files** | 20+ |
+| **Current Version** | 1.4.1 |
+| **Lines of Code** | 6,500+ |
+| **Test Coverage** | 100% of critical paths (117+ tests) |
+| **Modules** | 11 (memory, prefs, browsing, transcription, intent, executable_intent, execution_engine, argo, system, argo_main, integration_layer) |
+| **Documentation Files** | 25+ |
 | **GitHub Issues** | 10 (all closed, showing problem-solving) |
 | **Breaking Changes** | 0 |
 | **Backward Compatibility** | 100% |
-| **Frozen Layers** | v1.0.0, v1.1.0, v1.2.0, v1.3.0-alpha |
+| **Frozen Layers** | v1.0.0, v1.1.0, v1.2.0, v1.3.0-alpha, v1.4.0 |
 
 ---
 
@@ -247,10 +287,12 @@ Each milestone includes:
 | 1.1.0 | Jan 17, 2026 | Intent Parsing | ✅ FROZEN |
 | 1.2.0 | Jan 17, 2026 | Executable Intent | ✅ FROZEN |
 | 1.3.0-alpha | Jan 17, 2026 | Dry-Run Execution Engine | ✅ FROZEN |
-| 1.4.0 | TBD | Real Execution Engine | 📋 |
-| 2.0.0 | TBD | Smart Home Control | 📋 |
+| 1.4.0 | Jan 17, 2026 | Real Execution Engine | ✅ FROZEN |
+| 1.4.1 | Jan 18, 2026 | Integration Layer (PART A) | 🚧 In Progress |
+| 1.4.2 | TBD | Input Shell | 📋 Planned |
+| 2.0.0 | TBD | Smart Home Control | 📋 Planned |
 
-**Important:** v1.0.0 through v1.3.0-alpha are **OFFICIALLY FROZEN** as of January 17, 2026.
+**Important:** v1.0.0 through v1.4.0 are **OFFICIALLY FROZEN** as of January 18, 2026.
 
 See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for details on the architectural freeze.
 

@@ -8,6 +8,7 @@ Effective immediately, the following layers are **OFFICIALLY FROZEN**:
 - ✅ **v1.1.0** - IntentArtifact (Grammar-based parsing)
 - ✅ **v1.2.0** - ExecutionPlanArtifact (Planning & risk analysis)
 - ✅ **v1.3.0-alpha** - Dry-Run Execution Engine (Symbolic validation)
+- ✅ **v1.4.0** - Real Execution Engine (Five hard gates + rollback)
 
 ## Immutability Contract
 
