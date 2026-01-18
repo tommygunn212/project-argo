@@ -1,0 +1,461 @@
+{
+  "experiment": "Phase 6B-1 Ollama Internal Latency",
+  "date": "2026-01-18 14:29:27",
+  "config": {
+    "test_prompt": "What is 2 + 2?",
+    "iterations_per_condition": 10,
+    "profiling_enabled": true
+  },
+  "cold_model": {
+    "condition": "cold",
+    "notes": "Model potentially loaded fresh or from cache",
+    "dispatch_to_response_ms": [
+      3613.25439453125,
+      823.356201171875,
+      821.780029296875,
+      787.055419921875,
+      1394.3408203125,
+      784.926513671875,
+      711.677734375,
+      1627.8759765625,
+      1576.798828125,
+      1457.020751953125
+    ],
+    "total_request_ms": [
+      3613.753173828125,
+      824.0341796875,
+      822.6875,
+      787.68994140625,
+      1394.3408203125,
+      785.369873046875,
+      712.29052734375,
+      1628.36181640625,
+      1577.443603515625,
+      1457.5302734375
+    ],
+    "stats": {
+      "dispatch_to_response": {
+        "avg": 1359.8086669921875,
+        "p95": 3613.25439453125,
+        "min": 711.677734375,
+        "max": 3613.25439453125,
+        "count": 10
+      },
+      "total_request": {
+        "avg": 1360.3501708984375,
+        "p95": 3613.753173828125,
+        "min": 712.29052734375,
+        "max": 3613.753173828125,
+        "count": 10
+      }
+    },
+    "raw_timestamps": [
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764538980.9941
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764542594.2485
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764542594.2485
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 3613.25439453125
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764542594.7473
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764543418.1035
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764543418.1035
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 823.356201171875
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764543418.7815
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764544240.5615
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764544240.5615
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 821.780029296875
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764544241.469
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764545028.5244
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764545028.5244
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 787.055419921875
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764545029.159
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764546423.4998
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764546423.4998
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1394.3408203125
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764546423.4998
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764547208.4263
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764547208.4263
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 784.926513671875
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764547208.8696
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764547920.5474
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764547920.5474
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 711.677734375
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764547921.1602
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764549549.0361
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764549549.0361
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1627.8759765625
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764549549.522
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764551126.3208
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764551126.3208
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1576.798828125
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764551126.9656
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764552583.9863
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764552583.9863
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1457.020751953125
+        }
+      ]
+    ]
+  },
+  "warm_model": {
+    "condition": "warm",
+    "notes": "Model cached in Ollama memory",
+    "dispatch_to_response_ms": [
+      1461.302978515625,
+      761.765380859375,
+      863.334716796875,
+      1523.274658203125,
+      1399.864501953125,
+      874.789306640625,
+      1131.63818359375,
+      1551.56396484375,
+      1381.529541015625,
+      1323.20654296875
+    ],
+    "total_request_ms": [
+      1461.931396484375,
+      762.092529296875,
+      863.8203125,
+      1523.917236328125,
+      1400.565673828125,
+      874.789306640625,
+      1132.046142578125,
+      1551.87939453125,
+      1381.849609375,
+      1323.61181640625
+    ],
+    "stats": {
+      "dispatch_to_response": {
+        "avg": 1227.2269775390625,
+        "p95": 1551.56396484375,
+        "min": 761.765380859375,
+        "max": 1551.56396484375,
+        "count": 10
+      },
+      "total_request": {
+        "avg": 1227.650341796875,
+        "p95": 1551.87939453125,
+        "min": 762.092529296875,
+        "max": 1551.87939453125,
+        "count": 10
+      }
+    },
+    "raw_timestamps": [
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764555044.9077
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764556506.2107
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764556506.2107
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1461.302978515625
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764556506.839
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764557268.6045
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764557268.6045
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 761.765380859375
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764557268.9316
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764558132.2664
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764558132.2664
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 863.334716796875
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764558132.752
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764559656.0266
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764559656.0266
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1523.274658203125
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764559656.6692
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764561056.5337
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764561056.5337
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1399.864501953125
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764561057.2349
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764561932.0242
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764561932.0242
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 874.789306640625
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764561932.0242
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764563063.6624
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764563063.6624
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1131.63818359375
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764563064.0703
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764564615.6343
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764564615.6343
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1551.56396484375
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764564615.9497
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764565997.4792
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764565997.4792
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1381.529541015625
+        }
+      ],
+      [
+        {
+          "event": "request_dispatch",
+          "timestamp_ms": 1768764565997.7993
+        },
+        {
+          "event": "response_received",
+          "timestamp_ms": 1768764567321.0059
+        },
+        {
+          "event": "content_extracted",
+          "timestamp_ms": 1768764567321.0059
+        },
+        {
+          "phase": "dispatch_to_response",
+          "elapsed_ms": 1323.20654296875
+        }
+      ]
+    ]
+  }
+}

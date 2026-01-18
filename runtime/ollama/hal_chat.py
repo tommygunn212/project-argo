@@ -22,6 +22,8 @@ Example:
 
 import requests
 import sys
+import os
+import time
 
 # ============================================================================
 # Configuration
@@ -32,6 +34,41 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 
 MODEL = "hal"
 """Name of the Ollama model to query."""
+
+OLLAMA_PROFILING = os.getenv("OLLAMA_PROFILING", "false").lower() == "true"
+"""Enable Ollama internal profiling via timing probes."""
+
+PROFILE_DATA = []
+"""Storage for profiling events during this session."""
+
+
+# ============================================================================
+# Profiling Helpers
+# ============================================================================
+
+def _profile_event(name: str, timestamp: float = None) -> None:
+    """
+    Record a profiling event with timestamp.
+    
+    Only active if OLLAMA_PROFILING=true.
+    
+    Args:
+        name: Event label (e.g., "request_dispatch", "first_token_received")
+        timestamp: Optional explicit timestamp (default: current time in ms)
+    """
+    if not OLLAMA_PROFILING:
+        return
+    
+    ts = timestamp if timestamp is not None else time.time() * 1000
+    PROFILE_DATA.append({"event": name, "timestamp_ms": ts})
+
+
+def get_profile_data() -> list:
+    """Return accumulated profiling data and clear buffer."""
+    global PROFILE_DATA
+    data = PROFILE_DATA.copy()
+    PROFILE_DATA = []
+    return data
 
 
 # ============================================================================
@@ -110,7 +147,14 @@ def chat(user_message: str, context: str | None = None) -> str:
     # Execute API Call
     # ________________________________________________________________________
     
+    _profile_event("request_dispatch")
+    dispatch_time = time.time() * 1000 if OLLAMA_PROFILING else None
+    
     response = requests.post(OLLAMA_URL, json=payload, timeout=60)
+    
+    response_received_time = time.time() * 1000 if OLLAMA_PROFILING else None
+    _profile_event("response_received")
+    
     response.raise_for_status()  # Raise exception on HTTP error
 
     # ________________________________________________________________________
@@ -118,7 +162,19 @@ def chat(user_message: str, context: str | None = None) -> str:
     # ________________________________________________________________________
     
     # Expected structure: {"message": {"content": "..."}}
-    return response.json()["message"]["content"]
+    content_extracted_time = time.time() * 1000 if OLLAMA_PROFILING else None
+    result = response.json()["message"]["content"]
+    _profile_event("content_extracted")
+    
+    # Record elapsed times if profiling
+    if OLLAMA_PROFILING and dispatch_time is not None and response_received_time is not None:
+        network_latency = response_received_time - dispatch_time
+        PROFILE_DATA.append({
+            "phase": "dispatch_to_response",
+            "elapsed_ms": network_latency
+        })
+    
+    return result
 
 
 # ============================================================================
