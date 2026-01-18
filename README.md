@@ -93,14 +93,31 @@ Commercial use includes any revenue-generating product, service, or internal bus
 
 See `LICENSE` for full terms.
 
+## Performance & Latency
+
+ARGO v1.4.5 includes comprehensive latency instrumentation:
+
+- **8 checkpoint measurements** track timing at every stage (input → transcription → intent → execution)
+- **3 latency profiles** (FAST ≤6s, ARGO ≤10s, VOICE ≤15s) enforce response time budgets
+- **Zero mystery delays** — all delays intentional, measured, and logged
+- **Async-safe delays** — no blocking sleeps, compatible with streaming responses
+- **Regression tests** — 18 tests enforce FAST mode contract and prevent regressions
+
+For detailed documentation:
+- [LATENCY_INTEGRATION_COMPLETE.md](LATENCY_INTEGRATION_COMPLETE.md) — Integration summary
+- [LATENCY_SYSTEM_ARCHITECTURE.md](LATENCY_SYSTEM_ARCHITECTURE.md) — Technical architecture
+- [BASELINE_MEASUREMENT_QUICK_START.md](BASELINE_MEASUREMENT_QUICK_START.md) — How to measure
+
+**Status**: Framework integrated and tested. Ready for baseline measurement collection.
+
 ## Project Milestones
 
 ARGO development is tracked in phases. See [MILESTONES.md](MILESTONES.md) for:
-- ✅ Completed features (Memory, Transcription, Intent Parsing)
+- ✅ Completed features (Memory, Transcription, Intent Parsing, Latency Framework)
 - 🚧 Current development status
-- 📋 Planned features (Executable Intent, Execution Engine, Smart Home)
+- 📋 Planned features (Baseline Measurement, Performance Optimization)
 - 📊 Project metrics and design principles
 
-**Current Status:** v1.1.0 (Intent Parsing + Audio Transcription + Memory) — Production Ready
+**Current Status:** v1.4.5 (Latency Instrumentation Foundation) — Framework Ready
 
 For commercial licensing inquiries, contact the project owner via GitHub.
