@@ -1,0 +1,18 @@
+{
+  "profile": "FAST",
+  "generated_date": "2026-01-18",
+  "framework_version": "1.4.5",
+  "workflows_measured": 15,
+  "first_token_ms": 601753.36,
+  "total_response_ms": 1202292.97,
+  "checkpoint_breakdown": {
+    "input_received": 0.0,
+    "transcription_complete": 50605.96,
+    "intent_classified": 200925.94,
+    "model_selected": 281167.01,
+    "ollama_request_start": 301552.15,
+    "first_token_received": 601753.36,
+    "stream_complete": 1101996.2,
+    "processing_complete": 1202292.97
+  }
+}
