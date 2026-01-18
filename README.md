@@ -64,13 +64,18 @@ This repository represents the foundation: memory, preferences, recall mode,
 and conversation browsing. New capabilities will be added only if they preserve
 explicit permission, auditability, and manual override.
 
+## Quick Start
+
+→ **[Getting Started](GETTING_STARTED.md)** — Installation and first run instructions
+
 ## Documentation
 
+- [Getting Started](GETTING_STARTED.md) — Installation, setup, and first run
+- [System Architecture](ARCHITECTURE.md) — Memory, preferences, and voice system design
 - [Artifact Chain Architecture](docs/architecture/artifact-chain.md) — The three-layer artifact system (Transcription, Intent, Planning)
 - [Frozen Layers](FROZEN_LAYERS.md) — Official freeze of v1.0.0-v1.3.0 safety chain
 - [Master Feature List](docs/specs/master-feature-list.md) — Planned capabilities and scope boundaries
 - [Raspberry Pi Architecture](docs/architecture/raspberry-pi-node.md) — Peripheral design and trust boundaries
-- [System Architecture](ARCHITECTURE.md) — Memory, preferences, and voice system design
 - [Docs Index](docs/README.md) — Specs, philosophy, and usage guides
 - [Usage Guide](docs/usage/cli.md) — Interactive commands and examples
 
