@@ -1,0 +1,18 @@
+{
+  "profile": "VOICE",
+  "generated_date": "2026-01-18",
+  "framework_version": "1.4.5",
+  "workflows_measured": 15,
+  "first_token_ms": 601721.6,
+  "total_response_ms": 1202292.19,
+  "checkpoint_breakdown": {
+    "input_received": 0.0,
+    "transcription_complete": 50524.03,
+    "intent_classified": 200808.46,
+    "model_selected": 281090.94,
+    "ollama_request_start": 301434.98,
+    "first_token_received": 601721.6,
+    "stream_complete": 1101997.47,
+    "processing_complete": 1202292.19
+  }
+}
