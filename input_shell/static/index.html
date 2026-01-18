@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARGO Input Shell (v1.4.2)</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="container">
+        <!-- STATUS BANNER -->
+        <div id="banner">
+            <h1>LOCAL INPUT SHELL</h1>
+            <p>ALL ACTIONS REQUIRE EXPLICIT CONFIRMATION</p>
+            <p>NO BACKGROUND LISTENING</p>
+            <div id="session-info"></div>
+        </div>
+
+        <!-- INPUT STAGE -->
+        <div class="stage" id="input-stage">
+            <h2>Input</h2>
+            <div class="stage-content">
+                <input type="text" id="text-input" placeholder="Type your request, or use push-to-talk...">
+                <button id="ptt-button" class="btn-ptt">🎤 Push to Talk</button>
+                <button id="ptt-cancel" class="btn-danger" style="display:none;">Cancel Recording</button>
+                <div id="recording-status"></div>
+            </div>
+        </div>
+
+        <!-- TRANSCRIPTION STAGE -->
+        <div class="stage" id="transcription-stage" style="display:none;">
+            <h2>Transcription</h2>
+            <div class="stage-content">
+                <div id="transcript-display" class="artifact-box"></div>
+                <div class="buttons">
+                    <button id="confirm-transcript" class="btn-success">✓ Confirm Transcription</button>
+                    <button id="reject-transcript" class="btn-danger">✗ Reject</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- INTENT STAGE -->
+        <div class="stage" id="intent-stage" style="display:none;">
+            <h2>Intent</h2>
+            <div class="stage-content">
+                <div id="intent-display" class="artifact-box"></div>
+                <div class="buttons">
+                    <button id="confirm-intent" class="btn-success">✓ Confirm Intent</button>
+                    <button id="reject-intent" class="btn-danger">✗ Reject</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PLAN STAGE -->
+        <div class="stage" id="plan-stage" style="display:none;">
+            <h2>Plan</h2>
+            <div class="stage-content">
+                <div id="plan-display" class="artifact-box"></div>
+                <div class="buttons">
+                    <button id="confirm-plan" class="btn-success">✓ Confirm Plan</button>
+                    <button id="abort-plan" class="btn-danger">⛔ Abort</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- EXECUTION STAGE -->
+        <div class="stage" id="execution-stage" style="display:none;">
+            <h2>Execution</h2>
+            <div class="stage-content">
+                <button id="execute-button" class="btn-execute">⚡ Execute</button>
+                <button id="abort-execute" class="btn-danger">⛔ Abort</button>
+            </div>
+        </div>
+
+        <!-- OUTPUT STAGE -->
+        <div class="stage" id="output-stage" style="display:none;">
+            <h2>Output & Log</h2>
+            <div class="stage-content">
+                <div id="execution-log" class="log-box"></div>
+                <div class="buttons">
+                    <button id="reset-button" class="btn-secondary">🔄 Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

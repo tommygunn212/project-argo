@@ -1,0 +1,288 @@
+/* ARGO Input Shell Styling */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Courier New', monospace;
+    background-color: #0a0a0a;
+    color: #00ff00;
+    line-height: 1.6;
+    overflow-x: hidden;
+}
+
+#container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* STATUS BANNER */
+#banner {
+    background-color: #1a1a1a;
+    border: 2px solid #00ff00;
+    padding: 20px;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+#banner h1 {
+    font-size: 28px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+#banner p {
+    font-size: 12px;
+    margin: 5px 0;
+    color: #ff6600;
+}
+
+#session-info {
+    margin-top: 15px;
+    font-size: 11px;
+    color: #666;
+}
+
+/* STAGES */
+.stage {
+    background-color: #0f0f0f;
+    border-left: 4px solid #00ff00;
+    padding: 20px;
+    margin-bottom: 20px;
+    animation: slideIn 0.3s ease;
+}
+
+.stage h2 {
+    font-size: 18px;
+    margin-bottom: 15px;
+    text-transform: uppercase;
+    color: #00ff00;
+}
+
+.stage-content {
+    background-color: #1a1a1a;
+    padding: 15px;
+    border-radius: 4px;
+}
+
+/* INPUT */
+#text-input {
+    width: 100%;
+    padding: 12px;
+    background-color: #0a0a0a;
+    border: 1px solid #00ff00;
+    color: #00ff00;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+#text-input::placeholder {
+    color: #006600;
+}
+
+#text-input:focus {
+    outline: none;
+    border-color: #00ff00;
+    box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+}
+
+/* BUTTONS */
+.buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+    flex-wrap: wrap;
+}
+
+button {
+    padding: 12px 20px;
+    border: 2px solid #00ff00;
+    background-color: #0a0a0a;
+    color: #00ff00;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    border-radius: 2px;
+}
+
+button:hover {
+    background-color: #00ff00;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+}
+
+button:active {
+    transform: scale(0.98);
+}
+
+.btn-ptt {
+    flex: 1;
+    min-width: 150px;
+    border-color: #0088ff;
+    color: #0088ff;
+}
+
+.btn-ptt:hover {
+    background-color: #0088ff;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px rgba(0, 136, 255, 0.5);
+}
+
+.btn-ptt.recording {
+    background-color: #ff0000;
+    border-color: #ff0000;
+    color: #0a0a0a;
+}
+
+.btn-success {
+    border-color: #00ff00;
+    color: #00ff00;
+}
+
+.btn-danger {
+    border-color: #ff3333;
+    color: #ff3333;
+}
+
+.btn-danger:hover {
+    background-color: #ff3333;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px rgba(255, 51, 51, 0.5);
+}
+
+.btn-execute {
+    border-color: #ffaa00;
+    color: #ffaa00;
+    font-weight: bold;
+    flex: 1;
+    min-width: 150px;
+}
+
+.btn-execute:hover {
+    background-color: #ffaa00;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px rgba(255, 170, 0, 0.5);
+}
+
+.btn-secondary {
+    border-color: #666;
+    color: #666;
+}
+
+.btn-secondary:hover {
+    background-color: #666;
+    color: #0a0a0a;
+}
+
+/* ARTIFACT DISPLAY */
+.artifact-box {
+    background-color: #0a0a0a;
+    border: 1px solid #333;
+    padding: 15px;
+    margin-bottom: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.artifact-box::-webkit-scrollbar {
+    width: 8px;
+}
+
+.artifact-box::-webkit-scrollbar-track {
+    background: #0a0a0a;
+}
+
+.artifact-box::-webkit-scrollbar-thumb {
+    background: #00ff00;
+    border-radius: 4px;
+}
+
+/* LOG BOX */
+.log-box {
+    background-color: #0a0a0a;
+    border: 1px solid #006600;
+    padding: 15px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.log-entry {
+    margin-bottom: 5px;
+    color: #00cc00;
+}
+
+.log-entry.error {
+    color: #ff3333;
+}
+
+.log-entry.success {
+    color: #00ff00;
+}
+
+.log-entry.info {
+    color: #0088ff;
+}
+
+/* RECORDING STATUS */
+#recording-status {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #ff6600;
+    min-height: 20px;
+}
+
+/* ANIMATIONS */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* RESPONSIVE */
+@media (max-width: 600px) {
+    #container {
+        padding: 10px;
+    }
+    
+    #banner h1 {
+        font-size: 20px;
+    }
+    
+    .buttons {
+        flex-direction: column;
+    }
+    
+    button {
+        width: 100%;
+    }
+}
+
+/* DISABLED STATE */
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button:disabled:hover {
+    background-color: #0a0a0a;
+    color: #00ff00;
+    box-shadow: none;
+}
