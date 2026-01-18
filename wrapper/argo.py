@@ -77,6 +77,7 @@ import sys
 import os
 import json
 import uuid
+import asyncio
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -144,6 +145,14 @@ except ImportError:
     EXECUTION_ENGINE_AVAILABLE = False
     # Execution engine optional; graceful degradation if not installed
 
+# Import Output Sink (Phase 7A-0: Piper TTS integration)
+try:
+    from core.output_sink import get_output_sink, set_output_sink, PiperOutputSink
+    OUTPUT_SINK_AVAILABLE = True
+except ImportError:
+    OUTPUT_SINK_AVAILABLE = False
+    # Output sink optional; graceful degradation if not installed
+
 # ============================================================================
 # UTF-8 Encoding Configuration (Windows terminal safety)
 # ============================================================================
@@ -153,6 +162,54 @@ if sys.stdout.encoding != 'utf-8':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# ============================================================================
+# Audio Output Configuration (Phase 7A-0)
+# ============================================================================
+
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() == "true"
+"""Enable/disable audio output entirely. Default: false (text-only)."""
+
+PIPER_ENABLED = os.getenv("PIPER_ENABLED", "false").lower() == "true"
+"""Enable/disable Piper TTS specifically. Default: false. Requires VOICE_ENABLED=true."""
+
+
+# ============================================================================
+# Audio Output Helper (Async Bridge for CLI)
+# ============================================================================
+
+def _send_to_output_sink(text: str) -> None:
+    """
+    Bridge between sync CLI context and async OutputSink.
+    
+    If VOICE_ENABLED and PIPER_ENABLED:
+    - Try to use existing event loop if available (FastAPI)
+    - Fall back to new event loop for CLI
+    
+    If disabled or unavailable:
+    - No-op (text already printed to stdout)
+    
+    Args:
+        text: Text to send to audio output
+    """
+    if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
+        return  # Audio disabled, text already printed
+    
+    try:
+        sink = get_output_sink()
+        
+        # Try to get existing event loop (FastAPI context)
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in async context, create task to send
+            asyncio.create_task(sink.send(text))
+        except RuntimeError:
+            # No running loop, create one for CLI
+            asyncio.run(sink.send(text))
+    except Exception as e:
+        # Gracefully degrade: log error but don't crash
+        print(f"⚠ Audio output error: {e}", file=sys.stderr)
+
 
 # ============================================================================
 # Session Management
@@ -3088,6 +3145,18 @@ if __name__ == "__main__":
             print("Invalid replay value. Use last:N or session", file=sys.stderr)
             sys.exit(1)
         args = args[2:]
+
+    # Parse --voice flag (enable audio output)
+    if len(args) >= 1 and args[0] == "--voice":
+        os.environ["VOICE_ENABLED"] = "true"
+        os.environ["PIPER_ENABLED"] = "true"
+        args = args[1:]
+    
+    # Parse --no-voice flag (disable audio output)
+    if len(args) >= 1 and args[0] == "--no-voice":
+        os.environ["VOICE_ENABLED"] = "false"
+        os.environ["PIPER_ENABLED"] = "false"
+        args = args[1:]
 
     # ________________________________________________________________________
     # Handle Transcription (if --transcribe flag provided)
