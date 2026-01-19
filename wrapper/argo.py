@@ -82,6 +82,13 @@ from datetime import datetime
 from pathlib import Path
 import requests
 
+# Load .env configuration (must happen before other imports that read env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass  # dotenv optional; use system environment variables if not installed
+
 # Import Phase 4D drift monitor
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from system.runtime.drift_monitor import get_drift_monitor
@@ -221,11 +228,16 @@ def _send_to_output_sink(text: str) -> None:
     Args:
         text: Text to send to audio output
     """
+    # Debug: check what values we have
+    print(f"[DEBUG] _send_to_output_sink called, VOICE={VOICE_ENABLED}, PIPER={PIPER_ENABLED}, SINK={OUTPUT_SINK_AVAILABLE}", file=sys.stderr)
+    
     if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
+        print(f"[DEBUG] Audio disabled, skipping", file=sys.stderr)
         return  # Audio disabled, text already printed
     
     try:
         sink = get_output_sink()
+        print(f"[DEBUG] Got sink: {type(sink).__name__}", file=sys.stderr)
         
         # Try to get existing event loop (FastAPI context)
         try:
@@ -234,6 +246,7 @@ def _send_to_output_sink(text: str) -> None:
             asyncio.create_task(sink.send(text))
         except RuntimeError:
             # No running loop, create one for CLI
+            print(f"[DEBUG] Running async sink.send()", file=sys.stderr)
             asyncio.run(sink.send(text))
     except Exception as e:
         # Gracefully degrade: log error but don't crash
@@ -1357,19 +1370,28 @@ def validate_personality_discipline(response_text: str, query_type: str, has_can
     return True, "", soft_failure
 
 
-def build_behavior_instruction(behavior_profile: dict, execution_context: str = "gui", has_canonical_knowledge: bool = True, primary_frame: str = "practical", familiarity_level: str = "neutral", query_text: str = "", is_casual_q: bool = False) -> str:
+def build_behavior_instruction(behavior_profile: dict, execution_context: str = "gui", has_canonical_knowledge: bool = True, primary_frame: str = "practical", familiarity_level: str = "neutral", query_text: str = "", is_casual_q: bool = False, voice_mode: bool = False) -> str:
     """
     Build the behavior instruction to inject into the prompt.
     
     Translates behavior profile into actionable prompt guidance with Phase 5A judgment gating,
     Phase 5B conditional personality permission, and Phase 5B.2 casual observational humor.
+
+    Voice Mode Constraint (voice_mode=True):
+    - CRITICAL: Stateless execution for Option B compliance
+    - Respond ONLY to the current user request
+    - Do NOT reference previous interactions, conversations, or context
+    - Do NOT summarize, repair, or acknowledge prior turns
+    - Do NOT ask follow-up questions or request clarification
+    - Single-turn, deterministic response only
     
     Instructions are ordered by priority (most constraining first):
-    1. Confidence-first bias (Phase 5C) - if trusted + casual, sets first-sentence template
-    2. CRITICAL hard guards (single-frame, speculation refusal, hallucination ban)
-    3. Permission layer (personality permission when trusted)
-    4. Optional guidance (casual humor)
-    5. Standard behavior instructions
+    1. Voice mode guardrail (if voice_mode=True) - highest priority
+    2. Confidence-first bias (Phase 5C) - if trusted + casual
+    3. CRITICAL hard guards (single-frame, speculation refusal, hallucination ban)
+    4. Permission layer (personality permission when trusted)
+    5. Optional guidance (casual humor)
+    6. Standard behavior instructions
     
     Does NOT narrate reasoning or internal logic.
     Does NOT surface tier labels.
@@ -1383,11 +1405,29 @@ def build_behavior_instruction(behavior_profile: dict, execution_context: str = 
         familiarity_level: From get_familiarity_level() ("neutral", "familiar", "trusted")
         query_text: User's original question (for casual topic detection)
         is_casual_q: From is_casual_question(query_text)
+        voice_mode: If True, enforce strict stateless execution (Option B compliance)
         
     Returns:
         str: Instruction text to inject into prompt
     """
     priority_instructions = []
+    
+    # ________________________________________________________________________
+    # PRIORITY 0: VOICE MODE GUARDRAIL (Option B compliance - highest priority)
+    # ________________________________________________________________________
+    if voice_mode:
+        priority_instructions.append(
+            "CRITICAL VOICE MODE CONSTRAINT:\n"
+            "You MUST respond ONLY to the current request.\n"
+            "You MUST NOT:\n"
+            "- Reference previous interactions or conversations\n"
+            "- Summarize, recap, or acknowledge prior turns\n"
+            "- Ask follow-up questions\n"
+            "- Provide meta-commentary about the conversation\n"
+            "- Offer additional context or caveats\n"
+            "Your response must be stateless, single-turn, and final.\n"
+            "This is not a conversation. This is a single request-response only."
+        )
     
     # ________________________________________________________________________
     # PRIORITY 1: CONFIDENCE-FIRST BIAS (Phase 5C) - when trusted AND casual
@@ -1910,6 +1950,10 @@ def detect_context() -> str:
     Returns:
         str: "cli" or "gui"
     """
+    # Check for explicit environment variable override
+    if os.environ.get("ARGO_CONTEXT"):
+        return os.environ.get("ARGO_CONTEXT")
+    
     # Check for headless indicators
     import platform
     import subprocess
@@ -1920,6 +1964,10 @@ def detect_context() -> str:
     
     # If running in CI/CD or with NO_INTERACTIVE flags
     if os.environ.get("CI") or os.environ.get("OLLAMA_NO_INTERACTIVE"):
+        return "cli"
+    
+    # If VOICE_ENABLED=true, treat as CLI (audio playback is non-interactive/headless)
+    if os.environ.get("VOICE_ENABLED", "false").lower() == "true":
         return "cli"
     
     # Default to GUI (interactive)
@@ -2588,29 +2636,45 @@ def run_argo(
     strict_mode: bool = True,
     persona: str = "neutral",
     verbosity: str = "short",
-    replay_reason: str = "continuation"
+    replay_reason: str = "continuation",
+    voice_mode: bool = False
 ) -> None:
     """
     Public entry point for Argo execution.
     
     Wraps _run_argo_internal with memory and preference integration:
     1. Loads and updates user preferences
-    2. Retrieves relevant past interactions
-    3. Injects memory context into the prompt
+    2. Retrieves relevant past interactions (SKIPPED in voice_mode)
+    3. Injects memory context into the prompt (SKIPPED in voice_mode)
     4. Injects preference context into the prompt
     5. Executes the core logic
     6. Stores the new interaction to memory
     
+    Voice Mode (voice_mode=True):
+    - Disables memory injection entirely (no prior context)
+    - Disables replay (always stateless)
+    - Forces CLI context for formatting
+    - Ensures single-turn, stateless execution
+    - CRITICAL for Option B compliance
+    
     Args:
         user_input: User's raw message
         active_mode: Conversation mode name or None
-        replay_n: Last N turns to replay or None
-        replay_session: True to replay current session
+        replay_n: Last N turns to replay or None (ignored in voice_mode)
+        replay_session: True to replay current session (ignored in voice_mode)
         strict_mode: If True, reject low-intent input
         persona: Tone adjustment ("neutral", etc.)
         verbosity: Response length control ("short" or "long")
         replay_reason: Why replay was requested
+        voice_mode: If True, force stateless, memory-free execution for voice input
     """
+    # CRITICAL: Voice mode forces stateless execution
+    if voice_mode:
+        # Force stateless mode for voice input
+        replay_n = None
+        replay_session = False
+        # Memory will be skipped below
+    
     # Step 1: Load, update, and save user preferences
     prefs = load_prefs()
     prefs = update_prefs(user_input, prefs)
@@ -2672,6 +2736,10 @@ def run_argo(
             prefs=prefs
         )
         print(recall_output)
+        
+        # Send to audio output (if enabled)
+        _send_to_output_sink(recall_output)
+        
         # IMPORTANT: Do NOT store recall queries to memory
         # Recall queries are meta-operations, not conversational content
         # Storing them would pollute memory with bookkeeping instead of conversation
@@ -2679,11 +2747,14 @@ def run_argo(
     
     # GENERATION MODE: Regular conversation
     # Step 3: Find relevant past interactions
-    relevant_memory = find_relevant_memory(user_input, top_n=2)
+    # CRITICAL: Skip memory injection in voice_mode for stateless execution (Option B compliance)
+    relevant_memory = None
+    if not voice_mode:
+        relevant_memory = find_relevant_memory(user_input, top_n=2)
     
     # Step 4: Build memory context to inject
     memory_context = ""
-    if relevant_memory:
+    if relevant_memory and not voice_mode:
         memory_lines = []
         for item in relevant_memory:
             memory_lines.append(f"Past: {item['user_input']}")
@@ -2694,7 +2765,10 @@ def run_argo(
     pref_block = build_pref_block(prefs)
     
     # Step 6: Compose user input with preference + memory prefixes
-    composed_input = pref_block + memory_context + user_input
+    # CRITICAL: Skip memory prefix in voice_mode for stateless execution
+    composed_input = user_input
+    if not voice_mode:
+        composed_input = pref_block + memory_context + user_input
     
     # [Phase 7B] Step 6b: Transition to SPEAKING before generating response
     _transition_to_speaking()
@@ -2708,7 +2782,8 @@ def run_argo(
         strict_mode=strict_mode,
         persona=persona,
         verbosity=verbosity,
-        replay_reason=replay_reason
+        replay_reason=replay_reason,
+        voice_mode=voice_mode
     )
     
     # Note: Memory storage happens inside _run_argo_internal after model response is available
@@ -2723,7 +2798,8 @@ def _run_argo_internal(
     strict_mode: bool = True,
     persona: str = "neutral",
     verbosity: str = "short",
-    replay_reason: str = "continuation"
+    replay_reason: str = "continuation",
+    voice_mode: bool = False
 ) -> None:
     """
     Execute a single interaction with the Jarvis model.
@@ -2732,13 +2808,19 @@ def _run_argo_internal(
     1. Classify input intent (gating check)
     2. Classify input verbosity (response length preference)
     3. Handle rejected input or route commands
-    4. Optional replay: prepend previous turns to context (not sticky)
+    4. Optional replay: prepend previous turns to context (not sticky, skipped in voice_mode)
     5. Optional mode: inject mode enforcement rules
     6. Optional persona: inject tone adjustment (presentation only)
     7. Optional verbosity: inject response length control (presentation only)
     8. Send prompt to Ollama's "jarvis" model
     9. Log the interaction (user input, response, metadata)
     10. Print response to stdout
+    
+    Voice Mode (voice_mode=True):
+    - Skips replay injection (always stateless)
+    - Adds explicit stateless prompt guardrail
+    - Enforces single-turn execution
+    - CRITICAL for Option B compliance
     
     Intent Gating (strict mode):
     - "empty", "ambiguous", "low_intent" → reject and request clarification
@@ -2758,6 +2840,7 @@ def _run_argo_internal(
     - replay_session=True: use all turns from current session
     - replay_n=N: use last N turns across all sessions
     - both False: no replay
+    - voice_mode=True: forced to no replay (stateless)
     
     Logging captures:
     - Raw user input (before any injection)
@@ -2776,6 +2859,7 @@ def _run_argo_internal(
         strict_mode: If True (default), reject low-intent input; if False, allow LLM to ask for clarification
         persona: Persona name for tone adjustment (default: "neutral")
         verbosity: Response length control, "short" or "long" (default: "short")
+        voice_mode: If True, force stateless execution (no replay, no memory)
     """
     # ________________________________________________________________________
     # Step 0: Intent Classification & Gating
@@ -2794,6 +2878,9 @@ def _run_argo_internal(
     # Handle invalid intent in strict mode
     if strict_mode and intent in ("empty", "ambiguous", "low_intent"):
         output = "Input is ambiguous. Please clarify what you want to do."
+        
+        # Send to audio output (if enabled)
+        _send_to_output_sink(output)
         
         # Still log the interaction normally
         timestamp_iso = datetime.now().isoformat(timespec="seconds")
@@ -2839,9 +2926,10 @@ def _run_argo_internal(
     context_strength = "weak"
     entry_types = []
 
-    if replay_session:
+    # CRITICAL: Skip replay in voice_mode for stateless execution
+    if not voice_mode and replay_session:
         entries = get_session_entries(SESSION_ID)
-    elif replay_n:
+    elif not voice_mode and replay_n:
         entries = get_last_n_entries(replay_n)
     else:
         entries = []
@@ -2912,7 +3000,7 @@ def _run_argo_internal(
     # Step 1.9: Build behavior instruction with frame & personality enforcement
     # ________________________________________________________________________
     
-    behavior_instruction = build_behavior_instruction(behavior_profile, execution_context, has_canonical_knowledge, primary_frame, familiarity_level, user_input, is_casual_q)
+    behavior_instruction = build_behavior_instruction(behavior_profile, execution_context, has_canonical_knowledge, primary_frame, familiarity_level, user_input, is_casual_q, voice_mode)
     
     # Phase 4C may override verbosity classification
     if behavior_profile["verbosity_override"]:
@@ -3110,6 +3198,9 @@ def _run_argo_internal(
     
     # VOICE COMPLIANCE: Enforce example constraints (brevity, tone, no hedge)
     output = validate_voice_compliance(output)
+    
+    # Send response to audio output (if VOICE_ENABLED and PIPER_ENABLED)
+    _send_to_output_sink(output)
 
     # ________________________________________________________________________
     # Step 4: Post-Generation Violation Detection & Logging
@@ -3337,11 +3428,36 @@ if __name__ == "__main__":
     
     if interactive_mode:
         # Interactive mode: continuous prompt loop
-        print("\n📌 Interactive Mode (Type 'exit' or 'quit' to leave)\n", file=sys.stderr)
+        print("\n📌 Interactive Mode (Voice PTT - Hold SPACEBAR to speak)\n", file=sys.stderr)
+        
+        # Try to load voice input module
+        voice_input_available = False
+        try:
+            # Add parent directory to path to import voice_input.py
+            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            from voice_input import get_voice_input_ptt
+            voice_input_available = True
+        except ImportError as e:
+            print(f"⚠️  Voice input not available ({e}), falling back to text input", file=sys.stderr)
+        
         try:
             while True:
                 try:
-                    user_input = input("argo > ").strip()
+                    # Track whether THIS specific input came from voice
+                    input_was_from_voice = False
+                    
+                    # Use voice input if available, otherwise fall back to text
+                    if voice_input_available:
+                        print("\n🎤 Hold SPACEBAR to record (or type 'exit' to quit):", file=sys.stderr)
+                        user_input = get_voice_input_ptt().strip()
+                        input_was_from_voice = True  # CRITICAL: Mark that this input came from voice
+                        if not user_input:
+                            continue
+                    else:
+                        user_input = input("argo > ").strip()
+                        input_was_from_voice = False  # Text input from keyboard
                     
                     # Check for exit commands
                     if user_input.lower() in ("exit", "quit"):
@@ -3403,7 +3519,8 @@ if __name__ == "__main__":
                         replay_n=replay_n,
                         replay_session=replay_session,
                         strict_mode=strict_mode,
-                        persona=persona_value
+                        persona=persona_value,
+                        voice_mode=input_was_from_voice  # CRITICAL: Only True if THIS input came from voice PTT
                     )
                     print()  # Blank line between turns
                     
