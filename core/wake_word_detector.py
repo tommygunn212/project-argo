@@ -211,18 +211,31 @@ class WakeWordDetector:
             return
         
         try:
-            # Non-blocking read attempt
+            # Non-blocking check if subprocess is running
             if self.detector_process.poll() is not None:
                 # Process died
-                stderr = self.detector_process.stderr.read() if self.detector_process.stderr else ""
-                if stderr:
-                    logger.warning(f"Detector crashed: {stderr}")
+                stderr_output = ""
+                try:
+                    stderr_output = self.detector_process.stderr.read() if self.detector_process.stderr else ""
+                except:
+                    pass
+                if stderr_output:
+                    logger.warning(f"Detector subprocess crashed: {stderr_output}")
                 self.detector_process = None
                 return
             
-            # Try to read a line (recognition event)
-            # In real implementation, would use non-blocking read
-            # For now, use simple string-based protocol
+            # Try to read a line from detector (recognition event)
+            try:
+                import select
+                # Check if there's data available (non-blocking on Unix)
+                if hasattr(self.detector_process.stdout, 'readable'):
+                    if self.detector_process.stdout.readable():
+                        line = self.detector_process.stdout.readline()
+                        if line and "ARGO" in line.upper():
+                            logger.info(f"Wake-word detected from subprocess: {line}")
+                            self.on_recognition_event(confidence=0.95)
+            except:
+                pass
             
         except Exception as e:
             logger.debug(f"Error checking for recognition: {e}")
@@ -231,66 +244,159 @@ class WakeWordDetector:
         """
         Recognize "ARGO" wake-word in audio data.
         
+        Uses Whisper to transcribe audio and check for "ARGO" keyword.
+        Simple but reliable implementation.
+        
         Args:
             audio_data: Raw audio bytes (16-bit PCM)
         
         Returns:
             (recognized: bool, confidence: float)
-        
-        Simple implementation:
-        - In production, would use TensorFlow Lite or similar
-        - This is placeholder that detects "ARGO" keyword pattern
         """
-        # TODO: Implement actual keyword spotting model
-        # For now, return placeholder that never triggers false positives
-        return False, 0.0
+        try:
+            import whisper
+            import tempfile
+            import numpy as np
+            from pathlib import Path
+            
+            # Convert bytes to WAV file for Whisper
+            audio_int = np.frombuffer(audio_data, dtype=np.int16)
+            audio_float = audio_int.astype(np.float32) / 32768.0
+            
+            # Use Whisper to transcribe
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                import scipy.io.wavfile as wavfile
+                wavfile.write(f.name, 16000, audio_float)
+                temp_path = f.name
+            
+            try:
+                # Load small model (already done at module level)
+                from voice_input import model as whisper_model
+                if whisper_model is None:
+                    return False, 0.0
+                
+                result = whisper_model.transcribe(temp_path, language="en", fp16=False)
+                text = result.get("text", "").strip().lower()
+                
+                # Check if "argo" is in the transcription
+                if "argo" in text:
+                    logger.info(f"Wake-word detected in transcription: '{text}'")
+                    return True, 0.95
+                
+                return False, 0.0
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+                
+        except Exception as e:
+            logger.debug(f"Error in wake-word recognition: {e}")
+            return False, 0.0
 
     @staticmethod
     def _get_detector_script() -> str:
         """
         Return Python script for detector subprocess.
         
-        This runs independently and communicates via stdout.
+        Listens to continuous audio stream and detects "ARGO" wake-word.
+        Outputs "ARGO DETECTED" when recognized.
         """
         script = '''
-import pyaudio
-import numpy as np
 import sys
 import time
+import numpy as np
+import tempfile
+from pathlib import Path
 
-# Simple wake-word detector
-# In production: use TensorFlow Lite or similar
+# Try to use continuous audio stream from main process
+try:
+    from voice_input import get_audio_chunk
+    audio_source = "continuous"
+except ImportError:
+    # Fallback to pyaudio if continuous stream not available
+    try:
+        import pyaudio
+        audio_source = "pyaudio"
+    except ImportError:
+        audio_source = None
 
-PA = pyaudio.PyAudio()
+if audio_source is None:
+    print("ERROR: No audio source available", file=sys.stderr)
+    sys.exit(1)
+
+# Try to load Whisper for transcription
+try:
+    import whisper
+    model = whisper.load_model("base", device="cpu")
+except Exception as e:
+    print(f"ERROR: Whisper not available: {e}", file=sys.stderr)
+    sys.exit(1)
+
 RATE = 16000
-CHUNK = 512  # ~32ms chunks
+BUFFER_SIZE = int(RATE * 2)  # 2 seconds of audio
+audio_buffer = np.zeros(BUFFER_SIZE, dtype=np.float32)
+write_pos = 0
+
+def detect_argo_in_buffer():
+    """Transcribe buffer and check for ARGO."""
+    try:
+        # Write buffer to temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            temp_path = f.name
+        
+        import scipy.io.wavfile as wavfile
+        wavfile.write(temp_path, RATE, (audio_buffer * 32767).astype(np.int16))
+        
+        # Transcribe
+        result = model.transcribe(temp_path, language="en", fp16=False)
+        text = result.get("text", "").strip().lower()
+        
+        # Clean up temp file
+        Path(temp_path).unlink(missing_ok=True)
+        
+        # Check for "argo"
+        if "argo" in text:
+            print("ARGO DETECTED", flush=True)
+            return True
+        
+        return False
+    except Exception as e:
+        print(f"DEBUG: Error in detection: {e}", file=sys.stderr)
+        return False
 
 try:
-    stream = PA.open(
-        format=pyaudio.paInt16,
-        channels=1,
-        rate=RATE,
-        input=True,
-        frames_per_buffer=CHUNK
-    )
-    
     while True:
-        try:
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            # TODO: Process audio data, detect "ARGO"
-            # For now: listen silently without false positives
-            time.sleep(0.032)  # Don't busy-loop
-        except Exception as e:
-            print(f"Error reading audio: {e}", file=sys.stderr)
-            break
+        # Get audio chunk
+        chunk = None
+        if audio_source == "continuous":
+            chunk = get_audio_chunk(timeout=0.1)
+        elif audio_source == "pyaudio":
+            import pyaudio
+            PA = pyaudio.PyAudio()
+            stream = PA.open(format=pyaudio.paInt16, channels=1, rate=RATE, input=True, frames_per_buffer=512)
+            data = stream.read(512, exception_on_overflow=False)
+            chunk = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        
+        if chunk is not None:
+            # Add to buffer
+            chunk_size = len(chunk)
+            if write_pos + chunk_size <= BUFFER_SIZE:
+                audio_buffer[write_pos:write_pos+chunk_size] = chunk
+                write_pos += chunk_size
+            else:
+                # Buffer full, slide and add
+                audio_buffer[:-chunk_size] = audio_buffer[chunk_size:]
+                audio_buffer[-chunk_size:] = chunk
+                write_pos = BUFFER_SIZE
             
+            # Periodically check buffer (every 2 seconds)
+            if write_pos >= BUFFER_SIZE:
+                detect_argo_in_buffer()
+                write_pos = 0
+        
+        time.sleep(0.1)
+
 except Exception as e:
-    print(f"Error initializing audio: {e}", file=sys.stderr)
-finally:
-    if stream:
-        stream.stop_stream()
-        stream.close()
-    PA.terminate()
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
 '''
         return script
 

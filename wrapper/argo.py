@@ -321,21 +321,62 @@ def _on_wake_word_detected():
     """
     Callback when "ARGO" wake-word is detected.
     
-    Sends recognition event to command parser (never forces state machine).
-    Respects all state machine rules:
-    - PTT always overrides wake-word
-    - STOP always interrupts
-    - SLEEP state ignores wake-word
+    CRITICAL: This function MUST force recording and transcription.
+    This is the core wake-word flow.
     """
-    if _command_parser and _state_machine:
-        try:
-            # Let command parser handle priority
-            # (wake-word is lowest priority; STOP > PTT > sleep > wake-word)
-            logger.info("Wake-word 'ARGO' detected - sending to command parser")
-            request = WakeWordRequest(confidence=0.9)
-            _command_parser.process_wake_word_event(request)
-        except Exception as e:
-            logger.error(f"Error processing wake-word event: {e}")
+    if _state_machine is None:
+        return
+    
+    current_state = _state_machine.current_state
+    
+    # [DIAGNOSTIC] Log wake-word detection
+    logger.warning("WAKE WORD DETECTED — FORCING RECORD")
+    
+    # Only process if in SLEEP or LISTENING
+    if current_state not in ["SLEEP", "LISTENING"]:
+        logger.debug(f"Wake-word ignored: in {current_state} state")
+        return
+    
+    # If SLEEP → transition to LISTENING (this wakes the system)
+    if current_state == "SLEEP":
+        logger.info("Wake-word detected in SLEEP - transitioning to LISTENING")
+        if not _state_machine.wake():
+            logger.debug("State machine rejected wake transition")
+            return
+        current_state = "LISTENING"
+    
+    # Now record the spoken question
+    try:
+        from voice_input import record_audio_on_wake_word, transcribe_audio
+        
+        logger.info("Waking up - recording user's question...")
+        audio = record_audio_on_wake_word()
+        
+        if audio is None or len(audio) == 0:
+            logger.warning("No audio recorded after wake-word")
+            return
+        
+        # Transcribe the question
+        logger.info("Transcribing wake-word audio...")
+        user_input = transcribe_audio(audio)
+        
+        if not user_input:
+            logger.warning("No speech transcribed from wake-word recording")
+            return
+        
+        logger.info(f"Wake-word transcription: '{user_input}'")
+        
+        # Process the command (transition to THINKING, generate LLM response, speak)
+        if _command_parser and _state_machine:
+            try:
+                logger.debug(f"Sending wake-word command to parser: '{user_input}'")
+                request = WakeWordRequest(confidence=0.95)
+                _command_parser.process_wake_word_event(request)
+            except Exception as e:
+                logger.error(f"Error processing wake-word event: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error in wake-word callback: {e}")
 
 def _get_current_state():
     """Get current state machine state for detector."""
@@ -3577,6 +3618,15 @@ if __name__ == "__main__":
     if interactive_mode:
         # Interactive mode: continuous prompt loop
         print("\n📌 Interactive Mode (Voice PTT - Hold SPACEBAR to speak)\n", file=sys.stderr)
+        
+        # [CRITICAL] Start continuous audio stream for wake-word detection
+        # This enables hands-free "Argo" to work
+        try:
+            from voice_input import start_continuous_audio_stream, stop_continuous_audio_stream
+            if not start_continuous_audio_stream():
+                logger.warning("Failed to start continuous audio stream (wake-word will not work)")
+        except Exception as e:
+            logger.warning(f"Error starting audio stream: {e}")
         
         # Try to load voice input module
         voice_input_available = False
