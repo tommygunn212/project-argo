@@ -20,6 +20,21 @@ It amplifies your intent without replacing it.
 It assists without improvising authority.
 It refuses to act beyond the boundaries you set.
 
+## Release Status
+
+**v1.0.0-voice-core** (January 18, 2026) — Foundation-complete voice system
+
+✓ Stateless voice mode with memory disabled  
+✓ Audio streaming (Piper TTS, time-to-first-audio 500-900ms)  
+✓ STOP interrupt (<50ms dominance guaranteed)  
+✓ Push-to-Talk (Whisper + SPACEBAR)  
+✓ State machine (SLEEP/LISTENING/THINKING/SPEAKING)  
+✓ Option B burn-in validated (14/14 tests, 0 anomalies)
+
+→ **[Release Notes](RELEASE_NOTES.md)** — Why this release matters  
+→ **[Changelog](CHANGELOG.md)** — What was added, fixed, and why  
+→ **[Foundation Lock](FOUNDATION_LOCK.md)** — What must never be broken  
+
 ## Core Principles
 
 - **Local-first** — All intelligence, memory, and decisions stay on your hardware
@@ -31,16 +46,78 @@ It refuses to act beyond the boundaries you set.
 - **Zero anthropomorphism** — ARGO does not pretend to be sentient
 - **Fail-closed behavior** — Uncertainty stops execution
 
-## What ARGO Can Do
+## What ARGO Does (v1.0.0-voice-core)
 
-- **Voice-based interaction** with preference-aware responses
-- **Audio transcription** with explicit user confirmation (Whisper)
-- **Intent parsing** from confirmed text (deterministic, no execution)
-- **Conversation browsing and recall** (deterministic, no model re-inference)
-- **Explicit memory storage** and preference management
-- **Smart home control foundations** (via Raspberry Pi peripherals)
-- **Document and email drafting** with confirmation gates
-- **Local system monitoring** and health reporting
+### Currently Works
+
+- **Voice-based interaction** via Push-to-Talk (SPACEBAR)
+- **Audio transcription** with Whisper speech-to-text
+- **Real-time audio synthesis** with Piper TTS
+- **Stateless voice queries** (single-turn, no history injection)
+- **Explicit STOP interrupt** (<50ms latency, always wins)
+- **Sleep mode** (voice disabled, SPACEBAR only)
+- **Environment persistence** (.env configuration auto-load)
+- **Intent parsing** with LLM (no autonomous execution)
+
+### Explicitly Does NOT Do (v1.0.0-voice-core)
+
+- **Voice wake-word detection** (design complete, implementation pending)
+- **Voice personality/identity** (uses generic Piper voice, deferred to Phase 7D)
+- **Autonomous tool execution** (out of scope)
+- **Background listening** (only on explicit SPACEBAR)
+- **Multi-turn voice conversations** (voice mode is stateless-only)
+- **Memory recall in voice mode** (disabled for hygiene)
+- **Voice identity switching** (deferred to future release)
+
+→ **[Design Documents](PHASE_7A3_WAKEWORD_DESIGN.md)** — Detailed wake-word architecture (design-only, no code yet)
+
+## Control Guarantees
+
+1. **State machine is authoritative** — No component bypasses state transitions
+2. **STOP always interrupts** — <50ms latency, even during audio streaming
+3. **Voice mode is stateless** — No prior conversation context injection
+4. **SLEEP is absolute** — Voice commands ignored, SPACEBAR PTT only
+5. **Prompt hygiene enforced** — System instruction prevents context leakage
+6. **Audio streaming is non-blocking** — TTF-A reduced from 20-180s to 500-900ms
+
+## How to Run
+
+### Prerequisites
+
+- Python 3.10+
+- Whisper (speech-to-text)
+- Piper TTS (text-to-speech)
+- Sounddevice (audio playback)
+
+### Voice Mode (Stateless)
+
+```powershell
+python wrapper/argo.py "your question here" --voice
+```
+
+Result: Single-turn question, memory disabled, <50ms STOP responsiveness.
+
+### PTT Mode (Push-to-Talk)
+
+```powershell
+python wrapper/argo.py
+# Then press SPACEBAR to activate Whisper transcription
+# Speak your question
+# ARGO responds
+# Press SPACEBAR again to interrupt/stop at any time
+```
+
+### Interrupt/Stop
+
+**Any state:** Press SPACEBAR, then speak "STOP" (or just hold SPACEBAR)  
+**During audio playback:** STOP cancels in <50ms  
+**During THINKING:** STOP cancels LLM call (pending input saved)  
+
+### Sleep Mode
+
+**Enter:** Say "sleep" (PTT mode)  
+**Exit:** System reboot (wake-word not yet implemented)  
+**Effect:** Voice disabled, SPACEBAR PTT available for manual control
 
 ## Architecture Overview
 
@@ -53,16 +130,26 @@ They cannot decide, remember, or execute independently.
 Authority exists in one place.
 Peripherals have none.
 
-→ See: [docs/architecture/raspberry-pi-node.md](docs/architecture/raspberry-pi-node.md)
+→ See: [docs/README.md](docs/README.md) — Documentation index
 
 ## Project Status
 
-ARGO is not feature-complete.
-Not all 200 planned capabilities are implemented.
+**Foundation is locked.** No silent refactors allowed.  
+**All future changes must be additive via PR.**
 
-This repository represents the foundation: memory, preferences, recall mode,
-and conversation browsing. New capabilities will be added only if they preserve
-explicit permission, auditability, and manual override.
+Completed phases:
+- Phase 7B: State machine with deterministic transitions
+- Phase 7B-2: Integration & hard STOP interrupt
+- Phase 7B-3: Command parsing with safety gates
+- Option B: Confidence burn-in (14/14 tests passed)
+- Phase 7A-2: Audio streaming (TTFA 500-900ms)
+- Phase 7A-3a: Wake-word design (paper-only, no code)
+
+Intentionally deferred:
+- Phase 7A-3: Wake-word implementation
+- Phase 7D: Voice personality (Allen identity)
+- Tool invocation (autonomous execution)
+- Multi-turn voice conversations
 
 ## Quick Start
 
@@ -70,14 +157,20 @@ explicit permission, auditability, and manual override.
 
 ## Documentation
 
-- [Getting Started](GETTING_STARTED.md) — Installation, setup, and first run
+- **[Docs Index](docs/README.md)** — Master table of contents for all documentation
+- **[Getting Started](GETTING_STARTED.md)** — Installation, setup, and first run
+- **[Release Notes](RELEASE_NOTES.md)** — Why v1.0.0-voice-core matters
+- **[Changelog](CHANGELOG.md)** — What was added, fixed, and deferred
+- **[Foundation Lock](FOUNDATION_LOCK.md)** — Critical constraints that must never be broken
 - [System Architecture](ARCHITECTURE.md) — Memory, preferences, and voice system design
 - [Artifact Chain Architecture](docs/architecture/artifact-chain.md) — The three-layer artifact system (Transcription, Intent, Planning)
 - [Frozen Layers](FROZEN_LAYERS.md) — Official freeze of v1.0.0-v1.3.0 safety chain
 - [Master Feature List](docs/specs/master-feature-list.md) — Planned capabilities and scope boundaries
 - [Raspberry Pi Architecture](docs/architecture/raspberry-pi-node.md) — Peripheral design and trust boundaries
-- [Docs Index](docs/README.md) — Specs, philosophy, and usage guides
 - [Usage Guide](docs/usage/cli.md) — Interactive commands and examples
+- [Phase 7A-3 Wake-Word Design](PHASE_7A3_WAKEWORD_DESIGN.md) — Architecture for future wake-word feature
+- [Wake-Word Decision Matrix](WAKEWORD_DECISION_MATRIX.md) — Comprehensive trigger-outcome reference
+- [Go/No-Go Checklist](PHASE_7A3_GONO_CHECKLIST.md) — Acceptance criteria before implementation
 
 ---
 
@@ -85,7 +178,7 @@ explicit permission, auditability, and manual override.
 
 GitHub: [@tommygunn212](https://github.com/tommygunn212)
 
-December 2025
+January 2026 | Release v1.0.0-voice-core
 
 ## Licensing
 
