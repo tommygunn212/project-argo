@@ -239,6 +239,7 @@ def _send_to_output_sink(text: str) -> None:
     If VOICE_ENABLED and PIPER_ENABLED:
     - Try to use existing event loop if available (FastAPI)
     - Fall back to new event loop for CLI
+    - Cap spoken output to MAX_VOICE_CHARS to prevent long audio
     
     If disabled or unavailable:
     - No-op (text already printed to stdout)
@@ -253,6 +254,12 @@ def _send_to_output_sink(text: str) -> None:
         print(f"[DEBUG] Audio disabled, skipping", file=sys.stderr)
         return  # Audio disabled, text already printed
     
+    # [CRITICAL] Cap spoken output to prevent long audio and latency
+    MAX_VOICE_CHARS = 150
+    spoken_text = text[:MAX_VOICE_CHARS]
+    if len(text) > MAX_VOICE_CHARS:
+        logger.debug(f"Capping voice output: {len(text)} → {MAX_VOICE_CHARS} chars")
+    
     try:
         sink = get_output_sink()
         print(f"[DEBUG] Got sink: {type(sink).__name__}", file=sys.stderr)
@@ -261,7 +268,7 @@ def _send_to_output_sink(text: str) -> None:
         try:
             loop = asyncio.get_running_loop()
             # We're in async context, create task to send
-            asyncio.create_task(sink.send(text))
+            asyncio.create_task(sink.send(spoken_text))
         except RuntimeError:
             # No running loop, create one for CLI
             try:
@@ -270,7 +277,7 @@ def _send_to_output_sink(text: str) -> None:
             except Exception:
                 pass
             print(f"[DEBUG] Running async sink.send()", file=sys.stderr)
-            asyncio.run(sink.send(text))
+            asyncio.run(sink.send(spoken_text))
     except Exception as e:
         # Gracefully degrade: log error but don't crash
         print(f"⚠ Audio output error: {e}", file=sys.stderr)
