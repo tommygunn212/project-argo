@@ -27,7 +27,11 @@ def record_audio_with_spacebar():
     Records audio while user holds spacebar.
     Returns numpy array of audio data, or None if cancelled.
     """
-    import keyboard
+    try:
+        import keyboard
+    except ImportError:
+        print("❌ keyboard module not installed (required for PTT). Install with: pip install keyboard", file=sys.stderr)
+        return None
     
     print("\n🎤 PTT Ready - Hold SPACEBAR to record (release to stop)", file=sys.stderr)
     

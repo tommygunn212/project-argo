@@ -3565,8 +3565,15 @@ if __name__ == "__main__":
             parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             if parent_dir not in sys.path:
                 sys.path.insert(0, parent_dir)
-            from voice_input import get_voice_input_ptt
-            voice_input_available = True
+            
+            # Test if keyboard module is available (required for PTT)
+            try:
+                import keyboard
+            except ImportError:
+                print("⚠️  Voice input not available (keyboard module not installed), falling back to text input", file=sys.stderr)
+            else:
+                from voice_input import get_voice_input_ptt
+                voice_input_available = True
         except ImportError as e:
             print(f"⚠️  Voice input not available ({e}), falling back to text input", file=sys.stderr)
         
