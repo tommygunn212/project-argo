@@ -87,9 +87,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Load .env configuration (must happen before other imports that read env vars)
+# Important: override=False ensures shell environment variables take precedence
 try:
     from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent.parent / ".env")
+    load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 except ImportError:
     pass  # dotenv optional; use system environment variables if not installed
 
@@ -3328,7 +3329,19 @@ def _run_argo_internal(
     output = validate_voice_compliance(output)
     
     # Send response to audio output (if VOICE_ENABLED and PIPER_ENABLED)
+    # This call blocks until audio playback completes
     _send_to_output_sink(output)
+    
+    # [CRITICAL FIX] Transition from SPEAKING back to LISTENING after audio completes
+    # This ensures the state machine doesn't get stuck in SPEAKING state
+    if STATE_MACHINE_AVAILABLE and _state_machine:
+        # Only transition if currently in SPEAKING state
+        if _state_machine.current_state == "SPEAKING":
+            if not _state_machine.stop_audio():
+                logger.warning("Failed to transition from SPEAKING to LISTENING after audio playback")
+        # Resume wake-word detector in case it was paused
+        if WAKE_WORD_DETECTOR_AVAILABLE:
+            resume_wake_word_detector()
 
     # ________________________________________________________________________
     # Step 4: Post-Generation Violation Detection & Logging
@@ -3589,8 +3602,11 @@ if __name__ == "__main__":
                     # Track whether THIS specific input came from voice
                     input_was_from_voice = False
                     
-                    # Use voice input if available, otherwise fall back to text
-                    if voice_input_available:
+                    # Use voice input if available AND stdin is a TTY (interactive terminal)
+                    # When stdin is piped, skip PTT and use text input instead
+                    is_interactive = sys.stdin.isatty()
+                    
+                    if voice_input_available and is_interactive:
                         print("\n🎤 Hold SPACEBAR to record (or type 'exit' to quit):", file=sys.stderr)
                         
                         # Pause wake-word detector during PTT (PTT always overrides wake-word)

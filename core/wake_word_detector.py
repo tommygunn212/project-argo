@@ -115,8 +115,8 @@ class WakeWordDetector:
         Main listening loop.
         
         Checks state machine:
-        - LISTENING: Detector active (listening for wake-word)
-        - SLEEP: Detector paused (not listening)
+        - LISTENING: Detector active (listening for wake-word to transcribe audio)
+        - SLEEP: Detector ALSO ACTIVE (listening to wake-word to wake system)
         - THINKING/SPEAKING: Detector paused (LLM/audio active)
         
         Non-blocking check every 100ms.
@@ -130,8 +130,10 @@ class WakeWordDetector:
                 current_state = self.state_getter()
                 
                 # Determine if detector should be active
+                # Wake-word detector should listen in SLEEP (to wake) AND LISTENING (for hands-free)
+                # It should NOT listen during THINKING/SPEAKING (too noisy, LLM/audio active)
                 should_listen = (
-                    current_state == "LISTENING" and 
+                    current_state in ["LISTENING", "SLEEP"] and 
                     not self.paused
                 )
                 

@@ -255,10 +255,13 @@ class PiperOutputSink(OutputSink):
         self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
         
         # Phase 7D: Get voice model path based on VOICE_PROFILE
-        # Fallback to Lessac if profile not recognized
-        # Allow .env override via PIPER_VOICE for custom voices
-        profile_voice_path = _get_voice_model_path(VOICE_PROFILE)
-        self.voice_path = os.getenv("PIPER_VOICE", profile_voice_path)
+        # Priority: PIPER_VOICE env var > VOICE_PROFILE setting > default (lessac)
+        # If PIPER_VOICE is explicitly set, use it (allows custom voices)
+        # Otherwise, use VOICE_PROFILE to select between lessac and allen
+        if os.getenv("PIPER_VOICE"):
+            self.voice_path = os.getenv("PIPER_VOICE")
+        else:
+            self.voice_path = _get_voice_model_path(VOICE_PROFILE)
         
         self._playback_task: Optional[asyncio.Task] = None
         self._piper_process: Optional[subprocess.Popen] = None
