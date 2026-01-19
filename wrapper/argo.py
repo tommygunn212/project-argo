@@ -259,6 +259,11 @@ def _send_to_output_sink(text: str) -> None:
             asyncio.create_task(sink.send(text))
         except RuntimeError:
             # No running loop, create one for CLI
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            except Exception:
+                pass
             print(f"[DEBUG] Running async sink.send()", file=sys.stderr)
             asyncio.run(sink.send(text))
     except Exception as e:
