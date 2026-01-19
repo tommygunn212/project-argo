@@ -537,6 +537,12 @@ class PiperOutputSink(OutputSink):
         """
         try:
             import sounddevice
+        except ImportError:
+            if self._profiling_enabled:
+                print("[DEBUG] sounddevice not installed; audio playback disabled", file=sys.stderr)
+            return
+        
+        try:
             import numpy as np
             
             # Convert all collected frames to numpy array

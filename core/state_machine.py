@@ -124,7 +124,7 @@ class StateMachine:
         old_state = self._current_state
         self._current_state = new_state
         
-        logger.info(f"State transition: {old_state.value} → {new_state.value}")
+        logger.info(f"State transition: {old_state.value} -> {new_state.value}")
         
         # Notify listener
         if self._on_state_change:
