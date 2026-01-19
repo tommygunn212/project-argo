@@ -60,6 +60,7 @@ from typing import Optional
 import sounddevice as sd
 import numpy as np
 from core.session_memory import SessionMemory
+from core.latency_probe import LatencyProbe, LatencyStats
 
 # === Logging ===
 logger = logging.getLogger(__name__)
@@ -175,6 +176,10 @@ class Coordinator:
         # Session memory (v4) — short-term working memory for this session only
         self.memory = SessionMemory(capacity=3)
         
+        # TASK 15: Latency instrumentation
+        self.latency_stats = LatencyStats()
+        self.current_probe: Optional[LatencyProbe] = None
+        
         # Loop state (v3)
         self.interaction_count = 0
         self.stop_requested = False
@@ -242,9 +247,15 @@ class Coordinator:
                 self.logger.info(f"{'='*60}")
                 
                 try:
+                    # TASK 15: Initialize latency probe for this interaction
+                    self.current_probe = LatencyProbe(self.interaction_count)
+                    
                     # Define callback: when trigger fires, record → transcribe → parse → generate → speak → store
                     def on_trigger_detected():
                         self.logger.info(f"[Iteration {self.interaction_count}] Wake word detected!")
+                        
+                        # TASK 15: Mark wake detection
+                        self.current_probe.mark("wake_detected")
                         
                         try:
                             # 1. Record audio
@@ -252,6 +263,10 @@ class Coordinator:
                                 f"[Iteration {self.interaction_count}] "
                                 f"Recording {self.AUDIO_DURATION}s audio..."
                             )
+                            
+                            # TASK 15: Mark recording start
+                            self.current_probe.mark("recording_start")
+                            
                             audio = sd.rec(
                                 int(self.AUDIO_DURATION * self.AUDIO_SAMPLE_RATE),
                                 samplerate=self.AUDIO_SAMPLE_RATE,
@@ -259,6 +274,10 @@ class Coordinator:
                                 dtype=np.int16,
                             )
                             sd.wait()
+                            
+                            # TASK 15: Mark recording end
+                            self.current_probe.mark("recording_end")
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
                                 f"Recorded {len(audio)} samples"
@@ -280,7 +299,15 @@ class Coordinator:
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Transcribing audio..."
                             )
+                            
+                            # TASK 15: Mark STT start
+                            self.current_probe.mark("stt_start")
+                            
                             text = self.stt.transcribe(audio_bytes, self.AUDIO_SAMPLE_RATE)
+                            
+                            # TASK 15: Mark STT end
+                            self.current_probe.mark("stt_end")
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
                                 f"Transcribed: '{text}'"
@@ -290,7 +317,15 @@ class Coordinator:
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Parsing intent..."
                             )
+                            
+                            # TASK 15: Mark parsing start
+                            self.current_probe.mark("parsing_start")
+                            
                             intent = self.parser.parse(text)
+                            
+                            # TASK 15: Mark parsing end
+                            self.current_probe.mark("parsing_end")
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
                                 f"Intent: {intent.intent_type.value} "
@@ -301,7 +336,15 @@ class Coordinator:
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Generating response..."
                             )
+                            
+                            # TASK 15: Mark LLM start
+                            self.current_probe.mark("llm_start")
+                            
                             response_text = self.generator.generate(intent, self.memory)
+                            
+                            # TASK 15: Mark LLM end
+                            self.current_probe.mark("llm_end")
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
                                 f"Response: '{response_text}'"
@@ -311,7 +354,15 @@ class Coordinator:
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Speaking response..."
                             )
+                            
+                            # TASK 15: Mark TTS start
+                            self.current_probe.mark("tts_start")
+                            
                             self.sink.speak(response_text)
+                            
+                            # TASK 15: Mark TTS end
+                            self.current_probe.mark("tts_end")
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Response spoken"
                             )
@@ -340,6 +391,10 @@ class Coordinator:
                                     )
                                     self.stop_requested = True
                                     break
+                            
+                            # TASK 15: Log interaction latency and add to stats
+                            self.current_probe.log_summary()
+                            self.latency_stats.add_probe(self.current_probe)
                             
                         except Exception as e:
                             self.logger.error(
@@ -396,7 +451,12 @@ class Coordinator:
             self.logger.info(f"[Loop] Clearing SessionMemory...")
             self.memory.clear()
             self.logger.info(f"[Loop] SessionMemory cleared: {self.memory}")
+            
+            # TASK 15: Log aggregated latency report
+            self.logger.info(f"{'='*60}")
+            self.latency_stats.log_report()
             self.logger.info(f"{'='*60}\n")
+            
             self.logger.info("[run] Coordinator v4 complete")
         
         except Exception as e:
