@@ -57,6 +57,7 @@ This is controlled, bounded orchestration with short-term scratchpad memory.
 
 import logging
 from typing import Optional
+from datetime import datetime
 import sounddevice as sd
 import numpy as np
 from core.session_memory import SessionMemory
@@ -179,6 +180,12 @@ class Coordinator:
         # TASK 15: Latency instrumentation
         self.latency_stats = LatencyStats()
         self.current_probe: Optional[LatencyProbe] = None
+        
+        # PHASE 16: Observer snapshot state (for read-only observation)
+        self._last_wake_timestamp = None
+        self._last_transcript = None
+        self._last_intent = None
+        self._last_response = None
         
         # Loop state (v3)
         self.interaction_count = 0
@@ -308,6 +315,10 @@ class Coordinator:
                             # TASK 15: Mark STT end
                             self.current_probe.mark("stt_end")
                             
+                            # PHASE 16: Capture for observer snapshot
+                            self._last_wake_timestamp = datetime.now()
+                            self._last_transcript = text
+                            
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
                                 f"Transcribed: '{text}'"
@@ -325,6 +336,9 @@ class Coordinator:
                             
                             # TASK 15: Mark parsing end
                             self.current_probe.mark("parsing_end")
+                            
+                            # PHASE 16: Capture for observer snapshot
+                            self._last_intent = intent
                             
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
@@ -344,6 +358,9 @@ class Coordinator:
                             
                             # TASK 15: Mark LLM end
                             self.current_probe.mark("llm_end")
+                            
+                            # PHASE 16: Capture for observer snapshot
+                            self._last_response = response_text
                             
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
