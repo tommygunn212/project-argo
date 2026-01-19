@@ -78,9 +78,13 @@ import os
 import json
 import uuid
 import asyncio
+import logging
 from datetime import datetime
 from pathlib import Path
 import requests
+
+# Module-level logger (consistent with rest of system)
+logger = logging.getLogger(__name__)
 
 # Load .env configuration (must happen before other imports that read env vars)
 try:
