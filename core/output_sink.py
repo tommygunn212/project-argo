@@ -137,14 +137,14 @@ def _get_voice_model_path(profile: str = None) -> str:
     Map voice profile to voice model ONNX file path.
     
     Args:
-        profile: Voice profile name ('lessac' or 'allen'). Defaults to VOICE_PROFILE env var.
+        profile: Voice profile name ('lessac'). Defaults to VOICE_PROFILE env var.
         
     Returns:
-        Full path to voice model ONNX file. Falls back to Lessac if invalid.
+        Full path to voice model ONNX file. Currently only Lessac is supported.
         
     Voice Profile Mapping:
-        - 'lessac' (default): en_US-lessac-medium.onnx (American male)
-        - 'allen' (British male): en_GB-alan-medium.onnx (British male)
+        - 'lessac' (default): en_US-lessac-medium.onnx (American male, stable, working)
+        - Note: en_GB-alan-medium.onnx produces zero bytes (incompatible with current Piper build)
     
     Note: This is data/config only. No logic changes to OutputSink.
     """
@@ -154,15 +154,15 @@ def _get_voice_model_path(profile: str = None) -> str:
     profile = profile.lower().strip()
     
     # Voice profile → ONNX file mapping
+    # Only Lessac is currently working; Allen disabled due to zero-byte output
     voice_models = {
         "lessac": "audio/piper/voices/en_US-lessac-medium.onnx",
-        "allen": "audio/piper/voices/en_GB-alan-medium.onnx",
     }
     
+    # Fallback to Lessac for any unknown profile (including 'allen')
     if profile not in voice_models:
-        # Fallback to Lessac if invalid profile
         if PIPER_PROFILING:
-            print(f"[DEBUG] Unknown voice profile '{profile}', falling back to 'lessac'", file=sys.stderr)
+            print(f"[DEBUG] Voice profile '{profile}' not available, falling back to 'lessac'", file=sys.stderr)
         return voice_models["lessac"]
     
     return voice_models[profile]
@@ -254,10 +254,9 @@ class PiperOutputSink(OutputSink):
         """
         self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
         
-        # Phase 7D: Get voice model path based on VOICE_PROFILE
+        # Get voice model path based on VOICE_PROFILE
         # Priority: PIPER_VOICE env var > VOICE_PROFILE setting > default (lessac)
-        # If PIPER_VOICE is explicitly set, use it (allows custom voices)
-        # Otherwise, use VOICE_PROFILE to select between lessac and allen
+        # Note: Allen voice disabled - produces zero bytes with current Piper build
         if os.getenv("PIPER_VOICE"):
             self.voice_path = os.getenv("PIPER_VOICE")
         else:
@@ -267,9 +266,9 @@ class PiperOutputSink(OutputSink):
         self._piper_process: Optional[subprocess.Popen] = None
         self._profiling_enabled = PIPER_PROFILING
         
-        # Log voice profile selection (debug only, gated by PIPER_PROFILING)
+        # Log voice selection for diagnostics
         if self._profiling_enabled:
-            print(f"[DEBUG] PiperOutputSink: voice_profile={VOICE_PROFILE}, voice_path={self.voice_path}", file=sys.stderr)
+            print(f"[DEBUG] PiperOutputSink: voice_path={self.voice_path}", file=sys.stderr)
         
         # Validate Piper binary exists
         if not os.path.exists(self.piper_path):
