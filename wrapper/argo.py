@@ -175,6 +175,19 @@ except ImportError:
     STATE_MACHINE_AVAILABLE = False
     # State machine optional; graceful degradation if not installed
 
+# Import Wake-Word Detector (Phase 7A-3b: "ARGO" wake-word recognition)
+try:
+    from core.wake_word_detector import (
+        WakeWordDetector,
+        WakeWordRequest,
+        initialize_detector,
+        get_detector
+    )
+    WAKE_WORD_DETECTOR_AVAILABLE = True
+except ImportError:
+    WAKE_WORD_DETECTOR_AVAILABLE = False
+    # Wake-word detector optional; graceful degradation if not installed
+
 # Import Command Parser (Phase 7B-3: Deterministic command classification)
 try:
     from core.command_parser import (
@@ -282,6 +295,112 @@ if COMMAND_PARSER_AVAILABLE:
     except Exception as e:
         print(f"⚠ Command parser initialization error: {e}", file=sys.stderr)
         COMMAND_PARSER_AVAILABLE = False
+
+# Initialize wake-word detector (Phase 7A-3b)
+_wake_word_detector: WakeWordDetector | None = None
+"""Global wake-word detector for "ARGO" keyword recognition."""
+
+def _on_wake_word_detected():
+    """
+    Callback when "ARGO" wake-word is detected.
+    
+    Sends recognition event to command parser (never forces state machine).
+    Respects all state machine rules:
+    - PTT always overrides wake-word
+    - STOP always interrupts
+    - SLEEP state ignores wake-word
+    """
+    if _command_parser and _state_machine:
+        try:
+            # Let command parser handle priority
+            # (wake-word is lowest priority; STOP > PTT > sleep > wake-word)
+            logger.info("Wake-word 'ARGO' detected - sending to command parser")
+            request = WakeWordRequest(confidence=0.9)
+            _command_parser.process_wake_word_event(request)
+        except Exception as e:
+            logger.error(f"Error processing wake-word event: {e}")
+
+def _get_current_state():
+    """Get current state machine state for detector."""
+    if _state_machine:
+        return _state_machine.current_state
+    return "UNKNOWN"
+
+if WAKE_WORD_DETECTOR_AVAILABLE and STATE_MACHINE_AVAILABLE:
+    try:
+        _wake_word_detector = initialize_detector(
+            on_wake_word=_on_wake_word_detected,
+            state_getter=_get_current_state
+        )
+        logger.info("Wake-word detector initialized (Phase 7A-3b)")
+    except Exception as e:
+        print(f"⚠ Wake-word detector initialization error: {e}", file=sys.stderr)
+        WAKE_WORD_DETECTOR_AVAILABLE = False
+
+
+# ============================================================================
+# Wake-Word Detector Control (Phase 7A-3b)
+# ============================================================================
+
+def start_wake_word_detector():
+    """
+    Start the wake-word detector.
+    
+    Called when entering LISTENING state.
+    Detector runs independently and pauses during PTT/SLEEP/THINKING/SPEAKING.
+    """
+    if _wake_word_detector:
+        try:
+            _wake_word_detector.start()
+            logger.debug("Wake-word detector started")
+        except Exception as e:
+            logger.error(f"Error starting wake-word detector: {e}")
+
+def stop_wake_word_detector():
+    """
+    Stop the wake-word detector.
+    
+    Called when exiting LISTENING state (e.g., entering SLEEP).
+    """
+    if _wake_word_detector:
+        try:
+            _wake_word_detector.stop()
+            logger.debug("Wake-word detector stopped")
+        except Exception as e:
+            logger.error(f"Error stopping wake-word detector: {e}")
+
+def pause_wake_word_detector():
+    """
+    Pause the wake-word detector (e.g., during PTT).
+    
+    Non-blocking pause; detector remains initialized but doesn't listen.
+    Resumed after PTT completes.
+    """
+    if _wake_word_detector:
+        try:
+            _wake_word_detector.pause()
+            logger.debug("Wake-word detector paused (PTT active)")
+        except Exception as e:
+            logger.error(f"Error pausing wake-word detector: {e}")
+
+def resume_wake_word_detector():
+    """
+    Resume the wake-word detector after pause.
+    
+    Called after PTT completes; detector resumes listening.
+    """
+    if _wake_word_detector:
+        try:
+            _wake_word_detector.resume()
+            logger.debug("Wake-word detector resumed")
+        except Exception as e:
+            logger.error(f"Error resuming wake-word detector: {e}")
+
+def get_wake_word_detector_status() -> dict:
+    """Get wake-word detector status for diagnostics."""
+    if _wake_word_detector:
+        return _wake_word_detector.get_status()
+    return {"available": False}
 
 
 def _get_log_dir() -> str:
@@ -3451,7 +3570,16 @@ if __name__ == "__main__":
                     # Use voice input if available, otherwise fall back to text
                     if voice_input_available:
                         print("\n🎤 Hold SPACEBAR to record (or type 'exit' to quit):", file=sys.stderr)
-                        user_input = get_voice_input_ptt().strip()
+                        
+                        # Pause wake-word detector during PTT (PTT always overrides wake-word)
+                        pause_wake_word_detector()
+                        
+                        try:
+                            user_input = get_voice_input_ptt().strip()
+                        finally:
+                            # Resume detector after PTT completes
+                            resume_wake_word_detector()
+                        
                         input_was_from_voice = True  # CRITICAL: Mark that this input came from voice
                         if not user_input:
                             continue
