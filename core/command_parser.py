@@ -9,9 +9,12 @@ Matching Strategy: Exact/near-exact only, no fuzzy semantics
 """
 
 import re
+import logging
 from enum import Enum
 from dataclasses import dataclass
 from typing import Tuple, Optional
+
+logger = logging.getLogger("COMMAND_PARSER")
 
 
 class CommandType(Enum):
@@ -342,6 +345,66 @@ class CommandClassifier:
             return True
         
         return False
+
+    def process_wake_word_event(self, wake_word_request: 'WakeWordRequest') -> None:
+        """
+        Process a wake-word detection event.
+        
+        Called by the wake-word detector when "ARGO" is recognized.
+        Respects all state machine rules:
+        - Ignored if not in LISTENING state
+        - Ignored during PTT (paused by argo.py)
+        - Ignored during SLEEP
+        - Ignored during SPEAKING/THINKING
+        - PTT always overrides wake-word
+        - STOP always overrides wake-word
+        
+        Args:
+            wake_word_request: WakeWordRequest object with confidence, timestamp, source
+        
+        Note:
+        - This method does NOT force state machine transitions
+        - It sends a "request" that the state machine can accept or reject
+        - The state machine has final authority
+        """
+        if not self.state_machine:
+            return  # State machine not available; silently ignore
+        
+        current_state = self.state_machine.current_state
+        
+        # Rule 1: Ignore if SLEEP (absolute sleep override)
+        if current_state == "SLEEP":
+            logger.debug(f"Wake-word ignored: in SLEEP state (confidence={wake_word_request.confidence:.2f})")
+            return
+        
+        # Rule 2: Ignore if SPEAKING (audio playback active)
+        if current_state == "SPEAKING":
+            logger.debug(f"Wake-word ignored: in SPEAKING state (audio playing)")
+            return
+        
+        # Rule 3: Ignore if THINKING (LLM processing)
+        if current_state == "THINKING":
+            logger.debug(f"Wake-word ignored: in THINKING state (LLM processing)")
+            return
+        
+        # Rule 4: Only process if LISTENING
+        if current_state != "LISTENING":
+            logger.debug(f"Wake-word ignored: in {current_state} state (not LISTENING)")
+            return
+        
+        # Wake-word valid: Request transition to THINKING
+        # State machine will accept/reject based on its rules
+        logger.info(f"Wake-word processed: 'ARGO' (confidence={wake_word_request.confidence:.2f}, state={current_state})")
+        
+        try:
+            # Request the state machine to transition to THINKING
+            # (never force; let state machine decide)
+            if self.state_machine.accept_command():
+                logger.debug("Wake-word event accepted: transition to THINKING")
+            else:
+                logger.debug("Wake-word event rejected: state machine declined transition")
+        except Exception as e:
+            logger.error(f"Error processing wake-word event: {e}")
 
 
 # Module-level API
