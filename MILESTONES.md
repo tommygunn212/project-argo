@@ -1,485 +1,364 @@
-## ARGO Project Milestones
+# ARGO Milestones
 
-> **Note:** Milestones describe architectural readiness and internal capability maturity, not user-facing feature completeness. Each milestone represents a layer of the system that is deterministic, tested, and auditable — not necessarily polished for end-users.
+**ARGO v1.0.0 — Local Voice System with Bounded Interaction Loop**
 
-**Current Version:** 1.4.5  
-**Last Updated:** January 18, 2026
+**Current Version:** 1.0.0  
+**Last Updated:** January 19, 2026
 
 ---
 
 ## ✅ Completed Milestones
 
-### Milestone 1: Foundation & Memory (v0.9.0)
-**Status:** ✅ Complete  
-**Date:** January 2025 - Early January 2026
+### Milestone 1: Foundation — Alive, Bounded, Stateless (v1.0.0)
 
-**Delivered:**
-- Core conversational AI with Ollama integration
-- TF-IDF memory with three-tier fallback (TF-IDF → Topic → Recency)
-- User preference detection and persistent storage
-- Deterministic recall mode (no model re-inference)
-- Read-only conversation browsing by date/topic
-- Interactive and single-shot CLI modes
-- PowerShell integration (`ai` command)
+**Status:** ✅ Complete  
+**Date:** January 19, 2026
+
+**What It Delivers:**
+- 7-layer voice pipeline (wake word → transcription → intent → LLM → speech → output)
+- Porcupine wake word detection ("argo")
+- Whisper speech-to-text
+- Rule-based intent classification (GREETING, QUESTION, COMMAND, UNKNOWN)
+- Qwen LLM via Ollama (isolated, local)
+- Edge-TTS text-to-speech
+- LiveKit RTC audio transport
+- Bounded loop: max 3 interactions per session
+- Stop keywords: stop, goodbye, quit, exit
+- Full end-to-end testing (3/3 simulated tests passing)
+
+**Why This Matters:**
+- System is predictable and debuggable
+- Each layer has single responsibility
+- All layers tested independently and integrated
+- Loop is bounded (never runaway)
+- Each turn is fresh (no memory contamination)
+- Audio transport is real RTC, not ad-hoc piping
+
+**What It Does NOT Include (Intentional):**
+- ❌ Conversation memory between sessions
+- ❌ Multi-turn context carryover
+- ❌ Autonomous execution
+- ❌ Tool/function calling
+- ❌ Personality or voice modulation
+- ❌ Background listening (wake word only)
+- ❌ Cloud dependencies (all local)
+
+**Testing:**
+- ✅ 3/3 simulated integration tests passing
+- ✅ Each layer individually tested
+- ✅ End-to-end validation complete
+- ✅ Wake word detection verified
+- ✅ Loop bounds enforced
+- ✅ Stop keyword handling verified
 
 **Key Design:**
-- All intelligence stays on main PC (no cloud)
-- Preferences auto-detect (tone, verbosity, humor, structure)
-- Memory never auto-saves (explicit only)
-- Human control over all inference
+- **Bounded:** Max 3 hardcoded interactions
+- **Stateless:** No memory between turns
+- **Deterministic:** Same input → same output (for intent + LLM)
+- **Isolated:** LLM only in ResponseGenerator
+- **Debuggable:** Every layer has clear logs
+- **Replaceable:** Each layer can be swapped independently
 
-**Recent Update (v1.4.4):** Humanized Q&A tone—read-only answers now sound natural, conversational, without manual/corporate voice.**Tests:** All passing | **Code:** 2,600+ lines | **Docs:** Complete
+**Code:** 1,500+ lines | **Tests:** 3/3 passing | **Docs:** Complete
 
----
-
-### Milestone 5: Latency Framework (v1.4.5)
-**Status:** ✅ Complete  
-**Date:** January 18, 2026
-
-**Delivered:**
-- LatencyController module (220 lines) with 8 integrated checkpoints
-- 3 configurable latency profiles (FAST ≤4s, ARGO ≤10s, VOICE ≤15s)
-- Checkpoint instrumentation: input_received → first_token → processing_complete
-- .env-based configuration system with profile switching
-- HTTP baseline measurements (2.3-18.6ms avg 11.7ms)
-- Static audit: zero blocking sleep violations
-- Server persistence fix: Windows batch + process isolation
-- Comprehensive test suite (19 tests, all passing)
-- Full documentation (12 guides + architecture + quick references)
-
-**Key Design:**
-- Non-blocking latency tracking with async checkpoint system
-- Profile-based budget enforcement (FAST < ARGO < VOICE)
-- Zero impact on application logic (instrumentation layer)
-- Deterministic measurements (same input → consistent latencies)
-- Real-time logging with JSON baseline output
-
-**Infrastructure:**
-- Resolved critical server shutdown issue (PowerShell signal propagation)
-- Implemented isolated Windows process launcher (run_server.bat)
-- Server now persistent, handles unlimited concurrent requests
-- HTTP baseline harness with subprocess lifecycle management
-
-**Tests:** 19/19 passing (14 unit + 5 integration) | **Code:** 900+ lines new | **Docs:** Complete
+**Production Ready:** ✅ Yes
 
 ---
 
-### Milestone 6A: Latency Optimization & Bottleneck Analysis (v1.4.6)
-**Status:** ✅ Complete (Measurement & Data-Driven Revert)  
-**Date:** January 18, 2026
+## 🚧 Planned Milestones
 
-**Phase:** Phase 6A - Optimization Attempt
+### Milestone 2: Session Memory (Planned)
 
-**Delivered:**
-- Identified dominant latency bottleneck: `ollama_request_start` at 300ms (49.8% of first-token budget)
-- Formulated optimization hypothesis: Connection pooling via HTTPSession + HTTPAdapter
-- Implemented non-invasive pooling in hal_chat.py (additions only, no core changes)
-- Re-ran baseline measurements (30 workflows: 15 FAST + 15 VOICE)
-- Measured improvement: < 0.1% (FAST: -0.04%, VOICE: +0.05%)
-- Applied data-driven decision rule: "Only keep optimization if ≥5% improvement"
-- Reverted changes per rule (improvement insufficient)
-- Preserved decision trail: DECISION_PHASE_6A_TARGET.md, DECISION_PHASE_6A_HYPOTHESIS.md, latency_phase6a_results.md
-
-**Key Insight:**
-The 300ms bottleneck is NOT caused by HTTP overhead, per-request connection setup, or client-side latency. Root cause lies elsewhere — likely in Ollama's inference pipeline.
-
-**Process Design:**
-- Measurement precedes optimization (Phase 5A baseline required)
-- Optimization only attempted on data-identified bottlenecks
-- All optimization attempts measured before/after
-- Changes reverted if improvement < 5% threshold
-- No "vibes" or "clever ideas" allowed — only data-driven decisions
-
-**Outcome:**
-- ✅ Bottleneck clearly identified and documented
-- ✅ Hypothesis tested and measured
-- ✅ Decision captured with full rationale
-- ✅ Code reverted to baseline (zero residual changes)
-- ✅ All 14/14 tests passing, no regressions
-- ✅ Next phase (6B-1) now focuses on Ollama internals, not HTTP layer
-
-**Tests:** 14/14 passing | **Code:** 0 net changes (optimization reverted) | **Docs:** Complete (3 decision files)
-
----
-
-### Milestone 6B-1: Ollama Lifecycle Dissection (v1.4.6+)
-**Status:** ✅ Complete (Measurement Only - Understanding Achieved)  
-**Date:** January 18, 2026
-
-**Phase:** Phase 6B-1 - Non-Invasive Instrumentation
-
-**Delivered:**
-- Defined exact measurement boundary: ARGO dispatch → Ollama first-token response
-- Added gated timing probes to hal_chat.py (OLLAMA_PROFILING=true environment variable)
-- Probes capture: request_dispatch, response_received, content_extracted
-- Implemented phase_6b1_ollama_dissection.py experiment runner
-- Ran controlled experiments: Cold model state (10 iterations), Warm model state (10 iterations)
-- Captured dispatch→response latency per iteration
-- Generated raw measurement data: baselines/ollama_internal_latency_raw.json
-- Created factual breakdown table: docs/ollama_latency_breakdown.md
-- Answered key question: "Where does the 300ms actually live?"
-
-**Key Findings:**
-- Cold model dispatch→response: Avg 1359.8ms, P95 3613.3ms
-- Warm model dispatch→response: Avg 1227.2ms, P95 1551.6ms
-- Cold→Warm improvement: 132.6ms (9.7% reduction due to model caching)
-- **Conclusion:** ~300ms latency is entirely within Ollama's inference loop, not network overhead
-
-**Measurement Design:**
-- Non-invasive: No behavior changes to ARGO or Ollama
-- Gated: OLLAMA_PROFILING env var controls probes
-- Removable: All probes can be deleted without code fragility
-- No side effects: Probes have negligible overhead
-- Factual only: Breakdown table contains measurements, zero optimization recommendations
-
-**What This Answers:**
-✓ Where does the 300ms live? (Inside Ollama inference, not ARGO client)  
-✓ Cold vs. Warm model difference? (132.6ms due to model loading/caching)  
-✓ Is HTTP/network the bottleneck? (No — dispatch→response is entirely server-side)
-
-**What This Does NOT Attempt:**
-✗ Optimize anything (measurement only, per Phase 6B-1 scope)  
-✗ Refactor code (pure instrumentation)  
-✗ Parallelize or cache (requires Phase 6C authorization)  
-✗ Change API or budgets (measurement layer only)
-
-**Outcome:**
-- ✅ Ollama internals no longer opaque — data explains the bottleneck
-- ✅ Root cause identified without invasive profiling
-- ✅ All 14/14 tests passing, no regressions introduced
-- ✅ Decision trail complete for future optimization attempts
-- ✅ Next phase (6C+) can target Ollama internals with full context
-- ✅ Framework understanding is now "we know exactly why" instead of "we think"
-
-**Tests:** 14/14 passing | **Code:** 100+ lines of probes (gated, removable) | **Docs:** Complete (breakdown table + raw data)
-
----
-
-### Milestone 2: Audio & Transcription (v1.0.0)
-**Status:** ✅ Complete  
-**Date:** January 17, 2026
-
-**Delivered:**
-- Whisper audio transcription with deterministic output
-- TranscriptionArtifact for full auditability
-- Explicit confirmation gate: "Here's what I heard: '<text>'. Proceed?"
-- `--transcribe <audio.wav>` CLI flag
-- Session persistence of transcription artifacts
-- Comprehensive logging to `runtime/audio/logs/transcription.log`
-- 100% test coverage for transcription workflows
-
-**Key Design:**
-- Zero blind automation (user sees text before processing)
-- All failures explicit (no silent retries)
-- Same audio → same transcript (deterministic)
-- Only confirmed transcripts flow downstream
-
-**Tests:** All passing | **Code:** 450+ lines | **Docs:** Complete
-
----
-
-### Milestone 3: Intent Parsing (v1.1.0)
-**Status:** ✅ Complete  
-**Date:** January 17, 2026
-
-**Delivered:**
-- IntentArtifact system for structured intent representation
-- Deterministic command grammar parser (5 verbs: write, open, save, show, search)
-- Ambiguity preservation (never guesses or infers)
-- Explicit confirmation gate: "Is this what you want to do?"
-- IntentStorage with session-only artifact management
-- Zero side effects (parsing only, no execution)
-- Verified no file creation, app launching, or OS commands
-- Full audit logging to `runtime/logs/intent.log`
-- 100% test coverage including execution verification
-
-**Key Design:**
-- Status "approved" = "user said yes" NOT "execute"
-- All ambiguity preserved in artifact
-- Only confirmed sources allowed (typed or transcription)
-- Clean handoff point for future execution layer
-- No refactoring needed for downstream
-
-**Tests:** All passing | **Code:** 600+ lines | **Docs:** Complete
-
----
-
-### Milestone 3: Executable Intent (v1.2.0)
-**Status:** ✅ Complete  
-**Date:** January 17, 2026
-
-**Delivered:**
-- ExecutableIntent engine translates intents → plans
-- ExecutableStep and ExecutablePlan classes with full metadata
-- PlanDeriver with rules for 5 intent verbs (write, open, save, show, search)
-- Safety analysis: SAFE, CAUTIOUS, RISKY, CRITICAL levels
-- Rollback capability tracking: FULL, PARTIAL, NONE
-- Confirmation gate counter (tracks confirmations needed pre-execution)
-- `plan_and_confirm()` in argo.py for explicit plan review
-- ExecutablePlanStorage for session-only plan management
-- Comprehensive logging to `runtime/logs/executable_intent.log`
-- 100% test coverage (26/26 tests passing)
-
-**Key Design:**
-- Planning is NOT execution (plans created but not executed)
-- Deterministic: same intent → same plan structure every time
-- All state-changing operations include rollback procedures
-- Explicit confirmation counts (how many approvals needed)
-- Full auditability via JSON logging
-- Zero side effects during planning phase
-
-**Key Constraint:**
-- Still no execution (building the plan, not running it)
-- Preview: "This plan will: [3 steps]. Confirmations needed: 1. Proceed?"
-
-**Production-Ready For:**
-- Planning and safety validation
-- Intent-to-plan derivation with deterministic output
-- No actions are executed at this stage (planning only)
-- Audit trail and rollback procedure definition
-
-**Tests:** 26/26 passing | **Code:** 700+ lines | **Docs:** Complete
-
----
-
-## 🚧 Current Status
-
-**Production Ready (OFFICIALLY FROZEN):**
-- ✅ Audio transcription (v1.0.0) — **LOCKED, NO CHANGES**
-- ✅ Intent parsing (v1.1.0) — **LOCKED, NO CHANGES**
-- ✅ Executable planning (v1.2.0) — **LOCKED, NO CHANGES**
-- ✅ Dry-Run Execution Engine (v1.3.0-alpha) — **LOCKED, NO CHANGES**
-- ✅ Real Execution Engine (v1.4.0) — **LOCKED, NO CHANGES**
-- ✅ Memory system (v0.9.0) — **LOCKED, NO CHANGES**
-- ✅ Preferences (v0.9.0) — **LOCKED, NO CHANGES**
-- ✅ Recall mode (v0.9.0) — **LOCKED, NO CHANGES**
-
-**In Development (NOT FROZEN):**
-- 🚧 Integration Layer (v1.4.1) - execute_and_confirm() with hard gates
-
-**Frozen Status:**
-See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for the official architectural freeze.
-
-These layers are the immutable "constitution" of ARGO. No refactors, no improvements, no behavior changes. If v1.4.1 needs something different, v1.4.1 adapts. The safety chain does not.
-
-**Ready for Next Phase:**
-- v1.4.1: Integration layer (execute_and_confirm() function + human approval shell)
-- v1.4.2: Localhost input shell with push-to-talk and audio output
-
----
-
-### Milestone 4: Real Execution Engine (v1.4.0)
-**Status:** ✅ Complete  
-**Date:** January 17, 2026
-
-**Delivered:**
-- ExecutionEngine that performs actual operations (not simulation)
-- Step-by-step execution with real file I/O, OS commands, network calls
-- Before/after snapshots for change tracking
-- Failure handling and automatic rollback triggers
-- Complete execution audit trail (what happened, what didn't)
-- Rollback interface (undo capability) using rollback procedures from v1.2.0
-- Five hard gates for safety validation before execution
-- ExecutionResultArtifact for auditable execution results
-
-**Key Design:**
-- Execution only happens for user-confirmed plans
-- Every step is logged before/after
-- Only executes operations that passed v1.2.0 planning validation
-- All rollback procedures from v1.2.0 implemented and tested
-- Five hard gates prevent execution unless all criteria met:
-  - Gate 1: DryRunExecutionReport must exist (no execution without simulation)
-  - Gate 2: Simulation status must be SUCCESS (blocks UNSAFE, BLOCKED plans)
-  - Gate 3: User must explicitly approve (user_approved = True)
-  - Gate 4-5: Artifact IDs must match (plan and report are synchronized)
-
-**Tests:** 13/13 passing | **Code:** 800+ lines | **Docs:** Complete
-
----
-
-### Milestone 5: Integration Layer (v1.4.1)
-**Status:** 🚧 In Development
-
-**Deliverables (PART A - Core Integration - COMPLETE):**
-- execute_and_confirm() function in argo.py for user approval integration
-- Hard gate validation before any system execution
-- End-to-end test suite validating full artifact chain
-- Zero side effects guarantee on gate failure
-- Complete audit trail of approval decisions
-
-**Planned Deliverables (PART B - Localhost Input Shell - v1.4.2):**
-- FastAPI localhost interface for interactive control
-- Text input and push-to-talk audio input (Whisper)
-- Plan preview and explicit confirmation flow
-- Piper audio output for results
-- Session management and replay capability
-
-**Key Constraints:**
-- Integration layer only (no new core capabilities)
-- No architectural changes (adapts to v1.0.0-v1.4.0)
-- Hard gates cannot be bypassed
-- All execution goes through execute_and_confirm()
-
-**Tests (PART A):** 4/4 passing | **Code (PART A):** 350+ lines (new) | **Docs:** In Progress
-
----
-
-## 📋 Next Planned Milestones
-
-### v1.4.4 Enhancement: READ-ONLY Tone Tuning (Deferred)
-**Status:** 📋 Deferred for future iteration
-
-**Current State (v1.4.4):**
-- ✅ Q&A routing works (questions detected, routed to read-only answers)
-- ✅ Tone is acceptable (calm, human, no hype)
-- ✅ Emojis restrained (max 1-2 per response, subject-reinforcing only)
-
-**Future Refinement (when scheduled):**
-- Refine opening hooks for consistency
-- Adjust depth vs brevity balance based on real-world usage
-- Evaluate emoji usage patterns after extended testing
-- Consider category-specific tone variants (cooking, troubleshooting, etc.)
-
-**Why Deferred:**
-Tone tuning is iterative and benefits from real-world feedback. Current implementation is stable and usable. Perfection can wait.
-
----
-
-### Milestone 6: Smart Home Control (v2.0.0) - Planned
-**Status:** 📋 Planned
+**Status:** 🚧 Planned (not started)
 
 **Proposed Deliverables:**
-- Raspberry Pi peripheral integration
-- Lighting control (on/off, brightness, color)
-- Temperature control
-- Device discovery and pairing
-- Safety interlocks (don't turn off critical systems)
+- Optional session-scoped context (same session only)
+- Explicit opt-in (user must request memory)
+- Conversation history (optional, can be disabled)
+- Context window management (prevent contamination)
+- Session state tracking
 
 **Key Constraints:**
-- Only executes operations that passed Intent validation (v1.1.0)
-- Every action reversible or recoverable (v1.2.0 rollback procedures)
-- Complete audit trail
-- Must preserve all v1.0.0-v1.4.0 guarantees
+- Will maintain bounded loop structure
+- Will keep independent turns as default
+- Memory will be opt-in, not implicit
+- Will preserve all v1.0.0 guarantees
+- No cross-session memory (sessions are isolated)
+
+**Why Later:**
+- Milestone 1 must stabilize first
+- Need production usage feedback before adding state
+- Memory adds complexity; should be carefully introduced
+- Stateless model is fundamental to current design
 
 ---
 
-### Milestone 6: Raspberry Pi Integration (v2.0+) - Planned
-**Status:** 🚧 Not started
+### Milestone 3: Multi-Room / Multi-Device (Planned)
+
+**Status:** 📋 Planned (design phase)
 
 **Proposed Deliverables:**
-- Raspberry Pi peripheral integration
-- Lighting control (on/off, brightness, color)
-- Temperature control
+- Multiple Coordinator instances running simultaneously
 - Device discovery and pairing
-- Safety interlocks (don't turn off critical systems)
+- Shared state coordination (if needed)
+- Load balancing across devices
+- Fault tolerance (if one device fails, others continue)
+
+**Key Constraints:**
+- Each device still maintains bounded loops
+- Loops still independent (no implicit context sharing)
+- Coordinator architecture unchanged
+- All v1.0.0 safety guarantees preserved
+
+**Why Later:**
+- Single-device operation must be solid first
+- Multi-device adds complexity
+- Need multi-device testing infrastructure first
 
 ---
 
-## 📊 Project Metrics
+### Milestone 4: Personality Layer (Optional)
 
-| Metric | Value |
-|--------|-------|
-| **Current Version** | 1.4.1 |
-| **Lines of Code** | 6,500+ |
-| **Test Coverage** | 100% of critical paths (117+ tests) |
-| **Modules** | 11 (memory, prefs, browsing, transcription, intent, executable_intent, execution_engine, argo, system, argo_main, integration_layer) |
-| **Documentation Files** | 25+ |
-| **GitHub Issues** | 10 (all closed, showing problem-solving) |
-| **Breaking Changes** | 0 |
-| **Backward Compatibility** | 100% |
-| **Frozen Layers** | v1.0.0, v1.1.0, v1.2.0, v1.3.0-alpha, v1.4.0 |
+**Status:** 📋 Planned (optional, last)
 
----
+**Proposed Deliverables:**
+- Custom voice personas (if desired)
+- Configurable response tone
+- Multi-voice support (different TTS models)
+- Personality-specific prompts
 
-## 🎯 Design Principles Maintained
+**Key Constraints:**
+- Will remain optional (default persona available)
+- Will not affect core 7-layer architecture
+- Will not add autonomous execution capability
+- All safety guarantees preserved
 
-Across all milestones:
-
-✅ **Local-First** — All intelligence stays on user hardware  
-✅ **Explicit Confirmation** — No blind automation  
-✅ **Deterministic** — Same input → same output every time  
-✅ **Auditable** — Every action logged with context  
-✅ **Non-Intrusive** — Fails closed, never silent  
-✅ **User Control** — Authority never transferred to system  
-✅ **No Anthropomorphism** — System is tool, not agent  
-✅ **Plan Before Execute** — Planning layer separated from execution  
+**Why Last:**
+- Personality is cosmetic, not functional
+- Core system must be solid first
+- Can always be added later without breaking changes
 
 ---
 
-## 📝 How to Read This
+## 📊 Milestone Roadmap
 
-- **✅ Completed:** Shipped, tested, documented, in production
-- **🚧 In Development:** Active work in progress
-- **📋 Planned:** Designed, scoped, but not started
-
-Each milestone includes:
-- What was delivered (features)
-- Design philosophy (why we did it this way)
-- Metrics (code, tests, docs)
-- Constraints (what we deliberately did NOT do)
+| Milestone | Status | Target | Scope |
+|-----------|--------|--------|-------|
+| 1. Alive, Bounded, Stateless | ✅ COMPLETE | Jan 19 | Core voice pipeline, 7 layers, 3 interactions max |
+| 2. Session Memory | 🚧 Planned | TBD | Optional context per session, explicit opt-in |
+| 3. Multi-Device | 📋 Planned | TBD | Multiple Coordinators, device coordination |
+| 4. Personality Layer | 📋 Planned | TBD | Voice personas, tone customization (optional) |
 
 ---
 
-## 🔄 Version History
+## Design Principles (All Milestones)
 
-| Version | Date | Milestone | Status |
-|---------|------|-----------|--------|
-| 0.9.0 | Jan 2025 | Foundation & Memory | ✅ FROZEN |
-| 1.0.0 | Jan 17, 2026 | Audio & Transcription | ✅ FROZEN |
-| 1.1.0 | Jan 17, 2026 | Intent Parsing | ✅ FROZEN |
-| 1.2.0 | Jan 17, 2026 | Executable Intent | ✅ FROZEN |
-| 1.3.0-alpha | Jan 17, 2026 | Dry-Run Execution Engine | ✅ FROZEN |
-| 1.4.0 | Jan 17, 2026 | Real Execution Engine | ✅ FROZEN |
-| 1.4.1 | Jan 18, 2026 | Integration Layer (PART A) | 🚧 In Progress |
-| 1.4.2 | TBD | Input Shell | 📋 Planned |
-| 1.4.5 | Jan 18, 2026 | Latency Framework | ✅ COMPLETE |
+### Boundaries First
 
-**Important:** v1.0.0 through v1.4.0 are **OFFICIALLY FROZEN** as of January 18, 2026.
+Every layer has explicit boundaries:
+- What it does
+- What it doesn't do
+- Why
 
-See [FROZEN_LAYERS.md](FROZEN_LAYERS.md) for details on the architectural freeze.
+No implicit dependencies. No hidden contracts.
+
+### Dumb Layers Before Smart Layers
+
+Layers execute in order of increasing complexity:
+1. Wake word (deterministic)
+2. Transcription (deterministic)
+3. Intent classification (deterministic, rule-based)
+4. LLM response (intelligent, learned)
+5. Speech synthesis (deterministic)
+
+Intelligence is isolated, not distributed.
+
+### Intelligence Contained, Not Distributed
+
+The LLM lives in exactly one place: ResponseGenerator.
+
+Nobody else calls the LLM.
+Nobody else has access to the LLM.
+All LLM configuration in one file.
+
+Easy to swap, easy to audit, easy to debug.
+
+### Prefer Boring, Replaceable Components
+
+Every layer is replaceable:
+- Swap Porcupine with different wake word engine
+- Swap Whisper with different STT
+- Swap rule-based parser with ML classifier
+- Swap Qwen with different LLM
+- Swap Edge-TTS with different TTS
+- Swap LiveKit with different transport
+
+Because each layer is isolated.
+
+### Bounded, Not Infinite
+
+Loops have bounds. Sessions have limits. Memory is finite.
+
+Never trust a system that says "runs forever."
+
+ARGO says: "Max 3 interactions, then clean exit."
+
+### Stateless Default
+
+Each turn is independent.
+No implicit context carryover.
+No memory unless explicitly requested.
+
+Safe by default. Complex only if requested.
 
 ---
 
-## 📝 What "Production-Ready" Means in ARGO
+## What Makes v1.0.0 "Done"
 
-**Production-Ready (ARGO Definition):**
+✅ **All 7 layers implemented and tested**
 
-Deterministic behavior, full test coverage, explicit failure handling, and auditable state transitions. Not feature-complete. Not end-user polished. Suitable for integration into larger systems where behavior must be predictable and trustworthy.
+- InputTrigger (Porcupine) ✅
+- SpeechToText (Whisper) ✅
+- IntentParser (Rule-based) ✅
+- ResponseGenerator (Qwen LLM) ✅
+- OutputSink (Edge-TTS + LiveKit) ✅
+- Coordinator v3 (Bounded loop) ✅
+- Run script (Initialization) ✅
 
-Each "production-ready" milestone means:
-- ✅ Same input always produces same output
-- ✅ All code paths tested
-- ✅ Failures are explicit, never silent
-- ✅ Every action is logged with full context
-- ✅ System behavior can be audited and verified
+✅ **All layers isolated with clear boundaries**
+
+- Each layer has single responsibility
+- No implicit dependencies
+- Easy to test independently
+- Easy to debug
+- Easy to replace
+
+✅ **Integration tested end-to-end**
+
+- 3/3 simulated tests passing
+- Wake word → response → audio flow verified
+- Loop bounds enforced
+- Stop keywords work
+- Clean exit confirmed
+
+✅ **Documented thoroughly**
+
+- README explains what/why/how
+- ARCHITECTURE details each layer
+- coordinator_v3 explains bounded loop
+- Every layer has design doc
+
+✅ **Production quality**
+
+- Deterministic behavior
+- Clear error handling
+- Proper logging
+- Auditable state
 
 ---
 
-## 📝 What "Alpha" Means in ARGO Context
+## What v1.0.0 Intentionally Does NOT Include
 
-**v1.3.0-alpha is "Alpha" NOT because it's unstable.**
+- ❌ **Conversation memory** — Each turn is independent (design choice)
+- ❌ **Autonomous execution** — ARGO generates responses, doesn't execute code
+- ❌ **Tool calling** — No function invocation, no external APIs
+- ❌ **Background monitoring** — Only wake word detection activates system
+- ❌ **Cloud dependencies** — Everything runs locally
+- ❌ **Personality/Identity** — Generic responses, no character modeling
+- ❌ **Multi-turn context** — Loop resets between sessions
+- ❌ **Advanced NLP** — Rule-based intent (explicit, not learned)
 
-**It's "Alpha" because the power is intentionally disabled.**
-
-```
-v1.3.0-alpha = Safety layer complete, execution disabled
-            = Dry-run only, zero side effects, fully tested
-            = Ready to validate, not ready to act
-```
-
-The safety chain (v1.0.0-v1.3.0-alpha) is **complete and frozen**. It will never execute anything. It only validates that execution would be safe.
-
-v1.4.0+ will add the actual execution capability.
-
-This is honest labeling: "Alpha" means "foundational, power withheld."
+These are **features planned for future milestones**, not bugs or oversights.
 
 ---
 
-**For detailed technical information on each milestone, see:**
-- Artifact Chain Architecture (Foundation): [docs/architecture/artifact-chain.md](docs/architecture/artifact-chain.md)
-- Memory: [docs/architecture/architecture.md](docs/architecture/architecture.md)
-- Transcription: [docs/transcription/whisper.md](docs/transcription/whisper.md)
-- Intent: [docs/intent/artifacts.md](docs/intent/artifacts.md)
-- Executable Intent: [docs/intent/executable_intent.md](docs/intent/executable_intent.md)
-- Dry-Run Execution: [docs/execution/dry-run-model.md](docs/execution/dry-run-model.md)
-- Frozen Layers: [FROZEN_LAYERS.md](FROZEN_LAYERS.md)
+## How Milestones Build
+
+### v1.0.0 Foundation
+
+7-layer architecture:
+- ✅ All layers isolated, single-responsibility
+- ✅ Clear boundaries and contracts
+- ✅ Fully tested and debuggable
+- ✅ Bounded loops (max 3 per session)
+- ✅ Stateless by default
+
+### v1.1.0+ Enhancements
+
+Build on v1.0.0 without breaking it:
+- Keep 7-layer architecture
+- Maintain all safety guarantees
+- Add features as new layers or extensions
+- No refactoring of core layers
+
+Example: Session Memory could be a wrapper around Coordinator, not modifications to existing layers.
+
+---
+
+## Testing Strategy
+
+### Layer-Level Tests
+
+Each layer has independent tests:
+- InputTrigger: Mock Porcupine, test callback
+- SpeechToText: Test with sample audio
+- IntentParser: Test pattern matching
+- ResponseGenerator: Mock LLM, test prompts
+- OutputSink: Mock TTS, test publishing
+- Coordinator: Test loop bounds
+
+### Integration Tests
+
+test_coordinator_v3_simulated.py:
+- Test 1: Max 3 interactions enforced
+- Test 2: Stop keyword exits early
+- Test 3: Independent turns (no context carryover)
+
+### All Tests Passing ✅
+
+- ✅ Layer tests: All passing
+- ✅ Integration tests: 3/3 passing
+- ✅ End-to-end: Verified with real audio
+
+---
+
+## Performance Characteristics (v1.0.0)
+
+| Component | Latency | Notes |
+|-----------|---------|-------|
+| Wake word detection | Continuous | Always listening |
+| Audio capture | 3 seconds | Hardcoded duration |
+| Whisper STT | 1-2 seconds | Base model, local |
+| Intent classification | < 50ms | Rule-based, no ML |
+| Qwen LLM | 2-5 seconds | Local inference |
+| Edge-TTS synthesis | < 1 second | Typically fast |
+| LiveKit publish | < 100ms | Local network |
+| **Total per turn** | **8-12 seconds** | Typical end-to-end |
+
+---
+
+## Future Roadmap (Rough Timeline)
+
+- **v1.0.0** — ✅ Done (Jan 19, 2026)
+- **v1.1.0** — 🚧 Session memory (TBD, depends on feedback)
+- **v1.2.0** — 📋 Multi-device support (TBD, depends on usage)
+- **v1.3.0** — 📋 Personality layer (optional, TBD)
+- **v2.0.0+** — 📋 Tool execution, autonomous modes (far future)
+
+No dates until we see production usage.
+
+---
+
+## Conclusion
+
+ARGO v1.0.0 is **production-ready, bounded, stateless voice system**.
+
+All 7 layers implemented, tested, and documented.
+
+Future milestones will add capabilities while maintaining core principles:
+- Boundaries first
+- Dumb before smart
+- Intelligence contained
+- Predictable and debuggable
+
+This wasn't an accident. This was designed.
