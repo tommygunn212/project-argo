@@ -3567,14 +3567,20 @@ if __name__ == "__main__":
                 sys.path.insert(0, parent_dir)
             
             # Test if keyboard module is available (required for PTT)
+            # Note: On Windows, keyboard module requires administrator privileges
             try:
                 import keyboard
-            except ImportError:
-                print("⚠️  Voice input not available (keyboard module not installed), falling back to text input", file=sys.stderr)
-            else:
+                logger.debug("✓ keyboard module imported successfully")
+                # Successfully imported - keyboard module is available
                 from voice_input import get_voice_input_ptt
+                logger.debug("✓ voice_input module imported successfully")
                 voice_input_available = True
-        except ImportError as e:
+            except ImportError as e:
+                logger.debug(f"✗ keyboard/voice_input import failed: {e}")
+                print(f"⚠️  Voice input not available (ImportError: {e}), falling back to text input", file=sys.stderr)
+                print("    To enable PTT: pip install keyboard", file=sys.stderr)
+        except Exception as e:
+            logger.debug(f"✗ Unexpected error in voice_input init: {e}")
             print(f"⚠️  Voice input not available ({e}), falling back to text input", file=sys.stderr)
         
         try:
