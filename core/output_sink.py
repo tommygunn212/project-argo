@@ -47,6 +47,9 @@ VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() == "true"
 PIPER_ENABLED = os.getenv("PIPER_ENABLED", "false").lower() == "true"
 """Enable/disable Piper TTS (requires VOICE_ENABLED=true)."""
 
+VOICE_PROFILE = os.getenv("VOICE_PROFILE", "lessac").lower()
+"""Voice profile selection (Phase 7D): 'lessac' (default) or 'allen'. Data/config only."""
+
 PIPER_PROFILING = os.getenv("PIPER_PROFILING", "false").lower() == "true"
 """Enable timing probes for Piper audio operations (gated, non-blocking)."""
 
@@ -126,6 +129,46 @@ class SilentOutputSink(OutputSink):
 
 
 # ============================================================================
+# VOICE PROFILE MAPPING (Phase 7D)
+# ============================================================================
+
+def _get_voice_model_path(profile: str = None) -> str:
+    """
+    Map voice profile to voice model ONNX file path.
+    
+    Args:
+        profile: Voice profile name ('lessac' or 'allen'). Defaults to VOICE_PROFILE env var.
+        
+    Returns:
+        Full path to voice model ONNX file. Falls back to Lessac if invalid.
+        
+    Voice Profile Mapping:
+        - 'lessac' (default): en_US-lessac-medium.onnx (American male)
+        - 'allen' (British male): en_GB-alan-medium.onnx (British male)
+    
+    Note: This is data/config only. No logic changes to OutputSink.
+    """
+    if profile is None:
+        profile = VOICE_PROFILE
+    
+    profile = profile.lower().strip()
+    
+    # Voice profile → ONNX file mapping
+    voice_models = {
+        "lessac": "audio/piper/voices/en_US-lessac-medium.onnx",
+        "allen": "audio/piper/voices/en_GB-alan-medium.onnx",
+    }
+    
+    if profile not in voice_models:
+        # Fallback to Lessac if invalid profile
+        if PIPER_PROFILING:
+            print(f"[DEBUG] Unknown voice profile '{profile}', falling back to 'lessac'", file=sys.stderr)
+        return voice_models["lessac"]
+    
+    return voice_models[profile]
+
+
+# ============================================================================
 # GLOBAL INSTANCE
 # ============================================================================
 
@@ -202,15 +245,28 @@ class PiperOutputSink(OutputSink):
         
         Reads configuration from .env:
         - PIPER_PATH: path to piper executable
-        - PIPER_VOICE: path to voice model file
+        - VOICE_PROFILE: voice profile selection ('lessac' or 'allen')
+        - PIPER_VOICE: path to voice model file (can be overridden)
         
         Raises ValueError if Piper or voice model not found.
+        
+        Phase 7D: Voice profile support (data/config only, no logic changes)
         """
         self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
-        self.voice_path = os.getenv("PIPER_VOICE", "audio/piper/voices/en_US-lessac-medium.onnx")
+        
+        # Phase 7D: Get voice model path based on VOICE_PROFILE
+        # Fallback to Lessac if profile not recognized
+        # Allow .env override via PIPER_VOICE for custom voices
+        profile_voice_path = _get_voice_model_path(VOICE_PROFILE)
+        self.voice_path = os.getenv("PIPER_VOICE", profile_voice_path)
+        
         self._playback_task: Optional[asyncio.Task] = None
         self._piper_process: Optional[subprocess.Popen] = None
         self._profiling_enabled = PIPER_PROFILING
+        
+        # Log voice profile selection (debug only, gated by PIPER_PROFILING)
+        if self._profiling_enabled:
+            print(f"[DEBUG] PiperOutputSink: voice_profile={VOICE_PROFILE}, voice_path={self.voice_path}", file=sys.stderr)
         
         # Validate Piper binary exists
         if not os.path.exists(self.piper_path):
