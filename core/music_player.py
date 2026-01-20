@@ -167,28 +167,35 @@ class MusicPlayer:
             
             # Check if ffplay is available
             ffplay_path = shutil.which("ffplay")
-            if ffplay_path:
-                subprocess.run(
-                    ["ffplay", "-nodisp", "-autoexit", track_path],
-                    capture_output=True,
-                    timeout=3600  # Max 1 hour
-                )
+            if not ffplay_path:
+                logger.warning(f"[ARGO] ffplay not found in PATH. Install FFmpeg to enable music playback.")
+                self.is_playing = False
+                return
+            
+            logger.info(f"[ARGO] Starting ffplay: {ffplay_path}")
+            logger.info(f"[ARGO] Playing file: {track_path}")
+            
+            # Run ffplay
+            result = subprocess.run(
+                [ffplay_path, "-nodisp", "-autoexit", track_path],
+                capture_output=True,
+                timeout=3600,  # Max 1 hour
+                text=True
+            )
+            
+            if result.returncode != 0:
+                logger.warning(f"[ARGO] ffplay exited with code {result.returncode}")
+                if result.stderr:
+                    logger.debug(f"[ARGO] ffplay stderr: {result.stderr}")
             else:
-                # Fallback to simpleaudio for WAV files only
-                try:
-                    import simpleaudio
-                    if track_path.lower().endswith('.wav'):
-                        wave_obj = simpleaudio.WaveObject.from_wave_file(track_path)
-                        self.current_process = wave_obj.play()
-                        self.current_process.wait_done()
-                    else:
-                        logger.warning(f"[ARGO] ffplay not available and file is not WAV: {track_path}")
-                        return
-                except ImportError:
-                    logger.error(f"[ARGO] No audio player available (ffplay or simpleaudio)")
-                    return
+                logger.info(f"[ARGO] Music playback completed successfully")
+                
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[ARGO] Music playback timeout (> 1 hour)")
+        except FileNotFoundError:
+            logger.error(f"[ARGO] ffplay executable not found")
         except Exception as e:
-            logger.error(f"[ARGO] Playback error: {e}")
+            logger.error(f"[ARGO] Playback error: {type(e).__name__}: {e}")
         finally:
             self.is_playing = False
             logger.info("[ARGO] Music playback stopped")
