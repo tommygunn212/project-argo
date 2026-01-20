@@ -988,4 +988,7 @@ def play_startup_announcement():
         
         # Use the default output sink to speak (use speak() for sync)
         sink = get_output_sink()
-        sink.speak(phrase)
+        sink.speak(phrase)        
+    except Exception as e:
+        # Silently fail on startup announcement (don't crash the system)
+        pass
