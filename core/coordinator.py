@@ -592,62 +592,60 @@ class Coordinator:
     
     def _speak_with_interrupt_detection(self, response_text: str) -> None:
         """
-        Speak response with interrupt detection.
+        Speak response with interrupt detection (simplified).
         
-        Detects if user speaks (wakes word or voice detected) while TTS is playing.
-        If interrupt detected, stops TTS immediately and restarts listening loop.
+        Runs TTS in main thread (blocking) while monitoring for interrupts in background.
         
         Args:
             response_text: Text to speak
         """
         import threading
         import time
-        import asyncio
         
         interrupt_detected = False
         monitor_interval = 0.2  # Check every 200ms
         
-        def speak_sync():
-            """Run speak in thread so we can monitor it."""
-            self.sink.speak(response_text)
-        
         try:
-            # Start TTS in background thread
-            speak_thread = threading.Thread(target=speak_sync, daemon=True)
-            speak_thread.start()
-            
             # Initialize Porcupine for interrupt detection
             from core.input_trigger import PorcupineWakeWordTrigger
             interrupt_detector = PorcupineWakeWordTrigger()
             
             self.logger.info("[Interrupt] Monitoring for user input during playback...")
             
-            # Poll for interrupt while TTS is playing
-            while speak_thread.is_alive():
-                try:
-                    # Quick check for wake word or voice activity
-                    if interrupt_detector._check_for_interrupt():
-                        interrupt_detected = True
-                        self.logger.warning("[Interrupt] User interrupted! Stopping TTS...")
-                        
-                        # Stop the TTS audio playback (async call in sync context)
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if loop.is_running():
-                                asyncio.create_task(self.sink.stop())
-                            else:
-                                loop.run_until_complete(self.sink.stop())
-                        except Exception as e:
-                            self.logger.debug(f"[Interrupt] Could not stop sink: {e}")
-                        
-                        break
-                except Exception as e:
-                    # Silently continue monitoring on error
-                    self.logger.debug(f"[Interrupt] Check failed: {e}")
-                
-                time.sleep(monitor_interval)
+            def monitor_for_interrupt():
+                """Monitor for user interrupt in background."""
+                nonlocal interrupt_detected
+                while self._is_speaking:
+                    try:
+                        if interrupt_detector._check_for_interrupt():
+                            interrupt_detected = True
+                            self.logger.warning("[Interrupt] User interrupted! Stopping TTS...")
+                            
+                            # Stop the TTS audio playback
+                            try:
+                                import asyncio
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    asyncio.create_task(self.sink.stop())
+                                else:
+                                    loop.run_until_complete(self.sink.stop())
+                            except Exception as e:
+                                self.logger.debug(f"[Interrupt] Could not stop sink: {e}")
+                            break
+                    except Exception as e:
+                        self.logger.debug(f"[Interrupt] Check failed: {e}")
+                    
+                    time.sleep(monitor_interval)
             
-            # Wait for speak thread to finish (or timeout if interrupted)            speak_thread.join(timeout=30)
+            # Start interrupt monitor in background thread
+            monitor_thread = threading.Thread(target=monitor_for_interrupt, daemon=True)
+            monitor_thread.start()
+            
+            # Speak in main thread (blocking, event loop-safe)
+            self.sink.speak(response_text)
+            
+            # Wait for monitor thread to finish
+            monitor_thread.join(timeout=30)
             
             if interrupt_detected:
                 self.logger.info("[Interrupt] TTS interrupted by user")
