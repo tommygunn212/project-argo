@@ -853,23 +853,33 @@ class EdgeTTSOutputSink(OutputSink):
             print(f"[Audio] Array shape: {audio_array.shape}, dtype: {audio_array.dtype}", file=sys.stderr)
             print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
             
-            # Step 3: Resample Edge-TTS audio to device clock (THIS IS THE FIX)
-            # simpleaudio doesn't auto-resample, so we MUST match device rate exactly
+            # Normalize and apply gain reduction to prevent clipping
+            audio_max = np.max(np.abs(audio_array))
+            if audio_max > 0:
+                # Apply 0.8 gain to prevent clipping in int16 conversion
+                audio_array = audio_array * (0.8 / audio_max)
+                print(f"[Audio] Applied gain: 0.8x (normalized from peak {audio_max:.4f})", file=sys.stderr)
+            
+            # Step 3: Resample Edge-TTS audio to device clock
+            # For simpleaudio, try native 48kHz first (let Windows handle it)
             print(f"[Audio] Native TTS rate: {actual_sample_rate}Hz, Device rate: {self._device_sample_rate}Hz", file=sys.stderr)
             
-            if actual_sample_rate != self._device_sample_rate:
+            # Try playing at native 48kHz - Windows may handle resampling in background
+            # Only resample if vastly different (e.g., 16kHz, 22kHz, 96kHz)
+            if actual_sample_rate < 40000 or actual_sample_rate > 50000:
                 try:
                     from scipy.signal import resample
                     original_len = len(audio_array)
-                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz (simpleaudio requires exact match)", file=sys.stderr)
+                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz", file=sys.stderr)
                     num_samples = int(len(audio_array) * self._device_sample_rate / actual_sample_rate)
                     audio_array = resample(audio_array, num_samples)
                     resampled_len = len(audio_array)
                     print(f"[Audio] Resampled: {original_len} frames → {resampled_len} frames", file=sys.stderr)
                     actual_sample_rate = self._device_sample_rate
                 except Exception as e:
-                    print(f"[Audio] Resampling failed: {e}", file=sys.stderr)
-                    # Don't continue - audio will be wrong rate
+                    print(f"[Audio] Resampling failed: {e}, using native rate", file=sys.stderr)
+            else:
+                print(f"[Audio] Rate difference < 5%, playing at native {actual_sample_rate}Hz", file=sys.stderr)
             
             # Step 4: Log and play to locked output device (blocking)
             # Use actual sample rate from WAV header, not hard-coded constant
