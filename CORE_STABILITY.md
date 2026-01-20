@@ -314,7 +314,7 @@ This declaration locks the foundation for v1.0.0-voice-core.
 5. Foundation must be maintained for all future releases
 
 **Locked Date:** January 18, 2026  
-**Locked By:** Bob (ARGO maintainer)  
+**Locked By:** Tommy Gunn (ARGO maintainer)  
 **Timestamp:** 20:30 UTC
 
 ---

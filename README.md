@@ -290,7 +290,7 @@ ARGO is open-source. See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-**Bob** — Architecture, implementation, documentation  
+**Tommy Gunn** — Creator and architecture  
 **January 2026** — v1.0.0 release
 
 ---

@@ -345,7 +345,7 @@ def transcribe_and_confirm(...):
 
 ```
 commit 4bf9803c...
-Author: Bob <bob@example.com>
+Author: Tommy Gunn <tommy@example.com>
 Date:   Sat Jan 18 2026 16:00:00 +0000
 
     Phase 7B-2: State machine + OutputSink integration in wrapper (52+14 tests passing)
