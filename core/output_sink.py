@@ -693,11 +693,21 @@ class EdgeTTSOutputSink(OutputSink):
         """Initialize WASAPI backend for stable M-Audio playback."""
         try:
             import sounddevice as sd
-            # Set WASAPI as the preferred backend (shared mode is more stable)
-            sd.default.hostapi = 'Windows WASAPI'
-            print(f"[Audio] WASAPI backend initialized", file=sys.stderr)
+            # Try to set WASAPI as backend
+            try:
+                sd.default.hostapi = 'Windows WASAPI'
+                print(f"[Audio] WASAPI backend initialized", file=sys.stderr)
+            except (AttributeError, TypeError):
+                # Fallback: enumerate hostapis and use WASAPI if available
+                hostapis = sd.query_hostapis()
+                for api in hostapis:
+                    if 'WASAPI' in api.get('name', ''):
+                        sd.default.hostapi = api['index']
+                        print(f"[Audio] WASAPI backend set (index {api['index']})", file=sys.stderr)
+                        return
+                print(f"[Audio] WASAPI not available, using default backend", file=sys.stderr)
         except Exception as e:
-            print(f"[Audio] Warning: Could not set WASAPI backend: {e}", file=sys.stderr)
+            print(f"[Audio] Warning: Backend initialization: {e}", file=sys.stderr)
     
     def __init__(self, voice: str = "en-US-AriaNeural", rate: int = 0, pitch: int = 0):
         """
@@ -844,29 +854,31 @@ class EdgeTTSOutputSink(OutputSink):
             print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
             
             # Step 3: Resample Edge-TTS audio to device clock (THIS IS THE FIX)
-            # Prevents static, squeaks, and micro-duration cutoff
-            if actual_sample_rate != self._device_sample_rate:
+            # Skip resampling if rates are close (48kHz vs 44.1kHz difference negligible)
+            # Try playing native rate first to diagnose
+            print(f"[Audio] Native TTS rate: {actual_sample_rate}Hz, Device rate: {self._device_sample_rate}Hz", file=sys.stderr)
+            
+            # Only resample if significantly different (not just 48k vs 44.1k)
+            if abs(actual_sample_rate - self._device_sample_rate) > 5000:
                 try:
-                    from scipy.signal import resample_poly
+                    from scipy.signal import resample
+                    original_len = len(audio_array)
                     print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz", file=sys.stderr)
-                    audio_array = resample_poly(
-                        audio_array,
-                        self._device_sample_rate,
-                        actual_sample_rate
-                    )
+                    num_samples = int(len(audio_array) * self._device_sample_rate / actual_sample_rate)
+                    audio_array = resample(audio_array, num_samples)
+                    resampled_len = len(audio_array)
+                    print(f"[Audio] Resampled: {original_len} frames → {resampled_len} frames", file=sys.stderr)
                     actual_sample_rate = self._device_sample_rate
-                except ImportError:
-                    print(f"[Audio] scipy not available for resampling, using native rate", file=sys.stderr)
                 except Exception as e:
-                    print(f"[Audio] Resampling failed: {e}, continuing with native rate", file=sys.stderr)
+                    print(f"[Audio] Resampling skipped: {e}", file=sys.stderr)
             
             # Step 4: Log and play to locked output device (blocking)
             # Use actual sample rate from WAV header, not hard-coded constant
             print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
-            # Pre-buffer audio to prevent underrun (50ms buffer)
+            # Pre-buffer audio to prevent underrun (100ms buffer for M-Audio)
             import time
-            time.sleep(0.05)
+            time.sleep(0.1)
             
             # Step 4: Force correct playback parameters
             import sounddevice as sd
