@@ -632,4 +632,10 @@ class Coordinator:
                 
                 time.sleep(monitor_interval)
             
-            # Wait for speak thread to finish (or timeout if interrupted)
+            # Wait for speak thread to finish (or timeout if interrupted)            speak_thread.join(timeout=30)
+            
+            if interrupt_detected:
+                self.logger.info("[Interrupt] TTS interrupted by user")
+        
+        except Exception as e:
+            self.logger.error(f"[Interrupt] Error during interrupt detection: {e}")
