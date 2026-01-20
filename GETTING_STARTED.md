@@ -1,228 +1,290 @@
-# ARGO — Getting Started
+# ARGO — Getting Started (Voice Pipeline)
 
-A step-by-step guide to install and run ARGO locally.
+**Complete voice-first AI system: Wake word → Record → Transcribe → LLM → Speak**
+
+This guide walks you through setting up and running ARGO's production voice pipeline.
+
+---
 
 ## System Requirements
 
-- **OS:** Windows 10/11 (setup optimized for PowerShell)
-- **Python:** 3.9 or later
-- **Ollama:** Running locally (https://ollama.ai)
-- **RAM:** 4GB minimum (8GB+ recommended for larger models)
+- **OS:** Windows 10/11 (PowerShell preferred)
+- **Python:** 3.9+ 
+- **RAM:** 4GB minimum, 8GB+ recommended
+- **Microphone:** Any USB audio device (Brio 500, built-in, etc.)
+- **Speakers:** Any audio output device
+- **Internet:** Only needed for initial Porcupine access key verification
+
+### Hardware Tested ✅
+- **Microphone:** Brio 500 USB (16kHz capture)
+- **Speakers:** M-Audio M-Track (44.1kHz), DELL S2721Q display audio
+- **CPU:** Intel/AMD (no GPU required)
+
+---
 
 ## Prerequisites
 
 Before starting, ensure you have:
 
-1. **Python 3.9+** installed and in your PATH
-   ```powershell
-   python --version
-   ```
+### 1. Python 3.9+
+```powershell
+python --version
+# Output: Python 3.9.x or later
+```
 
-2. **Ollama** installed and the service running
-   - Download from https://ollama.ai
-   - Run: `ollama serve` in a terminal
-   - Verify: `ollama list` (should show available models)
-   - Pull a model: `ollama pull mistral` (or use HAL if configured)
+### 2. Ollama (Local LLM Runtime)
+- Download from https://ollama.ai
+- Start the service:
+  ```powershell
+  ollama serve
+  ```
+- In another terminal, pull the Argo model:
+  ```powershell
+  ollama pull argo:latest
+  # Or: ollama run argo:latest (will pull if needed)
+  ```
+- Verify it's running:
+  ```powershell
+  curl http://localhost:11434/api/tags
+  ```
 
-3. **Git** (optional, for cloning the repository)
+### 3. Porcupine Access Key
+- Get free access key from https://console.picovoice.ai
+- Store in environment variable:
+  ```powershell
+  $env:PORCUPINE_ACCESS_KEY = "your-access-key-here"
+  ```
+- Make it permanent (add to your PowerShell profile):
+  ```powershell
+  Add-Content $PROFILE "`n`$env:PORCUPINE_ACCESS_KEY = 'your-access-key-here'"
+  ```
 
-## Installation Steps
+### 4. Audio Devices
+Verify your microphone and speakers work:
+```powershell
+# List all audio devices
+python -c "import sounddevice; print(sounddevice.query_devices())"
 
-### Step 1: Clone or Download ARGO
+# Record 2 seconds and play back
+python -c "import sounddevice as sd; import numpy as np; audio = sd.rec(32000, samplerate=16000); sd.wait(); sd.play(audio, samplerate=16000); sd.wait()"
+```
 
-Clone the repository:
+## Installation
+
+### Step 1: Clone Repository
 ```powershell
 git clone <repository-url> argo
 cd argo
 ```
 
-Or download the ZIP and extract it.
-
-### Step 2: Run Setup Script (Windows)
-
-PowerShell:
+### Step 2: Create Virtual Environment
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser  # Allow local scripts
-.\setup.ps1
+python -m venv .venv
 ```
 
-This script will:
-- Check Python version
-- Create a virtual environment (`.venv`)
-- Install dependencies from `requirements.txt`
-
-### Step 3: Manual Setup (If Script Fails)
-
-If the setup script doesn't work, follow these steps manually:
-
-1. **Create virtual environment:**
-   ```powershell
-   python -m venv .venv
-   ```
-
-2. **Activate virtual environment:**
-   ```powershell
-   .\.venv\Scripts\Activate.ps1
-   ```
-   
-   (You should see `(.venv)` at the start of your prompt)
-
-3. **Install dependencies:**
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-4. **Optional: Install async testing support**
-   ```powershell
-   pip install pytest-asyncio
-   ```
-
-## Running ARGO
-
-### Ensure Ollama is Running
-
-In a separate terminal:
-```powershell
-ollama serve
-```
-
-Or verify it's already running:
-```powershell
-ollama list
-```
-
-### Activate Virtual Environment
-
+### Step 3: Activate Virtual Environment
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-### Run ARGO CLI
+You should see `(.venv)` at the start of your prompt.
 
-```powershell
-python wrapper/argo.py
-```
-
-You'll see a prompt:
-```
-ARGO >
-```
-
-Try a simple command:
-```
-ARGO > tell me what you are
-```
-
-### Run Input Shell (Web Interface)
-
-Start the web-based input shell on `http://localhost:8000`:
-
-```powershell
-cd input_shell
-python -m uvicorn app:app --host 127.0.0.1 --port 8000
-```
-
-Then open http://127.0.0.1:8000 in your browser.
-
-## Running Tests
-
-### Latency Tests
-
-Verify the latency framework is working:
-```powershell
-python -m pytest tests/test_latency.py -v
-```
-
-Expected output: **14 passed, 4 skipped** (skipped tests require pytest-asyncio)
-
-### All Tests
-
-Run the full test suite:
-```powershell
-python -m pytest tests/ -v
-```
-
-### Specific Test Module
-
-Test a specific component:
-```powershell
-python -m pytest tests/test_budget_enforcer.py -v
-python -m pytest tests/test_regression_guard.py -v
-```
-
-## Component Architecture
-
-ARGO consists of several components:
-
-### Core Runtime (`runtime/`)
-
-- **latency_controller.py** — Profiling and latency measurement (8 checkpoints, 3 profiles)
-- **ollama/hal_chat.py** — Direct Ollama REST API interface
-
-### Wrapper (`wrapper/`)
-
-- **argo.py** — Main CLI interface and orchestration
-- **transcription.py** — Whisper-based audio transcription
-- **intent.py** — Intent classification and parsing
-
-### Input Shell (`input_shell/`)
-
-- **app.py** — FastAPI web interface
-- **requirements.txt** — Web-specific dependencies
-
-### Memory & Storage (`memory/`)
-
-- Conversation logs and preferences
-- Baseline latency measurements
-
-## Troubleshooting
-
-### "Python not found"
-
-Make sure Python is installed and in your PATH:
-```powershell
-python --version
-```
-
-If not in PATH, reinstall Python and check "Add Python to PATH" during installation.
-
-### "Ollama connection refused"
-
-Ollama must be running in the background:
-```powershell
-ollama serve
-```
-
-Verify it's running:
-```powershell
-ollama list
-```
-
-### "ModuleNotFoundError: No module named 'requests'"
-
-Ensure you've activated the virtual environment:
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-And that dependencies are installed:
+### Step 4: Install Dependencies
 ```powershell
 pip install -r requirements.txt
 ```
 
-### "Port 8000 already in use"
-
-If the web interface won't start on port 8000, use a different port:
+### Step 5: Verify Installation
 ```powershell
-python -m uvicorn app:app --host 127.0.0.1 --port 8001
+# Test imports
+python -c "from core.coordinator import Coordinator; print('[OK] Coordinator imported')"
+python -c "from core.input_trigger import PorcupineWakeWordTrigger; print('[OK] Porcupine imported')"
+python -c "from core.output_sink import PiperOutputSink; print('[OK] Piper imported')"
 ```
 
-Then access it at http://127.0.0.1:8001
+## Quick Start (5 minutes)
 
-### "Whisper download fails"
-
-The first time you use Whisper, it downloads a model. This can take a few minutes:
+### Terminal 1: Start Ollama
 ```powershell
+ollama serve
+```
+
+Leave this running. You should see:
+```
+Listening on 127.0.0.1:11434
+```
+
+### Terminal 2: Run ARGO Voice Pipeline
+```powershell
+cd i:\argo
+.\.venv\Scripts\Activate.ps1
+python run_coordinator_v2.py
+```
+
+You'll see:
+```
+[*] Initializing pipeline layers...
+[OK] All layers initialized
+[*] Waiting for wake word...
+    Speak 'hello' or 'computer' to trigger
+```
+
+### Now Interact With ARGO
+
+**Step 1:** Speak the wake word
+```
+"Hello" or "Computer"
+```
+You'll hear a confirmation beep (Porcupine trigger)
+
+**Step 2:** Ask a question or give a command
+```
+"Can you count to ten?"
+"What time is it?"
+"Tell me a joke"
+"Stop"
+```
+
+**Step 3:** Wait for response
+- System records until you stop speaking (1.5s of silence detected)
+- Whisper transcribes your speech
+- LLM generates response
+- Piper synthesizes and plays audio
+- System returns to listening
+
+**Step 4:** Interrupt if desired
+- Speak anytime during playback to interrupt
+- System stops and returns to listening
+
+**Step 5:** Exit the system
+- Say: "stop", "goodbye", "quit", or "exit"
+- Or press: Ctrl+C
+
+## Example Interactions
+
+### Interaction 1: Counting
+```
+YOU:    "Can you count to five?"
+SYSTEM: [records 1.5s] [transcribes] [generates response] 
+ARGO:   "Counting to five: one, two, three, four, five."
+```
+
+### Interaction 2: Interrupt
+```
+YOU:    "Tell me a long story about..."
+ARGO:   [starts playing] "Once upon a time..."
+YOU:    [interrupt by speaking] "Stop!"
+SYSTEM: [stops playback immediately] [returns to listening]
+```
+
+### Interaction 3: Short Question
+```
+YOU:    "What is AI?"
+SYSTEM: [records 1.5s] [transcribes]
+ARGO:   "AI stands for Artificial Intelligence..."
+```
+
+---
+
+## Configuration
+
+### .env File
+Create or update `.env` with:
+```
+VOICE_ENABLED=true
+PIPER_ENABLED=true
+PIPER_PATH=audio/piper/piper/piper.exe
+PORCUPINE_ACCESS_KEY=<your-key-from-picovoice>
+OLLAMA_API_URL=http://localhost:11434
+```
+
+### Tunable Parameters (core/coordinator.py)
+
+Edit these for different behavior:
+
+```python
+# Recording settings
+MAX_RECORDING_DURATION = 15      # Max seconds to record
+SILENCE_DURATION = 1.5           # Seconds of silence to stop
+SILENCE_THRESHOLD = 500          # RMS level (lower = more sensitive)
+
+# Loop settings
+MAX_INTERACTIONS = 3             # Interactions per session
+STOP_KEYWORDS = ["stop", "goodbye", "quit", "exit"]
+
+# Audio settings
+AUDIO_SAMPLE_RATE = 16000        # Hz (Whisper standard)
+```
+
+## Verify Everything Works
+
+Run this diagnostic:
+
+```powershell
+# 1. Check Ollama
+curl http://localhost:11434/api/tags
+# Should show argo:latest in the list
+
+# 2. Check Porcupine key
+echo $env:PORCUPINE_ACCESS_KEY
+# Should show your access key
+
+# 3. Check audio devices
+python -c "import sounddevice; print(sounddevice.default.device)"
+
+# 4. Test full pipeline
+python run_coordinator_v2.py
+# Try: "Hello computer, can you hear me?"
+# Should transcribe and respond
+```
+
+---
+
+## Troubleshooting Quick Fixes
+
+### "Porcupine access key not found"
+```powershell
+$env:PORCUPINE_ACCESS_KEY = "your-key-here"
+```
+
+### "Ollama connection refused"
+```powershell
+# Terminal 1
+ollama serve
+
+# Terminal 2 (new), verify it's running
+ollama list
+```
+
+### "No module named 'sounddevice'"
+```powershell
+pip install sounddevice
+```
+
+### "Piper executable not found"
+```powershell
+# Verify piper exists
+ls audio/piper/piper/piper.exe
+
+# Or download it
+python -m piper.download_voices --voice en_US-lessac-medium
+```
+
+### "No microphone detected"
+```powershell
+# List devices
+python -c "import sounddevice; print(sounddevice.query_devices())"
+
+# Use specific device (change index)
+# Edit core/coordinator.py, line ~180:
+# stream = sd.InputStream(device=2, ...)  # Use device index 2
+```
+
+### "Whisper model not downloaded"
+```powershell
+# First run downloads ~140MB model (takes a few minutes)
+# Subsequent runs use cached model
+# Can pre-download:
 python -c "import whisper; whisper.load_model('base')"
 ```
 
@@ -230,86 +292,185 @@ python -c "import whisper; whisper.load_model('base')"
 
 ```
 argo/
-├── README.md                          # Project overview
-├── GETTING_STARTED.md                 # This file
-├── ARCHITECTURE.md                    # System architecture details
-├── requirements.txt                   # Core Python dependencies
-├── setup.ps1                          # Windows setup script
+├── README.md                              # Project overview
+├── GETTING_STARTED.md                     # This file ✓
+├── RELEASE_NOTES_v1_0_0_COMPLETE.md      # Release notes
+├── MILESTONE_VOICE_PIPELINE_COMPLETE.md  # Milestone doc
 │
-├── wrapper/
-│   ├── argo.py                        # Main CLI interface
-│   ├── transcription.py               # Whisper transcription
-│   └── intent.py                      # Intent parsing
+├── run_coordinator_v2.py                  # Main entry point ⭐
+├── .env                                   # Configuration
 │
-├── runtime/
-│   ├── latency_controller.py          # Profiling framework
-│   └── ollama/
-│       └── hal_chat.py                # Ollama interface
+├── core/
+│   ├── coordinator.py                     # Main orchestrator
+│   ├── input_trigger.py                   # Porcupine wake word
+│   ├── speech_to_text.py                  # Whisper transcription
+│   ├── intent_parser.py                   # Intent classification
+│   ├── response_generator.py              # Ollama LLM
+│   ├── output_sink.py                     # Piper TTS + playback
+│   ├── session_memory.py                  # Conversation history
+│   └── latency_probe.py                   # Profiling
 │
-├── input_shell/
-│   ├── app.py                         # FastAPI web interface
-│   ├── requirements.txt               # Web dependencies
-│   └── README.md                      # Web interface docs
+├── audio/
+│   └── piper/
+│       └── piper/piper.exe                # TTS executable
+│       └── voices/                        # Voice models
 │
-├── memory/
-│   ├── logs/                          # Conversation history
-│   └── rag/                           # Retrieval-augmented generation
+├── backups/
+│   └── milestone_20260120_002245/         # Snapshot
 │
-├── tests/
-│   ├── test_latency.py                # Latency framework tests
-│   ├── test_budget_enforcer.py        # Budget enforcement tests
-│   └── test_regression_guard.py       # Regression detection tests
-│
-├── docs/
-│   ├── README.md                      # Documentation index
-│   ├── architecture/                  # Architecture deep-dives
-│   ├── specs/                         # Feature specifications
-│   └── usage/                         # Usage guides
-│
-└── baselines/
-    └── (latency baselines, populated after first run)
+└── requirements.txt                       # Python dependencies
 ```
-
-## Next Steps
-
-1. **Read the Architecture Overview:**
-   ```
-   Open: ARCHITECTURE.md
-   ```
-
-2. **Explore Documentation:**
-   ```
-   Open: docs/README.md
-   ```
-
-3. **Run Examples:**
-   - CLI: `python wrapper/argo.py`
-   - Web: `cd input_shell && python -m uvicorn app:app --host 127.0.0.1 --port 8000`
-
-4. **Check Latency Profiles:**
-   - FAST profile (≤2s first-token, ≤6s total)
-   - ARGO profile (≤3s first-token, ≤10s total)
-   - VOICE profile (≤3s first-token, ≤15s total)
-
-## Notes for Future Automated Setup
-
-An automated installation script is planned for:
-- Dependency checking and installation
-- Ollama configuration and model pulling
-- Virtual environment creation
-- Systemd/Task Scheduler integration for persistent server mode
-- Cross-platform support (Windows, Linux, macOS)
-
-For now, manual setup is required. File an issue if you encounter problems.
-
-## Support
-
-For issues or questions:
-1. Check [ISSUES_HISTORY.md](ISSUES_HISTORY.md) for common problems
-2. Review [docs/README.md](docs/README.md) for detailed documentation
-3. Check test files for usage examples
 
 ---
 
-**Last Updated:** 2026-01-18  
-**Status:** Manual setup verified. Auto-install planned for v1.4.8+
+## How It Works (Under the Hood)
+
+### The Pipeline
+
+1. **Wake Word Detection (Porcupine)**
+   - Listens continuously for "hello" or "computer"
+   - Runs locally, ~0ms latency
+
+2. **Dynamic Audio Recording**
+   - Records until 1.5 seconds of silence detected
+   - Max 15 seconds (safety limit)
+   - Adaptive: short questions = fast recording, long explanations = full capture
+
+3. **Speech-to-Text (Whisper)**
+   - Transcribes at 16kHz mono
+   - Base model on CPU: ~500-700ms
+
+4. **Intent Classification (Rule-Based)**
+   - COMMAND: "count to five" (executes)
+   - QUESTION: "what is AI?" (answers)
+   - GREETING: "hello" (greets)
+   - UNKNOWN: fallback response
+
+5. **LLM Response (Ollama Qwen)**
+   - Generates response with 2000 token budget
+   - Temperature 0.7 (balanced creativity)
+   - Typical: ~1-3 seconds
+
+6. **Text-to-Speech (Piper)**
+   - Synthesizes response locally
+   - 22.05 kHz audio
+   - Typical: ~5-8 seconds for full response
+
+7. **Audio Playback**
+   - Plays to default speaker
+   - Monitors for voice activity (interrupt detection)
+   - Clean audio, zero squeal ✅
+
+8. **Interrupt Detection**
+   - Polls every 200ms during playback
+   - If voice detected, stops TTS and returns to listening
+   - Allows natural conversation flow
+
+---
+
+## Performance Expectations
+
+### Latency Profile
+- **Wake to response:** ~9 seconds total
+  - Recording: 1.5s (was 6s) ⚡
+  - Transcription: ~600ms
+  - LLM: ~1-2s
+  - TTS: ~5-7s
+  - Playback: real-time
+
+### Audio Quality
+- **Sample rate:** 22.05 kHz (Piper standard)
+- **Duration:** 7-8 seconds for full count response
+- **Clarity:** Natural, clear speech
+- **Squeal:** None (offline Piper mode) ✅
+
+### Resource Usage
+- **CPU:** 30-50% during transcription
+- **RAM:** ~500MB typical
+- **GPU:** Not required (CPU mode)
+- **Network:** Only for initial Porcupine key check
+---
+
+## Advanced Usage
+
+### Run with Custom Output Device
+```powershell
+# Edit core/coordinator.py
+# In __init__, add:
+import sounddevice as sd
+sd.default.device = 2  # Use device index 2 (from query_devices)
+```
+
+### Change Recording Sensitivity
+```powershell
+# Edit core/coordinator.py
+SILENCE_THRESHOLD = 300  # Lower = more sensitive (false stops)
+SILENCE_THRESHOLD = 700  # Higher = less sensitive (wait longer)
+```
+
+### Extend Context Window
+```powershell
+# Edit core/coordinator.py
+MAX_INTERACTIONS = 5     # Up to 5 turns instead of 3
+```
+
+### Use Different Voice Model
+```powershell
+# Edit .env
+PIPER_VOICE_MODEL=en_US-libritts-high  # Different voice (if downloaded)
+
+# Download new voice
+python -m piper.download_voices --voice en_US-libritts-high
+```
+
+---
+
+## Next Steps
+
+1. **Explore the code:**
+   - Read [MILESTONE_VOICE_PIPELINE_COMPLETE.md](MILESTONE_VOICE_PIPELINE_COMPLETE.md) for architecture
+   - Check [core/coordinator.py](core/coordinator.py) for orchestration logic
+
+2. **Monitor latency:**
+   - Check console output for profiling data
+   - Each interaction shows: recording, STT, LLM, TTS times
+
+3. **Customize responses:**
+   - Edit [core/intent_parser.py](core/intent_parser.py) for intent rules
+   - Edit [core/response_generator.py](core/response_generator.py) for LLM prompts
+
+4. **Deploy to production:**
+   - Run as scheduled task (Windows Task Scheduler)
+   - Or as service (systemd on Linux)
+
+---
+
+## Getting Help
+
+- **Won't start?** → See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- **Audio issues?** → Check [TROUBLESHOOTING.md#audio-devices](TROUBLESHOOTING.md#audio-devices)
+- **LLM not responding?** → Verify Ollama: `ollama list`
+- **Squeal/feedback?** → Try different speaker device
+- **Recording too short/long?** → Adjust `SILENCE_THRESHOLD` and `SILENCE_DURATION`
+
+---
+
+## What's Different From v0.x?
+
+| Feature | v0.x | v1.0.0 |
+|---------|------|--------|
+| Wake word | ❌ | ✅ Porcupine |
+| Recording | 6s fixed | 1.5s dynamic ⚡ |
+| TTS | Edge-TTS (squeal) | Piper (clean) ✅ |
+| Response length | "Sure" only | Full responses ✅ |
+| Interrupt | ❌ | ✅ Voice detection |
+| Latency | 17s+ | ~9s ⚡ |
+| Squeal | ✅ (bad) | ❌ (fixed) |
+
+---
+
+**Status:** ✅ Production-ready  
+**Last Updated:** January 20, 2026  
+**Version:** v1.0.0-voice-complete
+
+**Ready to start?** → Run `python run_coordinator_v2.py` and say "Hello!"
