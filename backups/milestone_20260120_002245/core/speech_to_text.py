@@ -1,0 +1,110 @@
+"""
+Speech-to-Text Module
+
+Responsibility: Accept audio, return text.
+Nothing more.
+
+Does NOT:
+- Decide what the text means (no intent parsing)
+- Trigger actions (no Coordinator integration)
+- Handle wake words (input boundary only)
+- Retry or stream (transcribe once, return once)
+- Maintain memory or personality (stateless transcription)
+"""
+
+from abc import ABC, abstractmethod
+
+
+class SpeechToText(ABC):
+    """
+    Base class for speech-to-text engines.
+    
+    Single responsibility: Convert audio to text.
+    """
+
+    @abstractmethod
+    def transcribe(self, audio_data: bytes, sample_rate: int) -> str:
+        """
+        Transcribe audio bytes to text.
+
+        Args:
+            audio_data: Raw audio bytes (WAV or similar format)
+            sample_rate: Sample rate of audio (typically 16000 Hz)
+
+        Returns:
+            Transcribed text (single transcription, no streaming)
+
+        Raises:
+            ValueError: If audio is empty or invalid
+        """
+        pass
+
+
+class WhisperSTT(SpeechToText):
+    """
+    OpenAI Whisper-based local speech-to-text.
+    
+    Uses the 'base' model for balance between accuracy and speed.
+    Hardcoded settings for predictability.
+    """
+
+    def __init__(self):
+        """Initialize Whisper model (downloads on first run)."""
+        try:
+            import whisper
+        except ImportError:
+            raise ImportError(
+                "whisper not installed. Run: pip install openai-whisper"
+            )
+
+        self.whisper = whisper
+        # Load base model (reasonable size, reasonable accuracy)
+        # Hardcoded for predictability
+        self.model = whisper.load_model("base")
+
+    def transcribe(self, audio_data: bytes, sample_rate: int) -> str:
+        """
+        Transcribe audio bytes using Whisper.
+
+        Args:
+            audio_data: Raw audio bytes (WAV format)
+            sample_rate: Sample rate (e.g., 16000)
+
+        Returns:
+            Transcribed text
+
+        Raises:
+            ValueError: If audio is empty
+        """
+        if not audio_data:
+            raise ValueError("audio_data is empty")
+
+        # Write to temp file (Whisper expects file path or numpy array)
+        import tempfile
+        import numpy as np
+        import io
+        from scipy.io import wavfile
+
+        # Parse WAV bytes to numpy array
+        try:
+            sample_rate_from_file, audio_array = wavfile.read(
+                io.BytesIO(audio_data)
+            )
+            # Convert stereo to mono if needed
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            # Normalize to float32 [-1, 1]
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32) / 32768.0
+        except Exception as e:
+            raise ValueError(f"Failed to parse audio: {e}")
+
+        # Transcribe
+        result = self.model.transcribe(
+            audio_array,
+            language="en",
+            verbose=False,
+        )
+
+        text = result.get("text", "").strip()
+        return text

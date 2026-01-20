@@ -432,23 +432,19 @@ class PiperOutputSink(OutputSink):
     
     async def _stream_audio_data(self, process, text: str, time_module=None, time_start=None) -> None:
         """
-        Internal: read ALL audio data from Piper subprocess before playback.
+        Internal: stream audio frames from Piper subprocess and play incrementally.
         
-        CRITICAL FIX: Use proper blocking read to get COMPLETE audio, then play.
-        
-        Previous bug: streaming playback race condition where playback task finished
-        before all frames were read, causing truncation at "Sure!".
-        
-        This fix:
-        - Reads ALL audio from Piper synchronously (blocking until EOF)
-        - Only starts playback after entire response is synthesized
-        - Eliminates race condition completely
-        - Trades 100-200ms latency for guaranteed complete audio
+        Implements PHASE 7A-2 streaming:
+        - Reads raw PCM frames from subprocess stdout (don't block on full completion)
+        - Buffers frames incrementally
+        - Once buffer reaches threshold, starts playback while continuing to read
+        - Continues reading any additional frames after playback starts
+        - Reduces time-to-first-audio (TTFA) significantly
         
         Key metrics (from profiling):
-        - time-to-all-audio: time until ALL frames received from Piper
-        - playback_start: time when playback begins (after all data received)
-        - streaming_complete: time when audio fully played out
+        - time-to-first-audio: time from request to first frame available
+        - playback_start: time when we have enough buffered to begin playback
+        - streaming_complete: time when all frames read and audio fully synthesized
         
         Args:
             process: asyncio subprocess with stdout=PIPE
@@ -459,29 +455,72 @@ class PiperOutputSink(OutputSink):
         try:
             import numpy as np
             
+            # Read audio in chunks (frame size for streaming)
             # Piper outputs raw PCM int16 @ 22050 Hz mono
+            # Frame size: 22050 / 10 = 2205 samples = 4410 bytes per 100ms chunk
+            FRAME_SIZE_BYTES = 4410  # ~100ms of audio at 22050 Hz
             SAMPLE_RATE = 22050
-            SAMPLE_WIDTH = 2  # int16 = 2 bytes
+            BUFFER_THRESHOLD = 2  # Need at least 200ms buffered before playback
             
-            # Read ALL audio bytes from Piper process until EOF
-            # This is BLOCKING (waits for Piper to finish synthesis entirely)
-            all_audio_bytes = await process.stdout.read()
-            bytes_received = len(all_audio_bytes)
+            audio_frames = []
+            bytes_received = 0
+            first_frame_received = False
+            playback_task = None
             
-            if self._profiling_enabled and time_module:
-                time_all_audio = time_module.time()
-                latency = (time_all_audio - time_start) * 1000
-                num_samples = bytes_received // SAMPLE_WIDTH
-                duration_sec = num_samples / SAMPLE_RATE
-                print(f"[PIPER_PROFILING] all_audio_received: {bytes_received} bytes ({num_samples} samples, {duration_sec:.2f}s) @ {latency:.1f}ms")
+            # Read all frames from Piper (non-blocking to event loop)
+            while True:
+                try:
+                    # Read one frame (non-blocking to event loop)
+                    frame = await process.stdout.readexactly(FRAME_SIZE_BYTES)
+                    bytes_received += len(frame)
+                    audio_frames.append(frame)
+                    
+                    if not first_frame_received:
+                        first_frame_received = True
+                        if self._profiling_enabled and time_module:
+                            time_first_frame = time_module.time()
+                            latency = (time_first_frame - time_start) * 1000
+                            print(f"[PIPER_PROFILING] first_audio_frame_received: {bytes_received} bytes @ {latency:.1f}ms latency")
+                    
+                    # Once we have enough frames, start playback (don't wait for full synthesis)
+                    if playback_task is None and len(audio_frames) >= BUFFER_THRESHOLD:
+                        if self._profiling_enabled and time_module:
+                            time_playback_start = time_module.time()
+                            latency = (time_playback_start - time_start) * 1000
+                            buffered_bytes = len(audio_frames) * FRAME_SIZE_BYTES
+                            print(f"[PIPER_PROFILING] playback_started: {buffered_bytes} bytes buffered @ {latency:.1f}ms latency")
+                        
+                        # Start playback in background (don't block frame reading)
+                        playback_task = asyncio.create_task(
+                            self._stream_to_speaker(audio_frames, SAMPLE_RATE)
+                        )
+                
+                except asyncio.IncompleteReadError as e:
+                    # EOF reached (partial frame or end of stream)
+                    if e.partial:
+                        audio_frames.append(e.partial)
+                        bytes_received += len(e.partial)
+                    break
+                except asyncio.LimitOverrunError:
+                    # Buffer limit, read what we can
+                    frame = await process.stdout.read(FRAME_SIZE_BYTES)
+                    if not frame:
+                        break
+                    audio_frames.append(frame)
+                    bytes_received += len(frame)
             
-            # Validate we got audio data
-            if not all_audio_bytes:
-                print(f"[AUDIO_WARNING] No audio bytes from Piper for: {text[:50]}", file=sys.stderr)
-                return
-            
-            # Play the complete audio once we have it all
-            await self._stream_to_speaker_complete([all_audio_bytes], SAMPLE_RATE)
+            # If playback never started (response too short), play now
+            if playback_task is None and audio_frames:
+                if self._profiling_enabled:
+                    print(f"[PIPER_PROFILING] playback_deferred: response too short, starting now with {len(audio_frames) * FRAME_SIZE_BYTES} bytes")
+                await self._stream_to_speaker(audio_frames, SAMPLE_RATE)
+            elif playback_task is not None:
+                # Playback already started, wait for it to complete
+                try:
+                    await playback_task
+                except asyncio.CancelledError:
+                    playback_task.cancel()
+                    raise
             
             if self._profiling_enabled and time_module:
                 time_end = time_module.time()
@@ -497,13 +536,11 @@ class PiperOutputSink(OutputSink):
             print(f"[AUDIO_ERROR] Stream error: {type(e).__name__}: {e}", file=sys.stderr)
             raise
     
-    async def _stream_to_speaker_complete(self, audio_frame_list: list, sample_rate: int) -> None:
+    async def _stream_to_speaker(self, audio_frames: list, sample_rate: int) -> None:
         """
-        Internal: play complete audio data to speaker device.
+        Internal: stream audio frames to speaker device using sounddevice.
         
-        Args:
-            audio_frame_list: List containing one or more byte strings of PCM audio
-            sample_rate: Sample rate in Hz (22050 for Piper)
+        Plays audio chunks as they're received, enabling incremental playback.
         """
         try:
             import sounddevice
@@ -516,7 +553,7 @@ class PiperOutputSink(OutputSink):
             import numpy as np
             
             # Convert all collected frames to numpy array
-            audio_bytes = b''.join(audio_frame_list)
+            audio_bytes = b''.join(audio_frames)
             audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             
             if self._profiling_enabled:
@@ -539,14 +576,6 @@ class PiperOutputSink(OutputSink):
                 sounddevice.play(audio_data, samplerate=sample_rate, blocking=True)
                 if self._profiling_enabled:
                     print(f"[PIPER_PROFILING] playback_complete")
-            
-            await loop.run_in_executor(None, play_sync)
-        
-        except Exception as e:
-            print(f"[AUDIO_ERROR] Speaker stream error: {type(e).__name__}: {e}", file=sys.stderr)
-            if self._profiling_enabled:
-                import traceback
-                traceback.print_exc()
             
             await loop.run_in_executor(None, play_sync)
         
