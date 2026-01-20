@@ -854,23 +854,22 @@ class EdgeTTSOutputSink(OutputSink):
             print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
             
             # Step 3: Resample Edge-TTS audio to device clock (THIS IS THE FIX)
-            # Skip resampling if rates are close (48kHz vs 44.1kHz difference negligible)
-            # Try playing native rate first to diagnose
+            # simpleaudio doesn't auto-resample, so we MUST match device rate exactly
             print(f"[Audio] Native TTS rate: {actual_sample_rate}Hz, Device rate: {self._device_sample_rate}Hz", file=sys.stderr)
             
-            # Only resample if significantly different (not just 48k vs 44.1k)
-            if abs(actual_sample_rate - self._device_sample_rate) > 5000:
+            if actual_sample_rate != self._device_sample_rate:
                 try:
                     from scipy.signal import resample
                     original_len = len(audio_array)
-                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz", file=sys.stderr)
+                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz (simpleaudio requires exact match)", file=sys.stderr)
                     num_samples = int(len(audio_array) * self._device_sample_rate / actual_sample_rate)
                     audio_array = resample(audio_array, num_samples)
                     resampled_len = len(audio_array)
                     print(f"[Audio] Resampled: {original_len} frames → {resampled_len} frames", file=sys.stderr)
                     actual_sample_rate = self._device_sample_rate
                 except Exception as e:
-                    print(f"[Audio] Resampling skipped: {e}", file=sys.stderr)
+                    print(f"[Audio] Resampling failed: {e}", file=sys.stderr)
+                    # Don't continue - audio will be wrong rate
             
             # Step 4: Log and play to locked output device (blocking)
             # Use actual sample rate from WAV header, not hard-coded constant
@@ -881,15 +880,38 @@ class EdgeTTSOutputSink(OutputSink):
             time.sleep(0.1)
             
             # Step 4: Force correct playback parameters
-            import sounddevice as sd
-            sd.play(
-                audio_array.astype(np.float32),
-                samplerate=int(actual_sample_rate),
-                device=self._audio_device,
-                blocking=True,
-                blocksize=2048
-            )
-            sd.wait()
+            # Try using simpleaudio instead of sounddevice to avoid driver issues
+            try:
+                import simpleaudio as sa
+                # Convert to int16 PCM for simpleaudio
+                audio_int16 = (np.clip(audio_array, -1.0, 1.0) * 32767).astype(np.int16)
+                
+                print(f"[Audio] Playing with simpleaudio: {len(audio_int16)} samples @ {int(actual_sample_rate)}Hz, int16 codec", file=sys.stderr)
+                
+                # Play using simpleaudio (direct Windows audio, no resampling)
+                playback = sa.play_buffer(
+                    audio_int16,
+                    num_channels=1,
+                    bytes_per_sample=2,
+                    sample_rate=int(actual_sample_rate)
+                )
+                playback.wait_done()
+                print(f"[Audio] Playback complete (simpleaudio)", file=sys.stderr)
+            except ImportError:
+                # Fallback to sounddevice if simpleaudio not available
+                print(f"[Audio] simpleaudio not available, using sounddevice", file=sys.stderr)
+                import sounddevice as sd
+                sd.play(
+                    audio_array.astype(np.float32),
+                    samplerate=int(actual_sample_rate),
+                    device=self._audio_device,
+                    blocking=True,
+                    blocksize=2048
+                )
+                sd.wait()
+                print(f"[Audio] Playback complete (sounddevice)", file=sys.stderr)
+            except Exception as e:
+                print(f"[Audio] Playback failed: {e}", file=sys.stderr)
             
             # Step 5: Ensure playback clock finishes before returning
             import time
