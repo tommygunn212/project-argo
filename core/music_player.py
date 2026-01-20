@@ -161,39 +161,72 @@ class MusicPlayer:
     def _play_background(self, track_path: str) -> None:
         """Play audio in background thread."""
         try:
-            # Try ffplay first (handles all formats: mp3, wav, flac, m4a)
-            import subprocess
-            import shutil
+            # Try Python audio libraries (no external dependency)
+            import os
             
-            # Check if ffplay is available
-            ffplay_path = shutil.which("ffplay")
-            if not ffplay_path:
-                logger.warning(f"[ARGO] ffplay not found in PATH. Install FFmpeg to enable music playback.")
-                self.is_playing = False
-                return
-            
-            logger.info(f"[ARGO] Starting ffplay: {ffplay_path}")
-            logger.info(f"[ARGO] Playing file: {track_path}")
-            
-            # Run ffplay
-            result = subprocess.run(
-                [ffplay_path, "-nodisp", "-autoexit", track_path],
-                capture_output=True,
-                timeout=3600,  # Max 1 hour
-                text=True
-            )
-            
-            if result.returncode != 0:
-                logger.warning(f"[ARGO] ffplay exited with code {result.returncode}")
-                if result.stderr:
-                    logger.debug(f"[ARGO] ffplay stderr: {result.stderr}")
-            else:
-                logger.info(f"[ARGO] Music playback completed successfully")
+            # Method 1: Try pygame (if available)
+            try:
+                import pygame
+                pygame.mixer.init()
+                pygame.mixer.music.load(track_path)
+                pygame.mixer.music.play()
                 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[ARGO] Music playback timeout (> 1 hour)")
-        except FileNotFoundError:
-            logger.error(f"[ARGO] ffplay executable not found")
+                # Wait for playback to finish
+                while pygame.mixer.music.get_busy():
+                    import time
+                    time.sleep(0.1)
+                
+                logger.info(f"[ARGO] Playback completed via pygame")
+                return
+            except ImportError:
+                pass  # pygame not installed
+            except Exception as e:
+                logger.debug(f"[ARGO] pygame playback failed: {e}")
+            
+            # Method 2: Try pydub + simpleaudio
+            try:
+                from pydub import AudioSegment
+                import simpleaudio
+                
+                logger.info(f"[ARGO] Loading audio with pydub...")
+                sound = AudioSegment.from_file(track_path)
+                
+                logger.info(f"[ARGO] Playing audio with simpleaudio...")
+                playback = simpleaudio.play_buffer(
+                    sound.raw_data,
+                    num_channels=sound.channels,
+                    bytes_per_sample=sound.sample_width,
+                    sample_rate=sound.frame_rate
+                )
+                playback.wait_done()
+                logger.info(f"[ARGO] Playback completed via pydub+simpleaudio")
+                return
+            except ImportError:
+                pass  # pydub/simpleaudio not installed
+            except Exception as e:
+                logger.debug(f"[ARGO] pydub playback failed: {e}")
+            
+            # Method 3: Try ffplay via subprocess
+            try:
+                import subprocess
+                import shutil
+                
+                ffplay_path = shutil.which("ffplay")
+                if ffplay_path:
+                    logger.info(f"[ARGO] Playing via ffplay: {ffplay_path}")
+                    subprocess.run(
+                        [ffplay_path, "-nodisp", "-autoexit", track_path],
+                        capture_output=True,
+                        timeout=3600
+                    )
+                    logger.info(f"[ARGO] Playback completed via ffplay")
+                    return
+            except Exception as e:
+                logger.debug(f"[ARGO] ffplay not available: {e}")
+            
+            # If all methods failed
+            logger.error(f"[ARGO] No audio playback method available (install pygame or ffmpeg)")
+                
         except Exception as e:
             logger.error(f"[ARGO] Playback error: {type(e).__name__}: {e}")
         finally:
