@@ -351,9 +351,7 @@ See [LICENSE](LICENSE) file for details.
 
 ## 👥 Contributors
 
-- **Primary Development:** Voice Pipeline Implementation
-- **Documentation:** Comprehensive guides and troubleshooting
-- **Testing:** Full audio pipeline validation
+**Bob** — Architecture, implementation, documentation
 
 ---
 
