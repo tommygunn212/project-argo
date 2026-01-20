@@ -371,6 +371,11 @@ class Coordinator:
                                 music_player = get_music_player()
                                 music_player.play_random(self.sink)
                                 response_text = ""  # No LLM response for music
+                                
+                                # Monitor for interrupt during music playback
+                                self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
+                                self._monitor_music_interrupt(music_player)
+                                
                                 self.current_probe.mark("llm_end")
                             else:
                                 # Normal LLM response
@@ -589,6 +594,39 @@ class Coordinator:
             return np.concatenate(audio_buffer, axis=0)
         else:
             return np.array([], dtype=np.int16)
+    
+    def _monitor_music_interrupt(self, music_player) -> None:
+        """
+        Monitor for user interrupt during music playback.
+        
+        If user speaks/wakes word detected, stop music immediately.
+        
+        Args:
+            music_player: MusicPlayer instance to stop on interrupt
+        """
+        import time
+        
+        try:
+            from core.input_trigger import PorcupineWakeWordTrigger
+            interrupt_detector = PorcupineWakeWordTrigger()
+            
+            self.logger.info("[Music] Monitoring for interrupt...")
+            
+            # Poll while music is playing
+            while music_player.is_playing:
+                try:
+                    if interrupt_detector._check_for_interrupt():
+                        self.logger.warning("[Music] User interrupted! Stopping music...")
+                        music_player.stop()
+                        break
+                except Exception as e:
+                    self.logger.debug(f"[Music] Interrupt check failed: {e}")
+                
+                time.sleep(0.2)  # Check every 200ms
+        
+        except Exception as e:
+            self.logger.error(f"[Music] Monitor error: {e}")
+
     
     def _speak_with_interrupt_detection(self, response_text: str) -> None:
         """
