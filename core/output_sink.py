@@ -697,8 +697,11 @@ class EdgeTTSOutputSink(OutputSink):
             pitch: Pitch (-50 to +50)
         """
         self.voice = voice
-        self.rate = f"{rate:+d}%" if rate != 0 else "+0%"
-        self.pitch = f"{pitch:+d}Hz" if pitch != 0 else "+0Hz"
+        # CRITICAL: Edge-TTS requires rate/pitch/volume as strings with units (%-% or Hz)
+        # Hard-coded for now to bypass Edge-TTS parameter validator bug
+        self.rate = "+0%"      # MUST be string ending in %
+        self.pitch = "+0Hz"    # MUST be string ending in Hz
+        self.volume = "+0%"    # MUST be string ending in %
         self._stop_requested = False
         self._audio_device = None
         
@@ -757,11 +760,14 @@ class EdgeTTSOutputSink(OutputSink):
             import os
             
             # Step 1: Synthesize audio from text
+            # CRITICAL: rate/pitch/volume MUST be strings with unit suffixes (% or Hz)
+            # This bypasses known Edge-TTS parameter validator bug that corrupts audio
             communicate = edge_tts.Communicate(
                 text=text,
                 voice=self.voice,
-                rate=self.rate,
-                pitch=self.pitch
+                rate="+0%",     # MUST be string ending in %
+                pitch="+0Hz",   # MUST be string ending in Hz
+                volume="+0%"    # MUST be string ending in %
             )
             
             # Collect audio chunks
