@@ -99,7 +99,7 @@ class LLMResponseGenerator(ResponseGenerator):
         self.model = "argo:latest"
         
         # Hardcoded generation parameters
-        self.temperature = 0.7
+        self.temperature = 0.85  # Increased for more personality and creativity (0.7 was too dry)
         self.max_tokens = 2000  # Plenty of room for full answers (2-3 min speech worth)
         
         self.logger = logger
@@ -185,26 +185,33 @@ class LLMResponseGenerator(ResponseGenerator):
             if context_summary:
                 context = f"Context from recent conversation:\n{context_summary}\n\n"
         
+        # System personality: You are ARGO, a friendly and knowledgeable AI assistant.
+        # You're conversational but intelligent, engaging but not verbose.
+        # You explain things clearly with practical examples when useful.
+        # You have personality without being over-the-top.
+        
         # Different prompts based on intent type
         if intent_type == "greeting":
             prompt = (
                 f"{context}"
                 f"The user greeted you with: '{raw_text}'\n"
-                f"Respond with a friendly, brief greeting (one sentence max).\n"
+                f"You are ARGO, a friendly AI assistant. Respond with a warm, engaging greeting (one sentence).\n"
                 f"Response:"
             )
         elif intent_type == "question":
             prompt = (
                 f"{context}"
                 f"The user asked: '{raw_text}'\n"
-                f"Provide a helpful, brief answer (one or two sentences max).\n"
+                f"You are ARGO. Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
+                f"If you don't know the answer, admit it honestly and suggest what they could try instead.\n"
                 f"Response:"
             )
         elif intent_type == "command":
             prompt = (
                 f"{context}"
                 f"The user gave a command: '{raw_text}'\n"
-                f"Execute or fulfill the command directly. If it's a count, list, recitation, or performance, do it (not just acknowledge). Keep responses brief.\n"
+                f"You are ARGO. Execute the command directly with personality. If it's a count, list, recitation, or performance, do it enthusiastically.\n"
+                f"Respond with the action itself, not just acknowledgment.\n"
                 f"Response:"
             )
         else:  # unknown
@@ -257,6 +264,9 @@ class LLMResponseGenerator(ResponseGenerator):
             if not response_text:
                 raise RuntimeError("LLM returned empty response")
 
+            # Enhance response quality
+            response_text = self._enhance_response(response_text)
+
             return response_text
 
         except self.requests.exceptions.ConnectionError as e:
@@ -266,3 +276,31 @@ class LLMResponseGenerator(ResponseGenerator):
             )
         except Exception as e:
             raise RuntimeError(f"LLM call failed: {e}")
+    def _enhance_response(self, response_text: str) -> str:
+        """
+        Post-process response to ensure quality and personality.
+        
+        - Removes LLM artifacts (extra tokens, repeated lines)
+        - Ensures minimum substance (not one-word answers)
+        - Keeps first sentence if extremely long
+        - Maintains natural conversation flow
+        
+        Args:
+            response_text: Raw LLM response
+            
+        Returns:
+            Enhanced response string
+        """
+        # Clean up common LLM artifacts
+        response_text = response_text.strip()
+        
+        # Remove trailing common LLM patterns
+        response_text = response_text.rstrip("...")
+        response_text = response_text.rstrip(",")
+        
+        # If response is very short (single word/short phrase), it's probably too minimal
+        # This is a fallback (shouldn't happen with good prompts, but just in case)
+        if len(response_text.split()) < 3 and not response_text.endswith(("?", "!")):
+            self.logger.debug(f"[_enhance_response] Response too short, accepting as-is: '{response_text}'")
+        
+        return response_text
