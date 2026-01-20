@@ -393,13 +393,20 @@ class Coordinator:
                             # TASK 15: Mark TTS start
                             self.current_probe.mark("tts_start")
                             
-                            # TASK 17: Set speaking flag (half-duplex audio gate)
-                            self._is_speaking = True
-                            try:
-                                # Speak and monitor for user interrupt (voice input during playback)
-                                self._speak_with_interrupt_detection(response_text)
-                            finally:
-                                self._is_speaking = False
+                            # Only speak if response is not empty (music playback has empty response)
+                            if response_text and response_text.strip():
+                                # TASK 17: Set speaking flag (half-duplex audio gate)
+                                self._is_speaking = True
+                                try:
+                                    # Speak and monitor for user interrupt (voice input during playback)
+                                    self._speak_with_interrupt_detection(response_text)
+                                finally:
+                                    self._is_speaking = False
+                            else:
+                                self.logger.info(
+                                    f"[Iteration {self.interaction_count}] "
+                                    f"Response is empty, skipping TTS"
+                                )
                             
                             # TASK 15: Mark TTS end
                             self.current_probe.mark("tts_end")

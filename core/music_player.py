@@ -113,7 +113,7 @@ class MusicPlayer:
         """
         if not MUSIC_ENABLED or not self.tracks:
             if output_sink:
-                output_sink.send("I couldn't find any music.")
+                output_sink.speak("I couldn't find any music.")
             return False
 
         track = random.choice(self.tracks)
@@ -140,7 +140,7 @@ class MusicPlayer:
         try:
             # Announce what's playing
             if output_sink:
-                output_sink.send(f"Playing: {track_name}")
+                output_sink.speak(f"Playing: {track_name}")
 
             # Start playback in background thread (fire-and-forget)
             thread = threading.Thread(
