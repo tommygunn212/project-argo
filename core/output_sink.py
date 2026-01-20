@@ -809,20 +809,37 @@ class EdgeTTSOutputSink(OutputSink):
             except Exception as e:
                 print(f"[Audio] Failed to save debug WAV: {e}", file=sys.stderr)
             
+            # Step 2b: Read WAV header to get actual sample rate (fix playback clock)
+            # Edge-TTS might output at different rate than expected
+            actual_sample_rate = self.SAMPLE_RATE
+            try:
+                with wave.open(debug_file, 'rb') as wav_file:
+                    actual_sample_rate = wav_file.getframerate()
+                    actual_channels = wav_file.getnchannels()
+                    actual_width = wav_file.getsampwidth()
+                    actual_frames = wav_file.getnframes()
+                    print(f"[Audio] WAV Header: {actual_sample_rate}Hz, {actual_channels}ch, {actual_width}bytes/sample, {actual_frames} frames", file=sys.stderr)
+            except Exception as e:
+                print(f"[Audio] Failed to read WAV header: {e}", file=sys.stderr)
+            
             # Step 3: Convert audio to numpy array for playback
             audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            duration = len(audio_array) / self.SAMPLE_RATE
+            duration = len(audio_array) / actual_sample_rate
             
             # Step 4: Log and play to locked output device (blocking)
-            print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={self.SAMPLE_RATE}", file=sys.stderr)
+            # Use actual sample rate from WAV header, not hard-coded constant
+            print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
             sounddevice.play(
                 audio_array,
-                samplerate=self.SAMPLE_RATE,
+                samplerate=actual_sample_rate,
                 device=self._audio_device,
                 blocking=True
             )
             
+            # Step 5: Ensure playback clock finishes before returning
+            import time
+            time.sleep(0.1)  # Small buffer to ensure audio stream fully drains
             print(f"[Audio] Playback complete", file=sys.stderr)
             
         except ImportError as e:
