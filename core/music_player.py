@@ -161,20 +161,32 @@ class MusicPlayer:
     def _play_background(self, track_path: str) -> None:
         """Play audio in background thread."""
         try:
-            # Try simpleaudio first (lightweight, fast)
-            try:
-                import simpleaudio
-                wave_obj = simpleaudio.WaveObject.from_wave_file(track_path)
-                self.current_process = wave_obj.play()
-                self.current_process.wait_done()
-            except ImportError:
-                # Fallback to ffplay if available
-                import subprocess
+            # Try ffplay first (handles all formats: mp3, wav, flac, m4a)
+            import subprocess
+            import shutil
+            
+            # Check if ffplay is available
+            ffplay_path = shutil.which("ffplay")
+            if ffplay_path:
                 subprocess.run(
                     ["ffplay", "-nodisp", "-autoexit", track_path],
                     capture_output=True,
                     timeout=3600  # Max 1 hour
                 )
+            else:
+                # Fallback to simpleaudio for WAV files only
+                try:
+                    import simpleaudio
+                    if track_path.lower().endswith('.wav'):
+                        wave_obj = simpleaudio.WaveObject.from_wave_file(track_path)
+                        self.current_process = wave_obj.play()
+                        self.current_process.wait_done()
+                    else:
+                        logger.warning(f"[ARGO] ffplay not available and file is not WAV: {track_path}")
+                        return
+                except ImportError:
+                    logger.error(f"[ARGO] No audio player available (ffplay or simpleaudio)")
+                    return
         except Exception as e:
             logger.error(f"[ARGO] Playback error: {e}")
         finally:
