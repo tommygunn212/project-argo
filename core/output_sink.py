@@ -710,26 +710,19 @@ class EdgeTTSOutputSink(OutputSink):
     
     def _init_audio_device(self) -> None:
         """
-        Detect and lock to Windows audio output device (not default).
+        Use system default audio output device.
         
-        Finds first non-default output device and logs it.
+        Let sounddevice pick the system default for maximum compatibility.
         """
         try:
             import sounddevice
-            devices = sounddevice.query_devices()
             
-            # Find first output device (not default)
-            for idx, device in enumerate(devices):
-                if device['max_output_channels'] > 0 and idx != sounddevice.default.device[1]:
-                    self._audio_device = idx
-                    device_name = device['name']
-                    print(f"[Audio] Output device: {device_name} ({self.SAMPLE_RATE}Hz)", file=sys.stderr)
-                    return
+            # Use None to let sounddevice pick the system default
+            self._audio_device = None
             
-            # Fallback to default if no other device found
-            self._audio_device = sounddevice.default.device[1]
-            default_device = sounddevice.query_devices(self._audio_device)
-            print(f"[Audio] Output device (default): {default_device['name']} ({self.SAMPLE_RATE}Hz)", file=sys.stderr)
+            # Log which device will be used
+            default_device = sounddevice.query_devices(kind='output')
+            print(f"[Audio] Output device: {default_device['name']} @ {self.SAMPLE_RATE}Hz", file=sys.stderr)
             
         except Exception as e:
             print(f"[Audio] Device detection failed: {e}", file=sys.stderr)
@@ -826,13 +819,18 @@ class EdgeTTSOutputSink(OutputSink):
             audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             duration = len(audio_array) / actual_sample_rate
             
+            # Step 3b: Add diagnostic logging for audio array quality
+            print(f"[Audio] Array range: [{audio_array.min():.4f}, {audio_array.max():.4f}]", file=sys.stderr)
+            print(f"[Audio] Array shape: {audio_array.shape}, dtype: {audio_array.dtype}", file=sys.stderr)
+            print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
+            
             # Step 4: Log and play to locked output device (blocking)
             # Use actual sample rate from WAV header, not hard-coded constant
             print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
             sounddevice.play(
-                audio_array,
-                samplerate=actual_sample_rate,
+                audio_array.astype(np.float32),
+                samplerate=int(actual_sample_rate),
                 device=self._audio_device,
                 blocking=True
             )
