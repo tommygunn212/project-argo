@@ -112,10 +112,10 @@ class MusicPlayer:
                 output_sink.speak("No music available.")
             return False
 
-        track_name = track.get("name", "track")
         track_path = track.get("path", "")
+        announcement = self._build_announcement(track)
         
-        return self.play(track_path, track_name, output_sink)
+        return self.play(track_path, announcement, output_sink)
 
     def play_by_genre(self, genre: str, output_sink=None) -> bool:
         """
@@ -140,17 +140,17 @@ class MusicPlayer:
             return False
 
         track = random.choice(tracks)
-        track_name = track.get("name", "track")
         track_path = track.get("path", "")
+        announcement = self._build_announcement(track)
         
-        return self.play(track_path, track_name, output_sink)
+        return self.play(track_path, announcement, output_sink)
 
-    def play_by_keyword(self, keyword: str, output_sink=None) -> bool:
+    def play_by_artist(self, artist: str, output_sink=None) -> bool:
         """
-        Play a random track matching keyword search.
+        Play a random track by specified artist.
         
         Args:
-            keyword: Search term (artist, album, track name)
+            artist: Artist name
             output_sink: Optional output sink to announce track
             
         Returns:
@@ -161,6 +161,81 @@ class MusicPlayer:
                 output_sink.speak("I couldn't find any music.")
             return False
 
+        tracks = self.index.filter_by_artist(artist)
+        if not tracks:
+            if output_sink:
+                output_sink.speak(f"No tracks by {artist} found.")
+            return False
+
+        track = random.choice(tracks)
+        track_path = track.get("path", "")
+        announcement = self._build_announcement(track)
+        
+        return self.play(track_path, announcement, output_sink)
+
+    def play_by_song(self, song: str, output_sink=None) -> bool:
+        """
+        Play a specific song by name.
+        
+        Args:
+            song: Song name
+            output_sink: Optional output sink to announce track
+            
+        Returns:
+            True if playback started, False otherwise
+        """
+        if not MUSIC_ENABLED or not self.index:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        tracks = self.index.filter_by_song(song)
+        if not tracks:
+            if output_sink:
+                output_sink.speak(f"Song {song} not found.")
+            return False
+
+        track = random.choice(tracks)
+        track_path = track.get("path", "")
+        announcement = self._build_announcement(track)
+        
+        return self.play(track_path, announcement, output_sink)
+
+    def play_by_keyword(self, keyword: str, output_sink=None) -> bool:
+        """
+        Play a random track matching keyword search (artist/song/filename).
+        
+        Priority: Try artist first, then song name, then generic keyword search.
+        
+        Args:
+            keyword: Search term (artist, song name, or keyword)
+            output_sink: Optional output sink to announce track
+            
+        Returns:
+            True if playback started, False otherwise
+        """
+        if not MUSIC_ENABLED or not self.index:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        # Priority 1: Try exact artist match
+        tracks = self.index.filter_by_artist(keyword)
+        if tracks:
+            track = random.choice(tracks)
+            track_path = track.get("path", "")
+            announcement = self._build_announcement(track)
+            return self.play(track_path, announcement, output_sink)
+
+        # Priority 2: Try exact song match
+        tracks = self.index.filter_by_song(keyword)
+        if tracks:
+            track = random.choice(tracks)
+            track_path = track.get("path", "")
+            announcement = self._build_announcement(track)
+            return self.play(track_path, announcement, output_sink)
+
+        # Priority 3: Generic keyword search
         tracks = self.index.filter_by_keyword(keyword)
         if not tracks:
             if output_sink:
@@ -168,10 +243,39 @@ class MusicPlayer:
             return False
 
         track = random.choice(tracks)
-        track_name = track.get("name", "track")
         track_path = track.get("path", "")
+        announcement = self._build_announcement(track)
         
-        return self.play(track_path, track_name, output_sink)
+        return self.play(track_path, announcement, output_sink)
+
+    def _build_announcement(self, track: Dict) -> str:
+        """
+        Build friendly announcement from track data.
+        
+        Formats:
+        - With artist and song: "Song Name by Artist Name"
+        - With artist only: "Artist Name"
+        - With song only: "Song Name"
+        - Fallback: filename without extension
+        
+        Args:
+            track: Track dictionary
+            
+        Returns:
+            Announcement string
+        """
+        song = track.get("song")
+        artist = track.get("artist")
+        name = track.get("name", "track")
+        
+        if song and artist:
+            return f"{song} by {artist}"
+        elif song:
+            return song
+        elif artist:
+            return artist
+        else:
+            return name
 
     def play(self, track_path: str, track_name: str, output_sink=None) -> bool:
         """

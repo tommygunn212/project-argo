@@ -201,8 +201,14 @@ class MusicIndex:
             # Extract genre from folder hierarchy
             genre = self._extract_genre(full_path)
             
+            # Extract artist from folder structure
+            artist = self._extract_artist(full_path)
+            
+            # Extract song name from filename
+            song = self._extract_song(full_path)
+            
             # Tokenize for search
-            tokens = self._tokenize(full_path, genre)
+            tokens = self._tokenize(full_path, genre, artist, song)
             
             # Generate stable ID from path
             track_id = hashlib.md5(full_path.lower().encode()).hexdigest()[:16]
@@ -212,6 +218,8 @@ class MusicIndex:
                 "path": full_path,
                 "filename": filename,
                 "name": name,
+                "artist": artist,
+                "song": song,
                 "tokens": tokens,
                 "genre": genre,
                 "ext": ext
@@ -254,13 +262,104 @@ class MusicIndex:
             logger.debug(f"[ARGO] Genre extraction error: {e}")
             return None
     
-    def _tokenize(self, full_path: str, genre: Optional[str]) -> List[str]:
+    def _extract_artist(self, full_path: str) -> Optional[str]:
+        """
+        Extract artist from folder hierarchy.
+        
+        Heuristic: Usually the direct parent folder (or last folder before tracks).
+        
+        Examples:
+          I:\Music\Punk\Sex Pistols\song.mp3 -> "Sex Pistols"
+          I:\Music\Classic Rock\Pink Floyd\The Wall\song.mp3 -> "Pink Floyd"
+          I:\Music\Rock\song.mp3 -> None (no artist folder)
+        
+        Args:
+            full_path: Absolute path to audio file
+            
+        Returns:
+            Artist name or None
+        """
+        try:
+            # Get relative path from music_dir
+            rel_path = os.path.relpath(full_path, self.music_dir)
+            folders = rel_path.split(os.sep)[:-1]  # Exclude filename
+            
+            if len(folders) < 2:
+                # Not enough depth (e.g., Music\song.mp3)
+                return None
+            
+            # Assume the last folder (before filename) is artist
+            # Skip if it looks like an album folder (check for common album keywords)
+            potential_artist = folders[-1]
+            
+            # If it's a known album/collection folder, skip it
+            album_indicators = {"album", "albums", "compilations", "singles", "live", "remaster", "remix"}
+            if potential_artist.lower() in album_indicators:
+                # Try parent folder instead
+                if len(folders) >= 2:
+                    potential_artist = folders[-2]
+            
+            # Return artist (cleaned up)
+            artist_clean = potential_artist.strip()
+            if artist_clean and artist_clean.lower() not in album_indicators:
+                return artist_clean
+            
+            return None
+        
+        except Exception as e:
+            logger.debug(f"[ARGO] Artist extraction error: {e}")
+            return None
+    
+    def _extract_song(self, full_path: str) -> Optional[str]:
+        """
+        Extract song name from filename.
+        
+        Removes track numbers, extension, common separators.
+        
+        Examples:
+          "01 - Never Mind The Bollocks.mp3" -> "Never Mind The Bollocks"
+          "01. In The Flesh.mp3" -> "In The Flesh"
+          "Track 1 - Song Name.mp3" -> "Song Name"
+          "song_name.mp3" -> "song_name"
+        
+        Args:
+            full_path: Absolute path to audio file
+            
+        Returns:
+            Song name or None
+        """
+        try:
+            path_obj = Path(full_path)
+            filename = path_obj.stem  # Filename without extension
+            
+            # Remove leading track numbers and common separators
+            # Pattern: digits followed by separator (-, ., space)
+            cleaned = re.sub(r'^[\d\s]+[-._\s]+', '', filename, flags=re.IGNORECASE)
+            
+            # Remove trailing stuff like "(remix)", "[live]", "(remaster)"
+            # Don't do this - user might search for it
+            
+            # Normalize whitespace
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            
+            if cleaned and len(cleaned) > 1:
+                return cleaned
+            
+            return None
+        
+        except Exception as e:
+            logger.debug(f"[ARGO] Song extraction error: {e}")
+            return None
+    
+    def _tokenize(self, full_path: str, genre: Optional[str], artist: Optional[str] = None, song: Optional[str] = None) -> List[str]:
         """
         Tokenize for keyword search.
         
         Args:
             full_path: Absolute path to audio file
             genre: Genre (if extracted)
+            artist: Artist name (if extracted)
+            song: Song name (if extracted)
             
         Returns:
             List of search tokens
@@ -272,6 +371,16 @@ class MusicIndex:
             path_obj = Path(full_path)
             name = path_obj.stem.lower()
             tokens.update(name.split())
+            
+            # Artist (high weight - added separately)
+            if artist:
+                artist_lower = artist.lower()
+                tokens.update(artist_lower.split())
+            
+            # Song (high weight - added separately)
+            if song:
+                song_lower = song.lower()
+                tokens.update(song_lower.split())
             
             # Folder names
             rel_path = os.path.relpath(full_path, self.music_dir)
@@ -317,6 +426,48 @@ class MusicIndex:
         
         if matches:
             logger.info(f"[ARGO] Music genre match: {genre} ({len(matches)} tracks)")
+        
+        return matches
+    
+    def filter_by_artist(self, artist: str) -> List[Dict]:
+        """
+        Filter tracks by artist name.
+        
+        Args:
+            artist: Artist name (case-insensitive)
+            
+        Returns:
+            List of matching tracks
+        """
+        artist_lower = artist.lower()
+        matches = [
+            t for t in self.tracks
+            if t.get("artist") and t.get("artist", "").lower() == artist_lower
+        ]
+        
+        if matches:
+            logger.info(f"[ARGO] Music artist match: {artist} ({len(matches)} tracks)")
+        
+        return matches
+    
+    def filter_by_song(self, song: str) -> List[Dict]:
+        """
+        Filter tracks by song name.
+        
+        Args:
+            song: Song name (case-insensitive)
+            
+        Returns:
+            List of matching tracks
+        """
+        song_lower = song.lower()
+        matches = [
+            t for t in self.tracks
+            if t.get("song") and t.get("song", "").lower() == song_lower
+        ]
+        
+        if matches:
+            logger.info(f"[ARGO] Music song match: {song} ({len(matches)} tracks)")
         
         return matches
     
