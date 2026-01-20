@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-01-19T02:58:23.969928",
+  "prompt": "Tell me something interesting about machine learning in 2-3 sentences.",
+  "total_models": 10,
+  "successful": 10,
+  "results": [
+    {
+      "model_id": "argo:latest",
+      "model_name": "Qwen (2.3GB) - CURRENT",
+      "latency_ms": 782.8061580657959,
+      "response_preview": "One interesting aspect of machine learning is the ability to learn from incomplete or biased data. T",
+      "success": true
+    },
+    {
+      "model_id": "starling-lm:latest",
+      "model_name": "Starling LM (4.1GB)",
+      "latency_ms": 12271.928071975708,
+      "response_preview": "1) Machine learning has revolutionized various fields, from healthcare to self-driving cars, by enab",
+      "success": true
+    },
+    {
+      "model_id": "neural-chat:latest",
+      "model_name": "Neural Chat (4.1GB)",
+      "latency_ms": 5486.89603805542,
+      "response_preview": "Machine learning is a revolutionary technology that allows computers to learn from data, recognize p",
+      "success": true
+    },
+    {
+      "model_id": "openhermes:latest",
+      "model_name": "OpenHermes (4.1GB)",
+      "latency_ms": 7291.879892349243,
+      "response_preview": "Machine learning is a type of artificial intelligence that allows computers to learn and improve fro",
+      "success": true
+    },
+    {
+      "model_id": "mistral:latest",
+      "model_name": "Mistral (4.4GB)",
+      "latency_ms": 8858.566522598267,
+      "response_preview": "Machine learning, a subset of artificial intelligence, enables computers to learn and improve from e",
+      "success": true
+    },
+    {
+      "model_id": "mistral-nemo:latest",
+      "model_name": "Mistral Nemo (7.1GB)",
+      "latency_ms": 19821.114540100098,
+      "response_preview": "Machine learning algorithms can sometimes discover patterns that even their creators weren't aware o",
+      "success": true
+    },
+    {
+      "model_id": "llama3.2:latest",
+      "model_name": "Llama 3.2 (2.0GB)",
+      "latency_ms": 6516.047954559326,
+      "response_preview": "One interesting aspect of machine learning is its ability to enable machines to learn from data with",
+      "success": true
+    },
+    {
+      "model_id": "llama3.1:8b",
+      "model_name": "Llama 3.1:8b (4.9GB)",
+      "latency_ms": 14342.453718185425,
+      "response_preview": "Here's something interesting: Machine learning algorithms can be trained to recognize and generate h",
+      "success": true
+    },
+    {
+      "model_id": "gemma3:1b",
+      "model_name": "Gemma 3:1b (815MB) - SMALLEST",
+      "latency_ms": 6018.206834793091,
+      "response_preview": "Machine learning algorithms are constantly evolving, and we're now seeing breakthroughs in creating ",
+      "success": true
+    },
+    {
+      "model_id": "gemma3:latest",
+      "model_name": "Gemma 3 (3.3GB)",
+      "latency_ms": 7619.393587112427,
+      "response_preview": "Machine learning allows computers to learn from data without explicit programming \u2013 instead of being",
+      "success": true
+    }
+  ]
+}
