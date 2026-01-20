@@ -325,6 +325,14 @@ class Coordinator:
                                 f"Transcribed: '{text}'"
                             )
                             
+                            # Skip if transcription is empty (just silence/noise)
+                            if not text or not text.strip():
+                                self.logger.info(
+                                    f"[Iteration {self.interaction_count}] "
+                                    f"Empty transcription (silence only), skipping..."
+                                )
+                                return
+                            
                             # 3. Parse intent
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] Parsing intent..."
