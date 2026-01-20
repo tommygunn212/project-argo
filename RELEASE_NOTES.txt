@@ -1,0 +1,68 @@
+ARGO v1.0.0 is the first production-ready release of a fully local, voice-first AI assistant designed for deterministic behavior, offline operation, and explicit control.
+
+This release marks the transition from experimental prototypes (v0.x) to a stable, documented, and supportable system.
+
+✨ Highlights
+
+Voice-first interaction with wake word, recording, transcription, and speech output
+
+Fully local execution (Ollama LLM, Whisper transcription, Piper TTS)
+
+Deterministic behavior with no hidden personalities, moods, or state changes
+
+Interruptible speech playback — speak at any time to stop audio
+
+Dynamic recording using RMS-based silence detection (no fixed timers)
+
+Production-grade documentation for setup, troubleshooting, and system behavior
+
+🔧 Major Fixes Since v0.x
+
+Issue — v0.x → v1.0.0
+
+Audio feedback / squeal — Present → Eliminated
+TTS truncation — "Sure…" only → Full responses
+Recording duration — Fixed 6s → Dynamic (~1.5s silence)
+Playback interruption — Not possible → Voice-interrupt enabled
+Intent parsing — Misclassified short commands → Correct command detection
+
+Full root-cause analysis and fixes are documented in ISSUES_RESOLVED.md.
+
+🧠 Architecture Overview
+
+Wake word: Porcupine
+Transcription: OpenAI Whisper (local)
+LLM: Ollama (local models)
+Text-to-Speech: Piper ONNX (offline, deterministic)
+Audio control: Hard-stop semantics, idempotent playback control
+Latency: ~7–9 seconds end-to-end on typical desktop hardware
+
+📚 Documentation
+
+This release includes three professional-grade documents:
+
+GETTING_STARTED.md
+First-time setup, 5-minute quick start, examples, configuration, and performance expectations.
+
+TROUBLESHOOTING.md
+Comprehensive diagnostics and fixes covering installation, audio, transcription, TTS, LLM behavior, and performance.
+
+ISSUES_RESOLVED.md
+Detailed post-mortems of all critical v0.x failures, including root causes and validation evidence.
+
+⚠️ Known Limitations
+
+Not real-time or sub-second latency
+Single-user, single-voice operation
+No smart-home or device control (yet)
+CPU-based TTS (no GPU acceleration)
+English language focus
+
+These are intentional design boundaries for v1.0.
+
+✅ Status
+
+Production-ready
+Tagged and released as v1.0.0
+
+This version is considered stable and suitable as a baseline for future development.

@@ -366,10 +366,21 @@ class Coordinator:
                             # Check if this is a music command (before LLM processing)
                             from core.intent_parser import IntentType
                             if intent.intent_type == IntentType.MUSIC:
-                                # Music playback
+                                # Music playback with genre/keyword filtering
                                 from core.music_player import get_music_player
                                 music_player = get_music_player()
-                                music_player.play_random(self.sink)
+                                
+                                # Route based on keyword (genre filter > keyword filter > random)
+                                if intent.keyword:
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Music keyword: '{intent.keyword}'")
+                                    # Try genre filter first, then keyword filter
+                                    if not music_player.play_by_genre(intent.keyword, self.sink):
+                                        music_player.play_by_keyword(intent.keyword, self.sink)
+                                else:
+                                    # No keyword: random track
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Music: random selection")
+                                    music_player.play_random(self.sink)
+                                
                                 response_text = ""  # No LLM response for music
                                 
                                 # Monitor for interrupt during music playback

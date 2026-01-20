@@ -1,0 +1,400 @@
+"""
+MUSIC INDEX AUTHORITATIVE v1.0.x
+
+Persistent JSON catalog of local music library.
+
+Responsibilities:
+- Scan directory recursively
+- Extract genre from folder names (using GENRE_ALIASES)
+- Tokenize for keyword search
+- Save/load JSON for fast startup
+- Filter by genre or keyword
+- NO audio decoding
+- NO ffmpeg dependency
+- NO ID3 tag parsing
+- NO guessing
+
+Data plumbing only.
+"""
+
+import os
+import json
+import logging
+import hashlib
+import re
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# GENRE ALIASES (CANONICAL - DO NOT MODIFY)
+# ============================================================================
+
+GENRE_ALIASES = {
+    # Rock family
+    "rock": "rock",
+    "classic rock": "classic rock",
+    "classic_rock": "classic rock",
+    "hard rock": "hard rock",
+    "arena rock": "arena rock",
+
+    # Punk family
+    "punk": "punk",
+    "punk rock": "punk",
+    "rock punk": "punk",
+    "post punk": "post-punk",
+
+    # Glam
+    "glam": "glam rock",
+    "glam rock": "glam rock",
+
+    # Metal
+    "metal": "metal",
+    "heavy metal": "metal",
+    "thrash": "metal",
+
+    # Alt / Indie
+    "alternative": "alternative",
+    "alt": "alternative",
+    "indie": "indie",
+    "grunge": "grunge",
+    "experimental": "experimental",
+
+    # Electronic
+    "electronic": "electronic",
+    "electronica": "electronic",
+    "ambient": "ambient",
+    "techno": "electronic",
+    "house": "electronic",
+
+    # Other genres
+    "jazz": "jazz",
+    "blues": "blues",
+    "classical": "classical",
+    "folk": "folk",
+    "country": "country",
+    "disco": "disco",
+    "dance": "dance",
+    "latin": "latin",
+    "ethnic": "ethnic",
+    "reggae": "reggae",
+    "comedy": "comedy",
+    "kids": "kids",
+    "soundtrack": "soundtrack"
+}
+
+SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
+FILLER_WORDS = {"the", "a", "an", "some", "track", "music"}
+
+
+# ============================================================================
+# MUSIC INDEX CLASS
+# ============================================================================
+
+class MusicIndex:
+    """Persistent JSON catalog of local music library."""
+
+    def __init__(self, music_dir: str, index_file: str):
+        """
+        Initialize music index.
+        
+        Args:
+            music_dir: Path to music directory (e.g., I:\My Music)
+            index_file: Path to JSON index file (e.g., data/music_index.json)
+        """
+        self.music_dir = music_dir
+        self.index_file = index_file
+        self.tracks: List[Dict] = []
+        
+    def load_or_create(self) -> Dict:
+        """
+        Load existing index or create new one.
+        
+        Returns:
+            Index dictionary with metadata and tracks
+        """
+        # Try to load existing index
+        if os.path.exists(self.index_file):
+            try:
+                with open(self.index_file, "r", encoding="utf-8") as f:
+                    index = json.load(f)
+                logger.info(f"[ARGO] Music index loaded: {len(index.get('tracks', []))} tracks")
+                self.tracks = index.get("tracks", [])
+                return index
+            except Exception as e:
+                logger.warning(f"[ARGO] Failed to load index: {e}. Rescanning...")
+        
+        # Create new index
+        logger.info(f"[ARGO] Scanning music directory: {self.music_dir}")
+        self.tracks = self._scan_directory()
+        
+        # Build index document
+        index = {
+            "version": "1.0",
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "music_dir": self.music_dir,
+            "track_count": len(self.tracks),
+            "tracks": self.tracks
+        }
+        
+        # Save to JSON
+        try:
+            os.makedirs(os.path.dirname(self.index_file), exist_ok=True)
+            with open(self.index_file, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2)
+            logger.info(f"[ARGO] Music index created: {len(self.tracks)} tracks")
+        except Exception as e:
+            logger.warning(f"[ARGO] Failed to save index: {e}")
+        
+        return index
+    
+    def _scan_directory(self) -> List[Dict]:
+        """
+        Recursively scan music directory.
+        
+        Returns:
+            List of track dictionaries
+        """
+        tracks = []
+        
+        if not os.path.exists(self.music_dir):
+            logger.warning(f"[ARGO] Music directory not found: {self.music_dir}")
+            return tracks
+        
+        try:
+            for root, dirs, files in os.walk(self.music_dir):
+                for filename in files:
+                    # Check format
+                    if not any(filename.lower().endswith(fmt) for fmt in SUPPORTED_FORMATS):
+                        continue
+                    
+                    full_path = os.path.join(root, filename)
+                    
+                    # Build track record
+                    track = self._build_track_record(full_path)
+                    if track:
+                        tracks.append(track)
+        
+        except Exception as e:
+            logger.error(f"[ARGO] Scan error: {e}")
+        
+        return tracks
+    
+    def _build_track_record(self, full_path: str) -> Optional[Dict]:
+        """
+        Build a single track record.
+        
+        Args:
+            full_path: Absolute path to audio file
+            
+        Returns:
+            Track dictionary or None if error
+        """
+        try:
+            path_obj = Path(full_path)
+            filename = path_obj.name
+            ext = path_obj.suffix.lower()
+            name = path_obj.stem.lower()
+            
+            # Extract genre from folder hierarchy
+            genre = self._extract_genre(full_path)
+            
+            # Tokenize for search
+            tokens = self._tokenize(full_path, genre)
+            
+            # Generate stable ID from path
+            track_id = hashlib.md5(full_path.lower().encode()).hexdigest()[:16]
+            
+            return {
+                "id": track_id,
+                "path": full_path,
+                "filename": filename,
+                "name": name,
+                "tokens": tokens,
+                "genre": genre,
+                "ext": ext
+            }
+        
+        except Exception as e:
+            logger.debug(f"[ARGO] Error building track record for {full_path}: {e}")
+            return None
+    
+    def _extract_genre(self, full_path: str) -> Optional[str]:
+        """
+        Extract genre from folder names using GENRE_ALIASES.
+        
+        Args:
+            full_path: Absolute path to audio file
+            
+        Returns:
+            Canonical genre or None
+        """
+        try:
+            # Get relative path from music_dir
+            rel_path = os.path.relpath(full_path, self.music_dir)
+            folder_names = rel_path.split(os.sep)[:-1]  # Exclude filename
+            
+            # Check each folder name against aliases
+            for folder_name in folder_names:
+                normalized = folder_name.lower().replace("_", " ").strip()
+                
+                # Remove punctuation
+                normalized = re.sub(r'[^\w\s-]', '', normalized)
+                
+                # Check if matches alias
+                if normalized in GENRE_ALIASES:
+                    return GENRE_ALIASES[normalized]
+            
+            # No match found
+            return None
+        
+        except Exception as e:
+            logger.debug(f"[ARGO] Genre extraction error: {e}")
+            return None
+    
+    def _tokenize(self, full_path: str, genre: Optional[str]) -> List[str]:
+        """
+        Tokenize for keyword search.
+        
+        Args:
+            full_path: Absolute path to audio file
+            genre: Genre (if extracted)
+            
+        Returns:
+            List of search tokens
+        """
+        tokens = set()
+        
+        try:
+            # Filename (without extension)
+            path_obj = Path(full_path)
+            name = path_obj.stem.lower()
+            tokens.update(name.split())
+            
+            # Folder names
+            rel_path = os.path.relpath(full_path, self.music_dir)
+            folder_names = rel_path.split(os.sep)[:-1]
+            
+            for folder in folder_names:
+                folder_lower = folder.lower()
+                tokens.update(folder_lower.split())
+            
+            # Genre
+            if genre:
+                tokens.update(genre.lower().split())
+            
+            # Remove punctuation and filler words
+            cleaned_tokens = []
+            for token in tokens:
+                # Remove punctuation
+                cleaned = re.sub(r'[^\w-]', '', token)
+                if cleaned and cleaned not in FILLER_WORDS:
+                    cleaned_tokens.append(cleaned)
+            
+            return sorted(list(set(cleaned_tokens)))
+        
+        except Exception as e:
+            logger.debug(f"[ARGO] Tokenization error: {e}")
+            return []
+    
+    def filter_by_genre(self, genre: str) -> List[Dict]:
+        """
+        Filter tracks by genre (canonical).
+        
+        Args:
+            genre: Canonical genre name
+            
+        Returns:
+            List of matching tracks
+        """
+        genre_lower = genre.lower()
+        matches = [
+            t for t in self.tracks 
+            if t.get("genre") and t.get("genre", "").lower() == genre_lower
+        ]
+        
+        if matches:
+            logger.info(f"[ARGO] Music genre match: {genre} ({len(matches)} tracks)")
+        
+        return matches
+    
+    def filter_by_keyword(self, keyword: str) -> List[Dict]:
+        """
+        Filter tracks by keyword search (tokens).
+        
+        Args:
+            keyword: Search keyword
+            
+        Returns:
+            List of matching tracks
+        """
+        keyword_lower = keyword.lower()
+        matches = [t for t in self.tracks if keyword_lower in t.get("tokens", [])]
+        
+        if matches:
+            logger.info(f"[ARGO] Music keyword match: {keyword} ({len(matches)} tracks)")
+        
+        return matches
+    
+    def get_random_track(self) -> Optional[Dict]:
+        """
+        Get random track from entire library.
+        
+        Returns:
+            Random track or None if library empty
+        """
+        if not self.tracks:
+            return None
+        
+        import random
+        return random.choice(self.tracks)
+    
+    def search(self, query: str) -> List[Dict]:
+        """
+        Search by genre or keyword.
+        
+        Priority:
+        1. Try canonical genre match
+        2. Try keyword match
+        3. Return empty list
+        
+        Args:
+            query: Genre name or keyword
+            
+        Returns:
+            List of matching tracks
+        """
+        # Try genre first
+        genre_matches = self.filter_by_genre(query)
+        if genre_matches:
+            return genre_matches
+        
+        # Try keyword
+        keyword_matches = self.filter_by_keyword(query)
+        if keyword_matches:
+            return keyword_matches
+        
+        # No matches
+        return []
+
+
+# ============================================================================
+# SINGLETON INSTANCE
+# ============================================================================
+
+_index_instance: Optional[MusicIndex] = None
+
+
+def get_music_index() -> MusicIndex:
+    """Get or create global music index instance."""
+    global _index_instance
+    
+    if _index_instance is None:
+        music_dir = os.getenv("MUSIC_DIR", "I:\\My Music")
+        index_file = os.getenv("MUSIC_INDEX_FILE", "data/music_index.json")
+        _index_instance = MusicIndex(music_dir, index_file)
+        _index_instance.load_or_create()
+    
+    return _index_instance

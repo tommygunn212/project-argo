@@ -1,18 +1,22 @@
 """
 MUSIC PLAYER MODULE
 
-Local music playback for ARGO.
+Local music playback for ARGO with genre/keyword support.
+
+Uses music_index.py for track discovery and filtering.
 
 Features:
-- Directory scanning on startup (cached in memory)
-- Random track selection
+- Persistent JSON catalog (fast startup)
+- Genre filtering (punk, classic rock, glam, etc.)
+- Keyword search (artist, album, track names)
 - Fire-and-forget playback (non-blocking)
 - Voice interrupt support (uses existing stop mechanism)
 - Minimal logging
 
 Configuration:
 - MUSIC_ENABLED (env): Enable/disable music entirely
-- MUSIC_DIR (env): Path to music directory (e.g., I:\My Music)
+- MUSIC_DIR (env): Path to music directory
+- MUSIC_INDEX_FILE (env): Path to JSON catalog
 
 File types supported:
 - .mp3
@@ -28,7 +32,10 @@ import logging
 import random
 import threading
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
+
+# Import music index for catalog and filtering
+from core.music_index import get_music_index
 
 # ============================================================================
 # LOGGER
@@ -44,9 +51,6 @@ logger = logging.getLogger(__name__)
 MUSIC_ENABLED = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
 """Enable/disable music playback entirely."""
 
-MUSIC_DIR = os.getenv("MUSIC_DIR", "I:\\My Music")
-"""Path to local music directory."""
-
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 """Supported audio file extensions."""
 
@@ -57,19 +61,20 @@ SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 
 class MusicPlayer:
     """
-    Local music playback manager.
+    Local music playback manager with genre/keyword support.
     
     Behavior:
-    - Scans directory recursively on initialization
-    - Caches file paths in memory (no rescans until restart)
+    - Uses persistent JSON index (fast startup, no rescans)
+    - Supports genre filtering (punk, classic rock, etc.)
+    - Supports keyword search (artist, album, track names)
     - Plays random track on voice command
     - Fire-and-forget playback (non-blocking)
     - Announces what's playing
     """
 
     def __init__(self):
-        """Initialize music player and scan directory."""
-        self.tracks: List[str] = []
+        """Initialize music player and load index."""
+        self.index = None
         self.current_process: Optional[object] = None
         self.is_playing = False
 
@@ -77,29 +82,14 @@ class MusicPlayer:
             logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
             return
 
-        self._scan_library()
-
-    def _scan_library(self) -> None:
-        """Recursively scan music directory and cache file paths."""
-        if not os.path.exists(MUSIC_DIR):
-            logger.warning(f"[ARGO] Music directory not found: {MUSIC_DIR}")
-            return
-
+        # Load the music index (fast, persistent JSON)
         try:
-            music_path = Path(MUSIC_DIR)
-            self.tracks = [
-                str(p)
-                for p in music_path.rglob("*")
-                if p.is_file() and p.suffix.lower() in SUPPORTED_FORMATS
-            ]
-
-            if self.tracks:
-                logger.info(f"[ARGO] Music library loaded: {len(self.tracks)} tracks")
-            else:
-                logger.warning(f"[ARGO] No music files found in {MUSIC_DIR}")
-
+            self.index = get_music_index()
+            track_count = len(self.index.tracks) if self.index.tracks else 0
+            logger.info(f"[ARGO] Music index loaded: {track_count} tracks")
         except Exception as e:
-            logger.error(f"[ARGO] Error scanning music directory: {e}")
+            logger.error(f"[ARGO] Error loading music index: {e}")
+            self.index = None
 
     def play_random(self, output_sink=None) -> bool:
         """
@@ -111,15 +101,77 @@ class MusicPlayer:
         Returns:
             True if playback started, False otherwise
         """
-        if not MUSIC_ENABLED or not self.tracks:
+        if not MUSIC_ENABLED or not self.index or not self.index.tracks:
             if output_sink:
                 output_sink.speak("I couldn't find any music.")
             return False
 
-        track = random.choice(self.tracks)
-        filename = Path(track).stem  # Filename without extension
+        track = self.index.get_random_track()
+        if not track:
+            if output_sink:
+                output_sink.speak("No music available.")
+            return False
+
+        track_name = track.get("name", "track")
+        track_path = track.get("path", "")
         
-        return self.play(track, filename, output_sink)
+        return self.play(track_path, track_name, output_sink)
+
+    def play_by_genre(self, genre: str, output_sink=None) -> bool:
+        """
+        Play a random track from specified genre.
+        
+        Args:
+            genre: Genre name (canonical or alias)
+            output_sink: Optional output sink to announce track
+            
+        Returns:
+            True if playback started, False otherwise
+        """
+        if not MUSIC_ENABLED or not self.index:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        tracks = self.index.filter_by_genre(genre)
+        if not tracks:
+            if output_sink:
+                output_sink.speak(f"No {genre} music found.")
+            return False
+
+        track = random.choice(tracks)
+        track_name = track.get("name", "track")
+        track_path = track.get("path", "")
+        
+        return self.play(track_path, track_name, output_sink)
+
+    def play_by_keyword(self, keyword: str, output_sink=None) -> bool:
+        """
+        Play a random track matching keyword search.
+        
+        Args:
+            keyword: Search term (artist, album, track name)
+            output_sink: Optional output sink to announce track
+            
+        Returns:
+            True if playback started, False otherwise
+        """
+        if not MUSIC_ENABLED or not self.index:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        tracks = self.index.filter_by_keyword(keyword)
+        if not tracks:
+            if output_sink:
+                output_sink.speak(f"No music found for '{keyword}'.")
+            return False
+
+        track = random.choice(tracks)
+        track_name = track.get("name", "track")
+        track_path = track.get("path", "")
+        
+        return self.play(track_path, track_name, output_sink)
 
     def play(self, track_path: str, track_name: str, output_sink=None) -> bool:
         """

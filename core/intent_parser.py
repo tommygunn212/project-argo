@@ -34,17 +34,20 @@ class Intent:
     Structured intent extracted from text.
     
     Fields:
-    - intent_type: What kind of intent (GREETING, QUESTION, COMMAND, UNKNOWN)
+    - intent_type: What kind of intent (GREETING, QUESTION, COMMAND, MUSIC, UNKNOWN)
     - confidence: Simple score [0.0, 1.0] (1.0 = high confidence, 0.0 = low)
     - raw_text: Original input text (preserved for debugging)
+    - keyword: Optional keyword extracted from command (for MUSIC intents)
     """
     intent_type: IntentType
     confidence: float
     raw_text: str
+    keyword: Optional[str] = None
 
     def __str__(self) -> str:
         """Human-readable representation."""
-        return f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}, text='{self.raw_text[:50]}')"
+        keyword_str = f", keyword='{self.keyword}'" if self.keyword else ""
+        return f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}{keyword_str}, text='{self.raw_text[:50]}')"
 
 
 class IntentParser(ABC):
@@ -160,7 +163,9 @@ class RuleBasedIntentParser(IntentParser):
         Classify text using hardcoded rules.
 
         Rules (in priority order):
-        1. Music phrases (exact match) → MUSIC (very high confidence)
+        1. "play" command (any form) → MUSIC (very high confidence)
+           - "play music", "play punk", "play bowie", "surprise me"
+           - Extracts keyword if present
         2. Contains performance words (count/sing/recite/spell) → COMMAND (high confidence)
         3. Ends with ? → QUESTION (high confidence)
         4. Starts with question word → QUESTION (medium confidence)
@@ -172,7 +177,7 @@ class RuleBasedIntentParser(IntentParser):
             text: Raw input text
 
         Returns:
-            Intent with type and confidence
+            Intent with type, confidence, and optional keyword (for MUSIC)
 
         Raises:
             ValueError: If text is empty
@@ -184,13 +189,16 @@ class RuleBasedIntentParser(IntentParser):
         text_lower = text.lower()
         first_word = text_lower.split()[0] if text_lower.split() else ""
 
-        # Rule 1: Music phrases (highest priority - overrides everything)
-        # "play music", "play some music", "surprise me", etc.
-        if any(phrase in text_lower for phrase in self.music_phrases):
+        # Rule 1: Music phrases or "play" command (highest priority - overrides everything)
+        # "play music", "play punk", "play something", "surprise me", etc.
+        # Extract keyword after "play" if present
+        if any(phrase in text_lower for phrase in self.music_phrases) or first_word == "play":
+            keyword = self._extract_music_keyword(text_lower)
             return Intent(
                 intent_type=IntentType.MUSIC,
                 confidence=0.95,
                 raw_text=text,
+                keyword=keyword,
             )
 
         # Rule 2: Performance/action words (high priority - overrides questions)
@@ -241,3 +249,44 @@ class RuleBasedIntentParser(IntentParser):
             confidence=0.1,
             raw_text=text,
         )
+
+    def _extract_music_keyword(self, text_lower: str) -> Optional[str]:
+        """
+        Extract keyword after "play" command.
+        
+        Examples:
+        - "play punk" → "punk"
+        - "play classic rock" → "classic rock"
+        - "play music" → None
+        - "play something" → None
+        - "surprise me" → None
+        
+        Args:
+            text_lower: Lowercase text
+            
+        Returns:
+            Keyword string, or None if generic
+        """
+        # Remove generic phrases that don't indicate specific genre/keyword
+        generic_terms = {"music", "some music", "something", "a song", "a"}
+        
+        # If text is just "play" followed by generic term, return None
+        for generic in generic_terms:
+            if text_lower == f"play {generic}" or text_lower == f"play some {generic}":
+                return None
+        
+        # Try to extract word after "play" (if "play" is first word)
+        words = text_lower.split()
+        if len(words) >= 2 and words[0] == "play":
+            # Get everything after "play"
+            keyword_part = " ".join(words[1:])
+            
+            # Remove common filler words
+            filler_words = {"music", "some", "song", "a", "for", "me"}
+            keyword_words = [w for w in keyword_part.split() if w not in filler_words]
+            
+            if keyword_words:
+                return " ".join(keyword_words)
+        
+        # No keyword extracted
+        return None
