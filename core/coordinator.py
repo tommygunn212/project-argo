@@ -146,7 +146,7 @@ class Coordinator:
     """
     
     # Audio recording parameters
-    AUDIO_DURATION = 3  # seconds (after wake word)
+    AUDIO_DURATION = 6  # seconds (after wake word)
     AUDIO_SAMPLE_RATE = 16000  # Hz
     
     # Loop control (hardcoded)
@@ -186,6 +186,9 @@ class Coordinator:
         self._last_transcript = None
         self._last_intent = None
         self._last_response = None
+        
+        # TASK 17: Half-duplex audio gate (prevent simultaneous listen/speak)
+        self._is_speaking = False
         
         # Loop state (v3)
         self.interaction_count = 0
@@ -375,7 +378,12 @@ class Coordinator:
                             # TASK 15: Mark TTS start
                             self.current_probe.mark("tts_start")
                             
-                            self.sink.speak(response_text)
+                            # TASK 17: Set speaking flag (half-duplex audio gate)
+                            self._is_speaking = True
+                            try:
+                                self.sink.speak(response_text)
+                            finally:
+                                self._is_speaking = False
                             
                             # TASK 15: Mark TTS end
                             self.current_probe.mark("tts_end")
@@ -420,6 +428,14 @@ class Coordinator:
                             raise
                     
                     # Block waiting for trigger (each iteration waits for wake word)
+                    # TASK 17: Skip listening if currently speaking (half-duplex audio gate)
+                    if self._is_speaking:
+                        self.logger.info(
+                            f"[Iteration {self.interaction_count}] "
+                            f"Skipping wake word detection (currently speaking)"
+                        )
+                        return
+                    
                     self.logger.info(
                         f"[Iteration {self.interaction_count}] "
                         f"Listening for wake word..."

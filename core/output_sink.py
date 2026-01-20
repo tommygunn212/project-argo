@@ -114,6 +114,7 @@ class SilentOutputSink(OutputSink):
     
     - send(text) → no-op (text discarded)
     - stop() → no-op
+    - speak(text) → no-op (intentionally silent)
     
     This is the default until Piper is integrated (PART 2).
     Text output is handled separately in argo.py and app.py.
@@ -125,6 +126,10 @@ class SilentOutputSink(OutputSink):
     
     async def stop(self) -> None:
         """Stop → no-op in stub."""
+        pass
+    
+    def speak(self, text: str) -> None:
+        """Speak text → no-op (intentionally silent)."""
         pass
 
 
@@ -580,6 +585,27 @@ class PiperOutputSink(OutputSink):
                 import traceback
                 traceback.print_exc()
     
+    def speak(self, text: str) -> None:
+        """
+        Speak text synchronously (blocking wrapper around async send).
+        
+        Used by Coordinator v3 which uses sync interface.
+        Runs the async send() in event loop synchronously.
+        
+        Args:
+            text: Text to synthesize and play
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If event loop already running, create a task instead
+                asyncio.create_task(self.send(text))
+            else:
+                # Run send() synchronously
+                loop.run_until_complete(self.send(text))
+        except Exception as e:
+            print(f"[TTS_ERROR] speak() failed: {type(e).__name__}: {e}", file=sys.stderr)
+    
     async def stop(self) -> None:
         """
         Stop audio playback immediately (idempotent, instant, async-safe).
@@ -635,4 +661,197 @@ class PiperOutputSink(OutputSink):
                 import time
                 print(f"[PIPER_PROFILING] stop() called, task already done (idempotent) @ {time.time():.3f}")
             pass
+
+
+# ============================================================================
+# EDGE-TTS IMPLEMENTATION (TASK 18: CLOUD TTS)
+# ============================================================================
+
+class EdgeTTSOutputSink(OutputSink):
+    """
+    Edge-TTS output sink: cloud text-to-speech with blocking playback.
+    
+    Uses Microsoft Edge-TTS API (via edge-tts package).
+    Synthesizes speech and plays to default speaker.
+    All operations block until complete (no async, no background threads).
+    
+    Suitable for half-duplex operation (blocks until audio playback finishes).
+    
+    Args:
+        voice: Microsoft neural voice name (default: "en-US-AriaNeural")
+        rate: Speech rate adjustment -50 to +50 (default: 0)
+        pitch: Pitch adjustment -50 to +50 (default: 0)
+    """
+    
+    # Hard-coded audio parameters (no auto-detect)
+    SAMPLE_RATE = 48000  # Hz
+    CHANNELS = 2  # Stereo
+    
+    def __init__(self, voice: str = "en-US-AriaNeural", rate: int = 0, pitch: int = 0):
+        """
+        Initialize Edge-TTS output sink.
+        
+        Args:
+            voice: Microsoft neural voice (e.g., "en-US-AriaNeural")
+            rate: Speech rate (-50 to +50)
+            pitch: Pitch (-50 to +50)
+        """
+        self.voice = voice
+        self.rate = f"{rate:+d}%" if rate != 0 else "+0%"
+        self.pitch = f"{pitch:+d}Hz" if pitch != 0 else "+0Hz"
+        self._stop_requested = False
+        self._audio_device = None
+        
+        # Initialize audio device at startup
+        self._init_audio_device()
+    
+    def _init_audio_device(self) -> None:
+        """
+        Detect and lock to Windows audio output device (not default).
+        
+        Finds first non-default output device and logs it.
+        """
+        try:
+            import sounddevice
+            devices = sounddevice.query_devices()
+            
+            # Find first output device (not default)
+            for idx, device in enumerate(devices):
+                if device['max_output_channels'] > 0 and idx != sounddevice.default.device[1]:
+                    self._audio_device = idx
+                    device_name = device['name']
+                    print(f"[Audio] Output device: {device_name} ({self.SAMPLE_RATE}Hz)", file=sys.stderr)
+                    return
+            
+            # Fallback to default if no other device found
+            self._audio_device = sounddevice.default.device[1]
+            default_device = sounddevice.query_devices(self._audio_device)
+            print(f"[Audio] Output device (default): {default_device['name']} ({self.SAMPLE_RATE}Hz)", file=sys.stderr)
+            
+        except Exception as e:
+            print(f"[Audio] Device detection failed: {e}", file=sys.stderr)
+            self._audio_device = None
+    
+    def speak(self, text: str) -> None:
+        """
+        Speak text synchronously (blocking until playback complete).
+        
+        1. Synthesize audio using Edge-TTS (cloud API)
+        2. Save WAV file to audio/debug/ for verification
+        3. Play to locked output device at 48kHz
+        4. Block until playback finishes
+        
+        Args:
+            text: Text to synthesize and play
+        """
+        if not text or not text.strip():
+            return
+        
+        self._stop_requested = False
+        
+        try:
+            import edge_tts
+            import sounddevice
+            import numpy as np
+            import wave
+            import os
+            
+            # Step 1: Synthesize audio from text
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice=self.voice,
+                rate=self.rate,
+                pitch=self.pitch
+            )
+            
+            # Collect audio chunks
+            audio_chunks = []
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def collect_audio():
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_chunks.append(chunk["data"])
+                    if self._stop_requested:
+                        break
+            
+            try:
+                loop.run_until_complete(collect_audio())
+            finally:
+                loop.close()
+            
+            if not audio_chunks or self._stop_requested:
+                return
+            
+            # Combine audio chunks
+            audio_data = b''.join(audio_chunks)
+            
+            # Step 2: Save WAV file to debug directory
+            debug_dir = "audio/debug"
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_file = os.path.join(debug_dir, "edge_tts_test.wav")
+            
+            try:
+                with wave.open(debug_file, 'wb') as wav_file:
+                    # Edge-TTS outputs 48kHz 16-bit mono audio
+                    wav_file.setnchannels(1)  # Mono from Edge-TTS
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.SAMPLE_RATE)
+                    wav_file.writeframes(audio_data)
+                print(f"[Audio] Debug WAV saved: {debug_file}", file=sys.stderr)
+            except Exception as e:
+                print(f"[Audio] Failed to save debug WAV: {e}", file=sys.stderr)
+            
+            # Step 3: Convert audio to numpy array for playback
+            audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            duration = len(audio_array) / self.SAMPLE_RATE
+            
+            # Step 4: Log and play to locked output device (blocking)
+            print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={self.SAMPLE_RATE}", file=sys.stderr)
+            
+            sounddevice.play(
+                audio_array,
+                samplerate=self.SAMPLE_RATE,
+                device=self._audio_device,
+                blocking=True
+            )
+            
+            print(f"[Audio] Playback complete", file=sys.stderr)
+            
+        except ImportError as e:
+            print(f"[EdgeTTS_ERROR] Missing dependency: {e}", file=sys.stderr)
+            print(f"[EdgeTTS_ERROR] Install with: pip install edge-tts sounddevice numpy", file=sys.stderr)
+        except Exception as e:
+            print(f"[EdgeTTS_ERROR] speak() failed: {type(e).__name__}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+    
+    async def send(self, text: str) -> None:
+        """
+        Send text to output (async wrapper for interface compatibility).
+        
+        Calls speak() synchronously (blocking mode).
+        
+        Args:
+            text: Text to synthesize and play
+        """
+        self.speak(text)
+    
+    async def stop(self) -> None:
+        """
+        Stop audio playback immediately (idempotent, instant).
+        
+        Behavior:
+        - If playback running: halt immediately
+        - If playback not running: no-op (idempotent)
+        - Multiple calls: safe (idempotent)
+        - Never raises exceptions
+        """
+        self._stop_requested = True
+        try:
+            import sounddevice
+            sounddevice.stop()
+        except Exception:
+            pass  # Already stopped or not playing
 
