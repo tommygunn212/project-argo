@@ -942,3 +942,36 @@ class EdgeTTSOutputSink(OutputSink):
         except Exception:
             pass  # Already stopped or not playing
 
+
+def play_startup_announcement():
+    """Play startup chime + voice announcement on successful initialization."""
+    import random
+    import numpy as np
+    import sounddevice
+    
+    try:
+        # === CHIME (200-300ms at 1000Hz) ===
+        sample_rate = 22050
+        duration = 0.25  # 250ms
+        t = np.linspace(0, duration, int(sample_rate * duration))
+        frequency = 1000  # Hz
+        chime = 0.3 * np.sin(2 * np.pi * frequency * t)
+        
+        # Fade out at the end to avoid clicks
+        fade_samples = int(0.05 * sample_rate)
+        chime[-fade_samples:] *= np.linspace(1, 0, fade_samples)
+        
+        sounddevice.play(chime, samplerate=sample_rate)
+        sounddevice.wait()
+        
+        # === VOICE ANNOUNCEMENT ===
+        phrases = ["Ready.", "Voice system online."]
+        phrase = random.choice(phrases)
+        
+        # Use the default output sink to speak
+        sink = get_output_sink()
+        sink.send(phrase)
+        
+    except Exception as e:
+        # Silently fail on startup announcement (don't crash the system)
+        pass

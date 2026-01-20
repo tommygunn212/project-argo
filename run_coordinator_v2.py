@@ -86,6 +86,10 @@ def main():
         print("    Speak 'computer' or 'hello' to trigger")
         print()
 
+        # Play startup announcement
+        from core.output_sink import play_startup_announcement
+        play_startup_announcement()
+
         coordinator.run()
 
         print("\n" + "=" * 70)
