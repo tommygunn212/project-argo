@@ -687,6 +687,18 @@ class EdgeTTSOutputSink(OutputSink):
     SAMPLE_RATE = 48000  # Hz
     CHANNELS = 2  # Stereo
     
+    # Step 1: Lock audio backend to WASAPI (shared mode, stable for M-Audio)
+    @staticmethod
+    def _init_wasapi():
+        """Initialize WASAPI backend for stable M-Audio playback."""
+        try:
+            import sounddevice as sd
+            # Set WASAPI as the preferred backend (shared mode is more stable)
+            sd.default.hostapi = 'Windows WASAPI'
+            print(f"[Audio] WASAPI backend initialized", file=sys.stderr)
+        except Exception as e:
+            print(f"[Audio] Warning: Could not set WASAPI backend: {e}", file=sys.stderr)
+    
     def __init__(self, voice: str = "en-US-AriaNeural", rate: int = 0, pitch: int = 0):
         """
         Initialize Edge-TTS output sink.
@@ -704,6 +716,10 @@ class EdgeTTSOutputSink(OutputSink):
         self.volume = "+0%"    # MUST be string ending in %
         self._stop_requested = False
         self._audio_device = None
+        self._device_sample_rate = 48000  # Will be detected at init
+        
+        # Initialize WASAPI backend
+        self._init_wasapi()
         
         # Initialize audio device at startup
         self._init_audio_device()
@@ -712,21 +728,24 @@ class EdgeTTSOutputSink(OutputSink):
         """
         Use system default audio output device.
         
-        Let sounddevice pick the system default for maximum compatibility.
+        Detects device sample rate and stores it for resampling.
         """
         try:
-            import sounddevice
+            import sounddevice as sd
             
             # Use None to let sounddevice pick the system default
             self._audio_device = None
             
-            # Log which device will be used
-            default_device = sounddevice.query_devices(kind='output')
-            print(f"[Audio] Output device: {default_device['name']} @ {self.SAMPLE_RATE}Hz", file=sys.stderr)
+            # Step 2: Detect the actual output device sample rate
+            device_info = sd.query_devices(self._audio_device, 'output')
+            self._device_sample_rate = int(device_info['default_samplerate'])
+            
+            print(f"[Audio] Output device: {device_info['name']} @ {self._device_sample_rate}Hz", file=sys.stderr)
             
         except Exception as e:
             print(f"[Audio] Device detection failed: {e}", file=sys.stderr)
             self._audio_device = None
+            self._device_sample_rate = 48000  # Fallback
     
     def speak(self, text: str) -> None:
         """
@@ -824,16 +843,41 @@ class EdgeTTSOutputSink(OutputSink):
             print(f"[Audio] Array shape: {audio_array.shape}, dtype: {audio_array.dtype}", file=sys.stderr)
             print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
             
+            # Step 3: Resample Edge-TTS audio to device clock (THIS IS THE FIX)
+            # Prevents static, squeaks, and micro-duration cutoff
+            if actual_sample_rate != self._device_sample_rate:
+                try:
+                    from scipy.signal import resample_poly
+                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz", file=sys.stderr)
+                    audio_array = resample_poly(
+                        audio_array,
+                        self._device_sample_rate,
+                        actual_sample_rate
+                    )
+                    actual_sample_rate = self._device_sample_rate
+                except ImportError:
+                    print(f"[Audio] scipy not available for resampling, using native rate", file=sys.stderr)
+                except Exception as e:
+                    print(f"[Audio] Resampling failed: {e}, continuing with native rate", file=sys.stderr)
+            
             # Step 4: Log and play to locked output device (blocking)
             # Use actual sample rate from WAV header, not hard-coded constant
             print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
-            sounddevice.play(
+            # Pre-buffer audio to prevent underrun (50ms buffer)
+            import time
+            time.sleep(0.05)
+            
+            # Step 4: Force correct playback parameters
+            import sounddevice as sd
+            sd.play(
                 audio_array.astype(np.float32),
                 samplerate=int(actual_sample_rate),
                 device=self._audio_device,
-                blocking=True
+                blocking=True,
+                blocksize=2048
             )
+            sd.wait()
             
             # Step 5: Ensure playback clock finishes before returning
             import time
