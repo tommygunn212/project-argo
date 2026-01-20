@@ -24,6 +24,7 @@ class IntentType(Enum):
     GREETING = "greeting"
     QUESTION = "question"
     COMMAND = "command"
+    MUSIC = "music"
     UNKNOWN = "unknown"
 
 
@@ -145,17 +146,27 @@ class RuleBasedIntentParser(IntentParser):
             "spell",
         }
 
+        # Music command phrases (must contain these keywords)
+        self.music_phrases = {
+            "play music",
+            "play some music",
+            "play something",
+            "surprise me",
+            "play a song",
+        }
+
     def parse(self, text: str) -> Intent:
         """
         Classify text using hardcoded rules.
 
         Rules (in priority order):
-        1. Contains performance words (count/sing/recite/spell) → COMMAND (high confidence)
-        2. Ends with ? → QUESTION (high confidence)
-        3. Starts with question word → QUESTION (medium confidence)
-        4. Starts with greeting keyword → GREETING (high confidence)
-        5. Starts with command word → COMMAND (medium confidence)
-        6. Otherwise → UNKNOWN (low confidence)
+        1. Music phrases (exact match) → MUSIC (very high confidence)
+        2. Contains performance words (count/sing/recite/spell) → COMMAND (high confidence)
+        3. Ends with ? → QUESTION (high confidence)
+        4. Starts with question word → QUESTION (medium confidence)
+        5. Starts with greeting keyword → GREETING (high confidence)
+        6. Starts with command word → COMMAND (medium confidence)
+        7. Otherwise → UNKNOWN (low confidence)
 
         Args:
             text: Raw input text
@@ -173,7 +184,16 @@ class RuleBasedIntentParser(IntentParser):
         text_lower = text.lower()
         first_word = text_lower.split()[0] if text_lower.split() else ""
 
-        # Rule 1: Performance/action words (highest priority - overrides questions)
+        # Rule 1: Music phrases (highest priority - overrides everything)
+        # "play music", "play some music", "surprise me", etc.
+        if any(phrase in text_lower for phrase in self.music_phrases):
+            return Intent(
+                intent_type=IntentType.MUSIC,
+                confidence=0.95,
+                raw_text=text,
+            )
+
+        # Rule 2: Performance/action words (high priority - overrides questions)
         # "Can you count to five?" should be COMMAND, not QUESTION
         performance_words = {"count", "sing", "recite", "spell", "list", "name"}
         if any(word in text_lower for word in performance_words):
@@ -183,7 +203,7 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text,
             )
 
-        # Rule 2: Question mark at end (high confidence)
+        # Rule 3: Question mark at end (high confidence)
         if text.endswith("?"):
             return Intent(
                 intent_type=IntentType.QUESTION,
@@ -191,7 +211,7 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text,
             )
 
-        # Rule 3: Starts with question word (medium-high confidence)
+        # Rule 4: Starts with question word (medium-high confidence)
         if first_word in self.question_words:
             return Intent(
                 intent_type=IntentType.QUESTION,
@@ -199,7 +219,7 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text,
             )
 
-        # Rule 4: Starts with greeting keyword (high confidence)
+        # Rule 5: Starts with greeting keyword (high confidence)
         if first_word in self.greeting_keywords:
             return Intent(
                 intent_type=IntentType.GREETING,
@@ -207,7 +227,7 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text,
             )
 
-        # Rule 5: Starts with command word (medium confidence)
+        # Rule 6: Starts with command word (medium confidence)
         if first_word in self.command_words:
             return Intent(
                 intent_type=IntentType.COMMAND,
@@ -215,7 +235,7 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text,
             )
 
-        # Rule 6: Fallback to unknown (low confidence)
+        # Rule 7: Fallback to unknown (low confidence)
         return Intent(
             intent_type=IntentType.UNKNOWN,
             confidence=0.1,

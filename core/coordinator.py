@@ -355,10 +355,19 @@ class Coordinator:
                             # TASK 15: Mark LLM start
                             self.current_probe.mark("llm_start")
                             
-                            response_text = self.generator.generate(intent, self.memory)
-                            
-                            # TASK 15: Mark LLM end
-                            self.current_probe.mark("llm_end")
+                            # Check if this is a music command (before LLM processing)
+                            from core.intent_parser import IntentType
+                            if intent.intent_type == IntentType.MUSIC:
+                                # Music playback
+                                from core.music_player import get_music_player
+                                music_player = get_music_player()
+                                music_player.play_random(self.sink)
+                                response_text = ""  # No LLM response for music
+                                self.current_probe.mark("llm_end")
+                            else:
+                                # Normal LLM response
+                                response_text = self.generator.generate(intent, self.memory)
+                                self.current_probe.mark("llm_end")
                             
                             # PHASE 16: Capture for observer snapshot
                             self._last_response = response_text

@@ -587,6 +587,7 @@ class PiperOutputSink(OutputSink):
     async def stop(self) -> None:
         """
         Stop audio playback immediately (idempotent, instant, async-safe).
+        Also stops music playback if active.
         
         Behavior:
         1. If playback_task exists and is running: cancel it
@@ -639,6 +640,14 @@ class PiperOutputSink(OutputSink):
                 import time
                 print(f"[PIPER_PROFILING] stop() called, task already done (idempotent) @ {time.time():.3f}")
             pass
+        
+        # Also stop music playback if active
+        try:
+            from core.music_player import get_music_player
+            music_player = get_music_player()
+            music_player.stop()
+        except Exception:
+            pass  # Music not playing or not enabled
 
 
 # ============================================================================
@@ -928,6 +937,7 @@ class EdgeTTSOutputSink(OutputSink):
     async def stop(self) -> None:
         """
         Stop audio playback immediately (idempotent, instant).
+        Also stops music playback if active.
         
         Behavior:
         - If playback running: halt immediately
@@ -941,6 +951,14 @@ class EdgeTTSOutputSink(OutputSink):
             sounddevice.stop()
         except Exception:
             pass  # Already stopped or not playing
+        
+        # Also stop music playback if active
+        try:
+            from core.music_player import get_music_player
+            music_player = get_music_player()
+            music_player.stop()
+        except Exception:
+            pass  # Music not playing or not enabled
 
 
 def play_startup_announcement():
