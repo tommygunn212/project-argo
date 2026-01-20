@@ -351,8 +351,7 @@ See [LICENSE](LICENSE) file for details.
 
 ## 👥 Contributors
 
-**tommy gunn** — Creator and architecture  
-**Bob** — Architecture, implementation, documentation
+**tommy gunn** — Creator and architecture
 
 ---
 
