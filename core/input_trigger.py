@@ -203,12 +203,15 @@ class PorcupineWakeWordTrigger(InputTrigger):
             # Start audio capture
             self.logger.info("[Audio] Starting capture from default microphone...")
             
-            with sounddevice.InputStream(
-                samplerate=porcupine.sample_rate,
-                channels=1,
-                blocksize=porcupine.frame_length,
-                dtype='int16'
-            ) as stream:
+            stream = None
+            try:
+                stream = sounddevice.InputStream(
+                    samplerate=porcupine.sample_rate,
+                    channels=1,
+                    blocksize=porcupine.frame_length,
+                    dtype='int16'
+                )
+                stream.start()
                 self.logger.info("[Audio] Listening for wake word 'picovoice'...")
                 
                 # Listen until wake word detected
@@ -235,6 +238,15 @@ class PorcupineWakeWordTrigger(InputTrigger):
                         
                         # Exit (blocking call returns)
                         break
+            finally:
+                # Ensure stream is properly closed
+                if stream is not None:
+                    try:
+                        stream.stop()
+                        stream.close()
+                        self.logger.info("[Audio] Stream closed successfully")
+                    except Exception as e:
+                        self.logger.warning(f"[Audio] Error closing stream: {e}")
         
         except Exception as e:
             self.logger.error(f"[on_trigger] Failed: {e}")

@@ -459,12 +459,12 @@ class MusicPlayer:
             # Step 1: Try LLM-based extraction for natural language (might be slower but more flexible)
             logger.info(f"[ARGO] Attempting LLM extraction for: '{keyword}'")
             llm_extracted = self._extract_metadata_with_llm(keyword)
-            if llm_extracted and (llm_extracted.get("year") or llm_extracted.get("genre") or llm_extracted.get("artist")):
+            if llm_extracted and (llm_extracted.get("year") or llm_extracted.get("genre") or llm_extracted.get("artist") or llm_extracted.get("song")):
                 logger.info(f"[ARGO] LLM extraction succeeded: {llm_extracted}")
                 parsed = llm_extracted
             
             # Step 2: Fallback to regex-based extraction if LLM didn't provide useful data
-            if not parsed or not (parsed.get("year") or parsed.get("genre") or parsed.get("artist")):
+            if not parsed or not (parsed.get("year") or parsed.get("genre") or parsed.get("artist") or parsed.get("song")):
                 logger.info(f"[ARGO] Using regex extraction (LLM didn't extract metadata)")
                 parsed = self._parse_music_keyword(keyword)
             
@@ -485,9 +485,21 @@ class MusicPlayer:
                 if tracks:
                     logger.info(f"[ARGO] Strict search succeeded: {len(tracks)} tracks found")
             
-            # Attempt 2: Drop Year/Genre (common LLM hallucinations) - keep Artist and Song
+            # Attempt 2: Search by Song Name if extracted (song-specific search)
+            if not tracks and parsed.get("song"):
+                logger.info(f"[ARGO] Search Attempt 2 (Song): song='{parsed.get('song')}'")
+                tracks = self.jellyfin_provider.advanced_search(
+                    query_text=parsed.get("song"),
+                    year=None,
+                    genre=None,
+                    artist=None
+                )
+                if tracks:
+                    logger.info(f"[ARGO] Song search succeeded: {len(tracks)} tracks found")
+            
+            # Attempt 3: Drop Year/Genre (common LLM hallucinations) - keep Artist and Song
             if not tracks and (parsed.get("year") or parsed.get("genre")):
-                logger.info(f"[ARGO] Search Attempt 2 (Relaxed): Dropping Year/Genre, keeping artist={parsed.get('artist')}")
+                logger.info(f"[ARGO] Search Attempt 3 (Relaxed): Dropping Year/Genre, keeping artist={parsed.get('artist')}")
                 tracks = self.jellyfin_provider.advanced_search(
                     query_text=None,
                     year=None,  # Drop unreliable year
@@ -497,9 +509,9 @@ class MusicPlayer:
                 if tracks:
                     logger.info(f"[ARGO] Relaxed search succeeded: {len(tracks)} tracks found")
             
-            # Attempt 3: Search by Artist ONLY (user's core intent if they mentioned an artist)
+            # Attempt 4: Search by Artist ONLY (user's core intent if they mentioned an artist)
             if not tracks and parsed.get("artist"):
-                logger.info(f"[ARGO] Search Attempt 3 (Artist Only): artist={parsed.get('artist')}")
+                logger.info(f"[ARGO] Search Attempt 4 (Artist Only): artist={parsed.get('artist')}")
                 tracks = self.jellyfin_provider.advanced_search(
                     query_text=None,
                     artist=parsed.get("artist")
@@ -507,9 +519,9 @@ class MusicPlayer:
                 if tracks:
                     logger.info(f"[ARGO] Artist-only search succeeded: {len(tracks)} tracks found")
             
-            # Attempt 4: Simple keyword search (fallback to keyword matching)
+            # Attempt 5: Simple keyword search (fallback to keyword matching)
             if not tracks:
-                logger.info(f"[ARGO] Search Attempt 4 (Keyword): keyword='{keyword}'")
+                logger.info(f"[ARGO] Search Attempt 5 (Keyword): keyword='{keyword}'")
                 tracks = self.jellyfin_provider.search_by_keyword(keyword)
                 if tracks:
                     logger.info(f"[ARGO] Keyword search succeeded: {len(tracks)} tracks found")
@@ -985,13 +997,15 @@ Response (JSON ONLY):"""
                     return False
                 
                 # Save to temp file explicitly as MP3
+                bytes_written = 0
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
                     tmp_path = tmp.name
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             tmp.write(chunk)
+                            bytes_written += len(chunk)
                 
-                logger.debug(f"[ARGO] Downloaded {len(response.content)} bytes to {tmp_path}")
+                logger.debug(f"[ARGO] Downloaded {bytes_written} bytes to {tmp_path}")
                 
                 # Play async in background
                 def play_stream():
