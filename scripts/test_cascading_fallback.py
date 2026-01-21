@@ -52,9 +52,9 @@ def test_cascading_fallback():
     )
     print(f"Result: {len(tracks)} tracks found")
     if not tracks:
-        print("❌ FAILED (as expected - year 1985 is wrong)\n")
+        print("[FAILED] (as expected - year 1985 is wrong)\n")
     else:
-        print(f"✓ Found {len(tracks)} tracks")
+        print(f"[OK] Found {len(tracks)} tracks")
         for i, track in enumerate(tracks[:2], 1):
             print(f"   {i}. {track['artist']} - {track['song']}")
         print()
@@ -70,13 +70,13 @@ def test_cascading_fallback():
     )
     print(f"Result: {len(tracks)} tracks found")
     if tracks:
-        print(f"✓ SUCCESS! Found {len(tracks)} Guns and Roses tracks:")
+        print(f"[OK] SUCCESS! Found {len(tracks)} Guns and Roses tracks:")
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']} ({track.get('year', 'N/A')})")
         print()
         return True
     else:
-        print("⚠ Not found in relaxed mode either\n")
+        print("[!] Not found in relaxed mode either\n")
     
     print("-" * 80)
     print("ATTEMPT 3: Artist-only search")
@@ -87,13 +87,13 @@ def test_cascading_fallback():
     )
     print(f"Result: {len(tracks)} tracks found")
     if tracks:
-        print(f"✓ SUCCESS! Found {len(tracks)} Guns and Roses tracks:")
+        print(f"[OK] SUCCESS! Found {len(tracks)} Guns and Roses tracks:")
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']} ({track.get('year', 'N/A')})")
         print()
         return True
     else:
-        print("❌ Not found\n")
+        print("[FAIL] Not found\n")
     
     print("-" * 80)
     print("ATTEMPT 4: Keyword search fallback")
@@ -102,16 +102,16 @@ def test_cascading_fallback():
     tracks = player.jellyfin_provider.search_by_keyword("guns and roses")
     print(f"Result: {len(tracks)} tracks found")
     if tracks:
-        print(f"✓ Found {len(tracks)} tracks:")
+        print(f"[OK] Found {len(tracks)} tracks:")
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']}")
         print()
         return True
     else:
-        print("❌ Not found\n")
+        print("[FAIL] Not found\n")
     
     print("="*80)
-    print("✅ CASCADING FALLBACK LOGIC TEST COMPLETE")
+    print("[OK] CASCADING FALLBACK LOGIC TEST COMPLETE")
     print("="*80 + "\n")
     return True
 
