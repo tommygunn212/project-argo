@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 
 # Import the OutputSink from core module
-from core.output_sink import EdgeTTSLiveKitOutputSink
+from core.output_sink import EdgeTTSOutputSink
 
 
 def main():
@@ -33,8 +33,8 @@ def main():
     print()
     
     # Step 1: Create an instance
-    print("Step 1: Creating EdgeTTSLiveKitOutputSink...")
-    sink = EdgeTTSLiveKitOutputSink()
+    print("Step 1: Creating EdgeTTSOutputSink...")
+    sink = EdgeTTSOutputSink()
     print()
     
     # Step 2: Call speak() with text

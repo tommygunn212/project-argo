@@ -7,12 +7,13 @@ demonstrates voice input → response pipeline with Piper TTS
 import os
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
 # Load .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-from voice_input import start_continuous_audio_stream, stop_continuous_audio_stream
+from scripts.voice_input import start_continuous_audio_stream, stop_continuous_audio_stream
 from core.output_sink import get_output_sink
 import time
 

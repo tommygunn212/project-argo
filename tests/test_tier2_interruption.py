@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from core.state_machine import StateMachine, State
 from core.output_sink import get_output_sink
-from wrapper.argo import run_argo, _state_machine, _output_sink
+from wrapper.argo import run_argo
 
 def test_interruption_1():
     """Tier 2 Test 1: Interrupt quantum computing response"""

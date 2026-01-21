@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 
 from core.input_trigger import InputTrigger
-from core.output_sink import EdgeTTSLiveKitOutputSink
+from core.output_sink import EdgeTTSOutputSink
 from core.coordinator import Coordinator
 from typing import Callable
 
