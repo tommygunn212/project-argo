@@ -103,6 +103,7 @@ class WhisperSTT(SpeechToText):
         result = self.model.transcribe(
             audio_array,
             language="en",
+            fp16=False,  # Force FP32 (CPU optimized, silences FP16 not supported warning)
             verbose=False,
         )
 

@@ -145,8 +145,17 @@ class PorcupineWakeWordTrigger(InputTrigger):
                 "Set PORCUPINE_ACCESS_KEY env var or pass to __init__."
             )
         
+        # Pre-roll buffer for capturing speech onset (200-400ms before wake word)
+        self.preroll_buffer = []
+        self.preroll_capacity = 4  # ~400ms at 100ms chunks
+        self.preroll_enabled = True
+        
+        # Cached interrupt detector (reuse to avoid re-initialization)
+        self._porcupine_interrupt_detector = None
+        
         self.logger.info("[InputTrigger.Porcupine] Initialized")
         self.logger.debug(f"  Access key: {self.access_key[:10]}...")
+        self.logger.debug(f"  Pre-roll buffer capacity: {self.preroll_capacity} frames (~400ms)")
     
     def on_trigger(self, callback: Callable) -> None:
         """
@@ -177,6 +186,7 @@ class PorcupineWakeWordTrigger(InputTrigger):
             )
         
         self.logger.info("[on_trigger] Initializing Porcupine...")
+        self.preroll_buffer.clear()  # Clear pre-roll buffer on each trigger listen
         
         try:
             # Initialize Porcupine (wake word detection) with custom model
@@ -205,6 +215,12 @@ class PorcupineWakeWordTrigger(InputTrigger):
                 while True:
                     frame, _ = stream.read(porcupine.frame_length)
                     
+                    # Maintain pre-roll buffer (circular buffer of recent frames)
+                    if self.preroll_enabled:
+                        self.preroll_buffer.append(frame.copy())
+                        if len(self.preroll_buffer) > self.preroll_capacity:
+                            self.preroll_buffer.pop(0)  # Remove oldest frame
+                    
                     # Process frame
                     keyword_index = porcupine.process(frame.squeeze())
                     
@@ -222,13 +238,27 @@ class PorcupineWakeWordTrigger(InputTrigger):
         
         except Exception as e:
             self.logger.error(f"[on_trigger] Failed: {e}")
-            raise    
+            raise
+    
+    def get_preroll_buffer(self):
+        """
+        Get and clear the pre-roll buffer (speech onset audio before wake word).
+        
+        Returns:
+            List of audio frames captured before wake word (empty if disabled/empty)
+        """
+        buffer = self.preroll_buffer.copy()
+        self.preroll_buffer.clear()
+        return buffer
+    
     def _check_for_interrupt(self) -> bool:
         """
         Quick non-blocking check for interrupt (voice activity or wake word).
         
         Used by Coordinator during TTS playback to detect user interruption.
         Performs a single frame check without blocking.
+        
+        IMPORTANT: Reuses cached Porcupine instance (no new initialization per call).
         
         Returns:
             True if voice activity detected (interrupt), False otherwise
@@ -240,15 +270,19 @@ class PorcupineWakeWordTrigger(InputTrigger):
         try:
             import pvporcupine
             
-            # Initialize Porcupine for this check
+            # Initialize Porcupine once and cache it (reuse to avoid re-initialization overhead)
             access_key = os.getenv("PORCUPINE_ACCESS_KEY")
             if not access_key:
                 return False
             
-            porcupine = pvporcupine.create(
-                access_key=access_key,
-                keywords=['picovoice']
-            )
+            # Cache Porcupine instance to avoid repeated initialization
+            if self._porcupine_interrupt_detector is None:
+                self._porcupine_interrupt_detector = pvporcupine.create(
+                    access_key=access_key,
+                    keywords=['picovoice']
+                )
+            
+            porcupine = self._porcupine_interrupt_detector
             
             # Read one frame from microphone
             frame = sd.rec(

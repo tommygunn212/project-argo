@@ -178,7 +178,7 @@ def transcribe_audio(audio_data):
             tmp_path = tmp.name
         
         # Transcribe
-        result = model.transcribe(tmp_path, language="en")
+        result = model.transcribe(tmp_path, language="en", fp16=False)
         
         # Clean up
         Path(tmp_path).unlink()

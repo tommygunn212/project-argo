@@ -8,6 +8,14 @@ __pycache__/
 
 # Logs
 logs/
+*.log
+processed_files.log
+
+# Configuration & Secrets (CRITICAL - protect user keys)
+config.json
+.env
+.env.local
+.env.*.local
 
 # Runtime / generated state
 runtime/
@@ -17,11 +25,18 @@ memory/
 # Temporary files
 temp/
 *.wav
+audio/debug/
 
 # IDE / OS
 .vscode/
+.idea/
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+
+# Audio cache
+audio/cache/
 
 # Session artifacts and old documentation
 ADVERSARIAL_TEST_REPORT.md

@@ -1,0 +1,56 @@
+{
+  "system": {
+    "log_level": "INFO",
+    "debug_mode": false
+  },
+  
+  "audio": {
+    "sample_rate": 16000,
+    "device_name": null,
+    "max_recording_duration": 10.0,
+    "silence_timeout_seconds": 2.5,
+    "silence_threshold": 30
+  },
+  
+  "wake_word": {
+    "model": "argo",
+    "access_key": "YOUR_PORCUPINE_ACCESS_KEY_HERE"
+  },
+  
+  "speech_to_text": {
+    "model": "base",
+    "device": "cpu"
+  },
+  
+  "text_to_speech": {
+    "engine": "piper",
+    "voice": "lessac",
+    "voice_model_path": "audio/piper/voices/en_US-lessac-medium.onnx"
+  },
+  
+  "llm": {
+    "model": "qwen",
+    "base_url": "http://localhost:11434",
+    "timeout_seconds": 30
+  },
+  
+  "music": {
+    "enabled": true,
+    "library_path": "I:\\My Music",
+    "index_file": "data/music_index.json",
+    "supported_extensions": [".mp3", ".wav", ".flac", ".m4a"]
+  },
+  
+  "output": {
+    "debug_dir": "audio/debug",
+    "piper_executable": "audio/piper/piper.exe"
+  },
+  
+  "coordinator": {
+    "max_interactions": 10,
+    "pre_roll_buffer_ms_min": 1000,
+    "pre_roll_buffer_ms_max": 1500,
+    "rms_speech_threshold": 0.005,
+    "minimum_record_duration": 0.9
+  }
+}

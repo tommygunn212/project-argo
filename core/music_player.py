@@ -36,6 +36,7 @@ from typing import Optional, List, Dict
 
 # Import music index for catalog and filtering
 from core.music_index import get_music_index
+from core.playback_state import get_playback_state
 
 # ============================================================================
 # LOGGER
@@ -53,6 +54,137 @@ MUSIC_ENABLED = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
 
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 """Supported audio file extensions."""
+
+
+# ============================================================================
+# GENRE MAPPING AND ADJACENCY
+# ============================================================================
+
+GENRE_ALIASES = {
+    # Rock variants
+    "rock music": "rock",
+    "classic rock": "rock",
+    "hard rock": "rock",
+    "alternative rock": "alternative",
+    "alt rock": "alternative",
+    "glam rock": "glam",
+    
+    # Hip-hop/Rap
+    "hip hop": "rap",
+    "hiphop": "rap",
+    "hip-hop": "rap",
+    "rap music": "rap",
+    
+    # Electronic
+    "electronic music": "electronic",
+    "house music": "house",
+    "techno music": "techno",
+    "edm": "electronic",
+    
+    # Pop/Soul/RB
+    "pop music": "pop",
+    "rnb": "r&b",
+    "rhythm and blues": "r&b",
+    "soul music": "soul",
+    
+    # Jazz/Blues
+    "jazz music": "jazz",
+    "blues music": "blues",
+    "cool jazz": "jazz",
+    
+    # Country/Folk
+    "country music": "country",
+    "folk music": "folk",
+    "americana": "folk",
+    
+    # Metal/Punk
+    "metal music": "metal",
+    "heavy metal": "metal",
+    "punk rock": "punk",
+    "punk music": "punk",
+    
+    # Indie/Alternative
+    "indie music": "indie",
+    "alternative music": "alternative",
+}
+"""Genre aliases and synonyms for better matching."""
+
+GENRE_ADJACENCY = {
+    # Punk adjacency: rock-related genres
+    "punk": ["rock", "new wave", "alternative"],
+    
+    # Rock adjacency
+    "rock": ["punk", "metal", "classic rock"],
+    
+    # Metal adjacency
+    "metal": ["rock", "punk", "alternative"],
+    
+    # Pop adjacency
+    "pop": ["soul", "r&b", "indie"],
+    
+    # Rap adjacency
+    "rap": ["soul", "r&b", "funk"],
+    
+    # Jazz adjacency
+    "jazz": ["soul", "blues", "funk"],
+    
+    # Soul adjacency
+    "soul": ["r&b", "jazz", "funk"],
+    
+    # Blues adjacency
+    "blues": ["jazz", "soul", "folk"],
+    
+    # Country adjacency
+    "country": ["folk", "americana", "bluegrass"],
+    
+    # Folk adjacency
+    "folk": ["country", "blues", "singer-songwriter"],
+    
+    # Electronic adjacency
+    "electronic": ["house", "techno", "ambient"],
+    
+    # House adjacency
+    "house": ["electronic", "techno", "funk"],
+    
+    # Indie adjacency
+    "indie": ["alternative", "pop", "rock"],
+    
+    # Alternative adjacency
+    "alternative": ["indie", "rock", "punk"],
+}
+"""Adjacent genres for fallback (ordered by proximity)."""
+
+def normalize_genre(genre: str) -> str:
+    """
+    Normalize genre name to canonical form using aliases.
+    
+    Examples:
+    - "hip hop" → "rap"
+    - "rock music" → "rock"
+    - "punk" → "punk" (already canonical)
+    
+    Args:
+        genre: Raw genre input
+        
+    Returns:
+        Canonical genre name
+    """
+    genre_lower = genre.lower().strip()
+    # Check if it's an alias
+    return GENRE_ALIASES.get(genre_lower, genre_lower)
+
+def get_adjacent_genres(genre: str) -> List[str]:
+    """
+    Get adjacent genres for fallback when primary genre has no tracks.
+    
+    Args:
+        genre: Genre name
+        
+    Returns:
+        List of adjacent genres (ordered by proximity)
+    """
+    genre_normalized = normalize_genre(genre)
+    return GENRE_ADJACENCY.get(genre_normalized, [])
 
 
 # ============================================================================
@@ -77,6 +209,7 @@ class MusicPlayer:
         self.index = None
         self.current_process: Optional[object] = None
         self.is_playing = False
+        self.current_track: Dict = {}  # Track metadata (artist, song, path, etc.)
 
         if not MUSIC_ENABLED:
             logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
@@ -115,35 +248,65 @@ class MusicPlayer:
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
-        return self.play(track_path, announcement, output_sink)
+        result = self.play(track_path, announcement, output_sink, track_data=track)
+        if result:
+            # Set playback state to random mode
+            playback_state = get_playback_state()
+            playback_state.set_random_mode(track)
+        return result
 
     def play_by_genre(self, genre: str, output_sink=None) -> bool:
         """
-        Play a random track from specified genre.
+        Play a random track from specified genre with adjacent fallback.
+        
+        Behavior:
+        1. Normalize genre (apply aliases)
+        2. Try primary genre
+        3. If not found, try adjacent genres (in priority order)
+        4. No error speaking - caller handles that
         
         Args:
             genre: Genre name (canonical or alias)
-            output_sink: Optional output sink to announce track
+            output_sink: Optional output sink to announce track (only on success)
             
         Returns:
             True if playback started, False otherwise
         """
         if not MUSIC_ENABLED or not self.index:
-            if output_sink:
-                output_sink.speak("I couldn't find any music.")
             return False
 
-        tracks = self.index.filter_by_genre(genre)
+        # Normalize genre (apply aliases)
+        genre_normalized = normalize_genre(genre)
+        
+        # Try primary genre
+        tracks = self.index.filter_by_genre(genre_normalized)
+        used_genre = genre_normalized
+        
+        # Try adjacent genres if primary not found
         if not tracks:
-            if output_sink:
-                output_sink.speak(f"No {genre} music found.")
+            for adjacent in get_adjacent_genres(genre_normalized):
+                adjacent_normalized = normalize_genre(adjacent)
+                tracks = self.index.filter_by_genre(adjacent_normalized)
+                if tracks:
+                    used_genre = adjacent_normalized
+                    logger.info(f"[ARGO] Genre '{genre_normalized}' not found, using adjacent: '{used_genre}'")
+                    break
+        
+        # No tracks found even with adjacent fallback
+        if not tracks:
+            logger.warning(f"[ARGO] No tracks found for genre '{genre}' or adjacent genres")
             return False
 
         track = random.choice(tracks)
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
-        return self.play(track_path, announcement, output_sink)
+        result = self.play(track_path, announcement, output_sink, track_data=track)
+        if result:
+            # Set playback state to genre mode (use normalized genre)
+            playback_state = get_playback_state()
+            playback_state.set_genre_mode(used_genre, track)
+        return result
 
     def play_by_artist(self, artist: str, output_sink=None) -> bool:
         """
@@ -171,7 +334,12 @@ class MusicPlayer:
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
-        return self.play(track_path, announcement, output_sink)
+        result = self.play(track_path, announcement, output_sink, track_data=track)
+        if result:
+            # Set playback state to artist mode
+            playback_state = get_playback_state()
+            playback_state.set_artist_mode(artist, track)
+        return result
 
     def play_by_song(self, song: str, output_sink=None) -> bool:
         """
@@ -199,16 +367,23 @@ class MusicPlayer:
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
-        return self.play(track_path, announcement, output_sink)
+        result = self.play(track_path, announcement, output_sink, track_data=track)
+        if result:
+            # Set playback state to artist mode (song play is artist-oriented)
+            playback_state = get_playback_state()
+            if track.get("artist"):
+                playback_state.set_artist_mode(track.get("artist"), track)
+        return result
 
     def play_by_keyword(self, keyword: str, output_sink=None) -> bool:
         """
-        Play a random track matching keyword search (artist/song/filename).
+        Play a random track matching keyword search (fallback after artist/song/genre).
         
-        Priority: Try artist first, then song name, then generic keyword search.
+        This is the GENERIC keyword search - searches tokens for partial matches.
+        Coordinator handles the priority order (artist -> song -> genre -> this).
         
         Args:
-            keyword: Search term (artist, song name, or keyword)
+            keyword: Search term (partial keyword match)
             output_sink: Optional output sink to announce track
             
         Returns:
@@ -219,23 +394,7 @@ class MusicPlayer:
                 output_sink.speak("I couldn't find any music.")
             return False
 
-        # Priority 1: Try exact artist match
-        tracks = self.index.filter_by_artist(keyword)
-        if tracks:
-            track = random.choice(tracks)
-            track_path = track.get("path", "")
-            announcement = self._build_announcement(track)
-            return self.play(track_path, announcement, output_sink)
-
-        # Priority 2: Try exact song match
-        tracks = self.index.filter_by_song(keyword)
-        if tracks:
-            track = random.choice(tracks)
-            track_path = track.get("path", "")
-            announcement = self._build_announcement(track)
-            return self.play(track_path, announcement, output_sink)
-
-        # Priority 3: Generic keyword search
+        # Generic keyword search (token-based)
         tracks = self.index.filter_by_keyword(keyword)
         if not tracks:
             if output_sink:
@@ -246,7 +405,12 @@ class MusicPlayer:
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
-        return self.play(track_path, announcement, output_sink)
+        result = self.play(track_path, announcement, output_sink, track_data=track)
+        if result:
+            # Set playback state to random mode (keyword play is exploratory)
+            playback_state = get_playback_state()
+            playback_state.set_random_mode(track)
+        return result
 
     def _build_announcement(self, track: Dict) -> str:
         """
@@ -277,7 +441,7 @@ class MusicPlayer:
         else:
             return name
 
-    def play(self, track_path: str, track_name: str, output_sink=None) -> bool:
+    def play(self, track_path: str, track_name: str, output_sink=None, track_data: Dict = None) -> bool:
         """
         Play a specific track.
         
@@ -285,6 +449,7 @@ class MusicPlayer:
             track_path: Absolute path to audio file
             track_name: Human-readable track name (for announcement)
             output_sink: Optional output sink to announce track
+            track_data: Optional full track metadata dictionary
             
         Returns:
             True if playback started, False otherwise
@@ -297,6 +462,12 @@ class MusicPlayer:
             # Announce what's playing
             if output_sink:
                 output_sink.speak(f"Playing: {track_name}")
+
+            # Store current track metadata
+            self.current_track = track_data or {
+                "path": track_path,
+                "name": track_name
+            }
 
             # Start playback in background thread (fire-and-forget)
             thread = threading.Thread(
@@ -313,6 +484,45 @@ class MusicPlayer:
         except Exception as e:
             logger.error(f"[ARGO] Error starting playback: {e}")
             return False
+
+    def play_next(self, output_sink=None) -> bool:
+        """
+        Play next track in current playback mode.
+        
+        Uses playback_state to determine what to play next:
+        - If mode="artist": Play another track by same artist
+        - If mode="genre": Play another track in same genre
+        - If mode="random": Play another random track
+        - If no mode set: Do nothing (return False)
+        
+        Args:
+            output_sink: Optional output sink to announce track
+            
+        Returns:
+            True if playback started, False if no mode or error
+        """
+        playback_state = get_playback_state()
+        
+        if not playback_state.mode:
+            logger.warning("[ARGO] play_next() called but no playback mode set")
+            if output_sink:
+                output_sink.speak("No music is playing.")
+            return False
+        
+        # Determine what to play next based on current mode
+        if playback_state.mode == "artist":
+            artist = playback_state.artist
+            logger.info(f"[ARGO] Next: Playing another track by {artist}")
+            return self.play_by_artist(artist, output_sink)
+        
+        elif playback_state.mode == "genre":
+            genre = playback_state.genre
+            logger.info(f"[ARGO] Next: Playing another track in {genre}")
+            return self.play_by_genre(genre, output_sink)
+        
+        else:  # mode == "random"
+            logger.info("[ARGO] Next: Playing random track")
+            return self.play_random(output_sink)
 
     def _play_background(self, track_path: str) -> None:
         """Play audio in background thread."""
@@ -391,6 +601,10 @@ class MusicPlayer:
 
     def stop(self) -> None:
         """Stop current playback (idempotent)."""
+        # Always reset playback state, regardless of is_playing flag
+        playback_state = get_playback_state()
+        playback_state.reset()
+        
         if not self.is_playing:
             return
 
@@ -401,6 +615,8 @@ class MusicPlayer:
                     self.current_process.stop()
                 # For ffplay, process will be killed by parent
             self.is_playing = False
+            self.current_track = {}
+            
             logger.info("[ARGO] Music playback stopped")
         except Exception as e:
             logger.error(f"[ARGO] Error stopping music: {e}")

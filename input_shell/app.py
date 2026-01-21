@@ -100,6 +100,17 @@ app = FastAPI(title="ARGO Input Shell", version="1.4.2")
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Bootstrap music system (fail fast on config errors)
+try:
+    from core.music_bootstrap import bootstrap_music_system
+    bootstrap_music_system()
+except RuntimeError as e:
+    print(f"⚠️ WARNING: {e}")
+    print("   Music system disabled due to configuration errors")
+except Exception as e:
+    print(f"⚠️ WARNING: Unexpected error during music bootstrap: {e}")
+    print("   Continuing without music support")
+
 # Engines
 transcription_engine = WhisperTranscriber()
 intent_engine = CommandParser()

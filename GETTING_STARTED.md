@@ -186,7 +186,155 @@ ARGO:   "AI stands for Artificial Intelligence..."
 
 ---
 
+## Music Playback
+
+ARGO supports local music playback integrated with the voice pipeline.
+
+### Setup
+
+#### Step 1: Enable Music
+Update `.env`:
+```
+MUSIC_ENABLED=true
+MUSIC_DIR=I:\My Music
+MUSIC_INDEX_FILE=data/music_index.json
+```
+
+Replace `I:\My Music` with the path to your music library.
+
+#### Step 2: Scan Your Music Directory
+```powershell
+python scan_music_directory.py
+```
+
+This creates a persistent JSON index of your library. Subsequent runs scan only new files.
+
+**Output:**
+```
+[MUSIC INDEX] Scanning: I:\My Music
+[MUSIC INDEX] Found: 250 tracks
+[MUSIC INDEX] Index saved: data/music_index.json
+```
+
+#### Step 3: Supported Formats
+- `.mp3` (MPEG Audio)
+- `.wav` (WAV)
+- `.flac` (Free Lossless Audio Codec)
+- `.m4a` (MPEG-4 Audio)
+
+### Voice Commands for Music
+
+Once enabled, use these voice commands during ARGO operation:
+
+#### Play Random Track
+```
+YOU:    "Play music"
+ARGO:   [starts playback] "Playing: Track Name by Artist"
+```
+
+#### Play Specific Artist
+```
+YOU:    "Play The Beatles"
+ARGO:   [starts playback] "Playing: Eleanor Rigby by The Beatles"
+```
+
+#### Play Specific Song
+```
+YOU:    "Play Bohemian Rhapsody"
+ARGO:   [starts playback] "Playing: Bohemian Rhapsody by Queen"
+```
+
+#### Play Genre
+```
+YOU:    "Play punk music" or "Play classic rock"
+ARGO:   [starts playback] "Playing: Track Name by Artist"
+```
+
+#### Stop Music
+```
+YOU:    "Stop" or [speak during playback]
+ARGO:   [stops immediately] [returns to listening]
+```
+
+#### Skip to Next Track
+```
+YOU:    "Next" or "Skip"
+ARGO:   [continues in same mode] "Playing: Next Song by Same Artist/Genre"
+```
+
+#### What's Playing (Status Query)
+```
+YOU:    "What's playing" or "What song is this"
+ARGO:   "You're listening to Song Name by Artist Name."
+```
+
+### How Music Routing Works
+
+ARGO follows this priority when you ask to play music:
+
+1. **Artist match** - Exact artist in your library?
+2. **Song match** - Exact song title?
+3. **Genre match** - Exact genre folder or tag?
+4. **Keyword match** - Partial matches in metadata?
+5. **Random fallback** - Pick a random track
+
+**Example:** "Play Beatles" → Artist match → Plays random Beatles song
+
+### Music Index Schema
+
+The `music_index.json` contains your library metadata:
+
+```json
+{
+  "tracks": [
+    {
+      "id": "abc123def456",
+      "path": "I:\\My Music\\Rock\\The Beatles\\Eleanor Rigby.mp3",
+      "name": "eleanor rigby",
+      "artist": "The Beatles",
+      "song": "Eleanor Rigby",
+      "genre": "rock",
+      "tokens": ["eleanor", "rigby", "beatles", "rock"],
+      "filename": "Eleanor Rigby.mp3",
+      "ext": ".mp3"
+    }
+  ]
+}
+```
+
+**Fields:**
+- `path` - Absolute path to audio file (required)
+- `name` - Filename without extension (required)
+- `artist` - Extracted from folder name or "Unknown"
+- `song` - Extracted from filename
+- `genre` - Detected from folder names (see `GENRE_ALIASES` in code)
+- `tokens` - Tokenized for keyword search
+
+### Troubleshooting Music
+
+**"No music found"**
+- Ensure `MUSIC_DIR` points to valid directory
+- Run `python scan_music_directory.py` to index
+- Check `.env` has `MUSIC_ENABLED=true`
+
+**"Music disabled"**
+- Check `.env`: `MUSIC_ENABLED=false`? Set to `true`
+- Check `MUSIC_DIR` exists and is readable
+
+**Files not found in scan**
+- Ensure files use supported formats (`.mp3`, `.wav`, `.flac`, `.m4a`)
+- Check file permissions (must be readable)
+- Check path has no special characters causing encoding issues
+
+**Music doesn't stop when speaking**
+- Voice interrupt detection monitors for wake word
+- Should stop within 200ms of your voice
+- If not, check Porcupine access key is set
+
+---
+
 ## Configuration
+
 
 ### .env File
 Create or update `.env` with:
@@ -196,6 +344,11 @@ PIPER_ENABLED=true
 PIPER_PATH=audio/piper/piper/piper.exe
 PORCUPINE_ACCESS_KEY=<your-key-from-picovoice>
 OLLAMA_API_URL=http://localhost:11434
+
+# Music playback (optional)
+MUSIC_ENABLED=true
+MUSIC_DIR=I:\My Music
+MUSIC_INDEX_FILE=data/music_index.json
 ```
 
 ### Tunable Parameters (core/coordinator.py)

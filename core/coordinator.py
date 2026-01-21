@@ -56,10 +56,12 @@ This is controlled, bounded orchestration with short-term scratchpad memory.
 """
 
 import logging
+import threading
 from typing import Optional
 from datetime import datetime
 import sounddevice as sd
 import numpy as np
+from core.intent_parser import IntentType
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 
@@ -146,14 +148,22 @@ class Coordinator:
     """
     
     # Audio recording parameters
-    AUDIO_DURATION = 6  # seconds (after wake word) - DEPRECATED, use dynamic recording
     AUDIO_SAMPLE_RATE = 16000  # Hz
-    MAX_RECORDING_DURATION = 15  # seconds max (safety limit)
-    SILENCE_DURATION = 1.5  # seconds of silence to stop recording
-    SILENCE_THRESHOLD = 500  # audio level below this = silence (RMS)
+    MAX_RECORDING_DURATION = 10.0  # seconds max (safety net) — Increased for longer questions
+    MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
+    SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — TUNED for fast response
+    MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
+    SILENCE_TIMEOUT_SECONDS = 2.5  # Seconds of silence to stop recording — Allows normal speaking pace
+    SILENCE_THRESHOLD = 30  # Audio level below this = silence (RMS absolute) — TUNED for sensitivity
+    RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — TUNED instant trigger
+    PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
+    PRE_ROLL_BUFFER_MS_MAX = 1500  # Max milliseconds to keep in rolling buffer — 1.5 second look-back
+    
+    # Debug/profiling flags
+    RECORD_DEBUG = False  # Set to True for detailed recording metrics (or via env var)
     
     # Loop control (hardcoded)
-    MAX_INTERACTIONS = 3  # Max interactions per session
+    MAX_INTERACTIONS = 10  # Max interactions per session — Increased for longer testing
     STOP_KEYWORDS = ["stop", "goodbye", "quit", "exit"]  # Stop command keywords
     
     def __init__(self, input_trigger, speech_to_text, intent_parser, response_generator, output_sink):
@@ -167,12 +177,21 @@ class Coordinator:
             response_generator: ResponseGenerator instance (generates response)
             output_sink: OutputSink instance (speaks response)
         """
+        import os
+        from core.command_executor import CommandExecutor
+        
         self.trigger = input_trigger
         self.stt = speech_to_text
         self.parser = intent_parser
         self.generator = response_generator
         self.sink = output_sink
         self.logger = logger
+        
+        # CommandExecutor for procedural commands (count to N, etc.)
+        self.executor = CommandExecutor(audio_sink=output_sink)
+        
+        # Enable debug metrics via env var or class flag
+        self.record_debug = os.getenv("ARGO_RECORD_DEBUG", "0").lower() in ("1", "true")
         
         # Audio buffer for recording
         self.recorded_audio = None
@@ -191,7 +210,12 @@ class Coordinator:
         self._last_response = None
         
         # TASK 17: Half-duplex audio gate (prevent simultaneous listen/speak)
-        self._is_speaking = False
+        # Use threading.Event for thread-safe atomic state (not boolean)
+        self._is_speaking = threading.Event()
+        self._is_speaking.clear()  # Initially not speaking
+        
+        # Debug/profiling flag from environment (can override class default)
+        self.record_debug = os.getenv("RECORD_DEBUG", "").lower() == "true" or self.RECORD_DEBUG
         
         # Loop state (v3)
         self.interaction_count = 0
@@ -253,6 +277,9 @@ class Coordinator:
         try:
             # Loop until stop condition
             while True:
+                # Flag to track if this iteration is a music command (doesn't count as interaction)
+                is_music_iteration = False
+                
                 self.interaction_count += 1
                 self.logger.info(f"\n{'='*60}")
                 self.logger.info(f"[Loop] Iteration {self.interaction_count}/{self.MAX_INTERACTIONS}")
@@ -363,29 +390,141 @@ class Coordinator:
                             # TASK 15: Mark LLM start
                             self.current_probe.mark("llm_start")
                             
-                            # Check if this is a music command (before LLM processing)
-                            from core.intent_parser import IntentType
-                            if intent.intent_type == IntentType.MUSIC:
-                                # Music playback with genre/keyword filtering
+                            # Check if this is a procedural command (count to N, etc.)
+                            if self.executor.can_execute(text):
+                                self.logger.info(f"[Iteration {self.interaction_count}] Procedural command detected: '{text}'")
+                                try:
+                                    # Execute command directly (bypasses LLM)
+                                    self.executor.execute(text)
+                                    response_text = ""  # No LLM response for procedural commands
+                                    self.current_probe.mark("llm_end")
+                                    # Exit callback - procedural command complete, skip LLM
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Procedural command complete")
+                                    return
+                                except Exception as e:
+                                    self.logger.error(f"[Iteration {self.interaction_count}] Procedural command failed: {e}")
+                                    response_text = "Command failed."
+                                    self.current_probe.mark("llm_end")
+                                    return
+                            
+                            # Check if this is a STOP command (highest priority - short-circuit)
+                            elif intent.intent_type == IntentType.MUSIC_STOP:
+                                self.logger.info(f"[Iteration {self.interaction_count}] STOP command: Stopping music")
+                                from core.music_player import get_music_player
+                                music_player = get_music_player()
+                                music_player.stop()
+                                
+                                # Optional brief response
+                                self.sink.speak("Stopped.")
+                                response_text = ""
+                                self.current_probe.mark("llm_end")
+                                # Exit callback - continue to next iteration (outer loop)
+                                return
+                            
+                            # Check if this is a NEXT command (highest priority - short-circuit)
+                            if intent.intent_type == IntentType.MUSIC_NEXT:
+                                self.logger.info(f"[Iteration {self.interaction_count}] NEXT command: Playing next track")
                                 from core.music_player import get_music_player
                                 music_player = get_music_player()
                                 
-                                # Route based on keyword (genre filter > keyword filter > random)
+                                playback_started = music_player.play_next(self.sink)
+                                if not playback_started:
+                                    self.sink.speak("No music playing.")
+                                    self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
+                                else:
+                                    self.logger.info(f"[Iteration {self.interaction_count}] NEXT: Started playback")
+                                    # Monitor for interrupt during music playback
+                                    self._monitor_music_interrupt(music_player)
+                                
+                                response_text = ""
+                                self.current_probe.mark("llm_end")
+                                # Exit callback - continue to next iteration (outer loop)
+                                return
+                            
+                            # Check if this is a STATUS query (read-only - no side effects)
+                            if intent.intent_type == IntentType.MUSIC_STATUS:
+                                self.logger.info(f"[Iteration {self.interaction_count}] STATUS query: What's playing")
+                                from core.music_status import query_music_status
+                                
+                                status = query_music_status()
+                                self.sink.speak(status)
+                                self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
+                                
+                                response_text = ""
+                                self.current_probe.mark("llm_end")
+                                # Exit callback - continue to next iteration (outer loop)
+                                return
+                            
+                            # Check if this is a music command (before LLM processing)
+                            if intent.intent_type == IntentType.MUSIC:
+                                # Music playback with STRICT priority routing
+                                # IMPORTANT: Music commands don't count as conversational turns
+                                is_music_iteration = True
+                                self.logger.info(f"[Iteration {self.interaction_count}] Music command - not counting as interaction turn")
+                                
+                                from core.music_player import get_music_player
+                                music_player = get_music_player()
+                                
+                                playback_started = False
+                                error_message = ""
+                                
                                 if intent.keyword:
-                                    self.logger.info(f"[Iteration {self.interaction_count}] Music keyword: '{intent.keyword}'")
-                                    # Try genre filter first, then keyword filter
-                                    if not music_player.play_by_genre(intent.keyword, self.sink):
-                                        music_player.play_by_keyword(intent.keyword, self.sink)
+                                    keyword = intent.keyword
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Music keyword: '{keyword}'")
+                                    
+                                    # PRIORITY ORDER (FIXED):
+                                    # 1. Exact artist match
+                                    if not playback_started:
+                                        playback_started = music_player.play_by_artist(keyword, None)  # No sink here
+                                        if playback_started:
+                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST match")
+                                    
+                                    # 2. Exact song match
+                                    if not playback_started:
+                                        playback_started = music_player.play_by_song(keyword, None)  # No sink here
+                                        if playback_started:
+                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: SONG match")
+                                    
+                                    # 3. Genre match (with adjacent fallback)
+                                    if not playback_started:
+                                        playback_started = music_player.play_by_genre(keyword, None)  # No sink here
+                                        if playback_started:
+                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: GENRE match")
+                                    
+                                    # 4. Keyword token match
+                                    if not playback_started:
+                                        playback_started = music_player.play_by_keyword(keyword, None)  # No sink here
+                                        if playback_started:
+                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: KEYWORD match")
+                                    
+                                    # 5. Random fallback
+                                    if not playback_started:
+                                        playback_started = music_player.play_random(None)  # No sink here
+                                        if playback_started:
+                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM fallback")
+                                    
+                                    # If still no playback, consolidate error into single message
+                                    if not playback_started:
+                                        error_message = f"No music found for '{keyword}'."
+                                        self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
                                 else:
                                     # No keyword: random track
-                                    self.logger.info(f"[Iteration {self.interaction_count}] Music: random selection")
-                                    music_player.play_random(self.sink)
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM (no keyword)")
+                                    playback_started = music_player.play_random(None)  # No sink here
+                                    if not playback_started:
+                                        error_message = "No music available."
+                                        self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
                                 
                                 response_text = ""  # No LLM response for music
                                 
+                                # Speak error message only once (if no playback started)
+                                if error_message and not playback_started:
+                                    self.sink.speak(error_message)
+                                
                                 # Monitor for interrupt during music playback
-                                self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
-                                self._monitor_music_interrupt(music_player)
+                                if playback_started:
+                                    self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
+                                    self._monitor_music_interrupt(music_player)
                                 
                                 self.current_probe.mark("llm_end")
                             else:
@@ -412,12 +551,12 @@ class Coordinator:
                             # Only speak if response is not empty (music playback has empty response)
                             if response_text and response_text.strip():
                                 # TASK 17: Set speaking flag (half-duplex audio gate)
-                                self._is_speaking = True
+                                self._is_speaking.set()
                                 try:
                                     # Speak and monitor for user interrupt (voice input during playback)
                                     self._speak_with_interrupt_detection(response_text)
                                 finally:
-                                    self._is_speaking = False
+                                    self._is_speaking.clear()
                             else:
                                 self.logger.info(
                                     f"[Iteration {self.interaction_count}] "
@@ -466,9 +605,16 @@ class Coordinator:
                             )
                             raise
                     
+                    # If this was a music iteration, decrement the counter (music doesn't count)
+                    if is_music_iteration:
+                        self.interaction_count -= 1
+                        self.logger.info(
+                            f"[Iteration] Music iteration complete - decremented counter to {self.interaction_count}"
+                        )
+                    
                     # Block waiting for trigger (each iteration waits for wake word)
                     # TASK 17: Skip listening if currently speaking (half-duplex audio gate)
-                    if self._is_speaking:
+                    if self._is_speaking.is_set():
                         self.logger.info(
                             f"[Iteration {self.interaction_count}] "
                             f"Skipping wake word detection (currently speaking)"
@@ -492,18 +638,38 @@ class Coordinator:
                         self.logger.info(f"[Loop] Stop requested by user")
                         break
                     
+                    # Check if max interactions reached
                     if self.interaction_count >= self.MAX_INTERACTIONS:
+                        # CRITICAL: Don't exit while music is playing
+                        # Music lifecycle must outlive coordinator loop
+                        try:
+                            from core.music_player import get_music_player
+                            music_player = get_music_player()
+                            if music_player.is_playing:
+                                self.logger.info(
+                                    f"[Loop] Max interactions reached, but music is playing - continuing loop"
+                                )
+                                # Don't break - let music keep playing
+                                # Wait for next wake word (or silence timeout)
+                                self.logger.info(
+                                    f"[Loop] Waiting for next command or music to finish..."
+                                )
+                            else:
+                                # Music not playing, safe to exit
+                                self.logger.info(
+                                    f"[Loop] Max interactions ({self.MAX_INTERACTIONS}) reached"
+                                )
+                                break
+                        except Exception as e:
+                            self.logger.warning(f"[Loop] Could not check music status: {e} - exiting")
+                            break
+                    else:
+                        # Otherwise, continue loop
                         self.logger.info(
-                            f"[Loop] Max interactions ({self.MAX_INTERACTIONS}) reached"
+                            f"[Loop] Continuing... "
+                            f"({self.MAX_INTERACTIONS - self.interaction_count} "
+                            f"interactions remaining)"
                         )
-                        break
-                    
-                    # Otherwise, continue loop
-                    self.logger.info(
-                        f"[Loop] Continuing... "
-                        f"({self.MAX_INTERACTIONS - self.interaction_count} "
-                        f"interactions remaining)"
-                    )
                 
                 except Exception as e:
                     self.logger.error(
@@ -539,26 +705,53 @@ class Coordinator:
     
     def _record_with_silence_detection(self) -> np.ndarray:
         """
-        Record audio with dynamic silence detection.
+        Record audio with dynamic silence detection and pre-roll buffer.
         
-        Stops recording when:
-        1. Silence (low audio level) detected for SILENCE_DURATION seconds, OR
-        2. MAX_RECORDING_DURATION reached (safety limit)
+        Enhanced recording logic:
+        1. Prepend pre-roll buffer (speech onset captured before wake word)
+        2. Enforce minimum record duration (0.9s)
+        3. Start silence timer only after speech energy detected (RMS > threshold)
+        4. Stop on silence (2.2s) or max duration (15s)
+        5. Emit debug metrics (gated by RECORD_DEBUG flag)
         
         Returns:
             numpy array of int16 audio samples at AUDIO_SAMPLE_RATE Hz
         """
         import numpy as np
+        import time
         
         # Chunk size for processing (100ms)
         chunk_samples = int(self.AUDIO_SAMPLE_RATE * 0.1)
-        silence_samples_threshold = int(self.AUDIO_SAMPLE_RATE * self.SILENCE_DURATION)
+        min_samples = int(self.AUDIO_SAMPLE_RATE * self.MINIMUM_RECORD_DURATION)
+        silence_samples_threshold = int(self.AUDIO_SAMPLE_RATE * self.SILENCE_TIMEOUT_SECONDS)
         max_samples = int(self.AUDIO_SAMPLE_RATE * self.MAX_RECORDING_DURATION)
         
         audio_buffer = []
         consecutive_silence_samples = 0
         total_samples = 0
+        speech_detected = False
+        speech_detected_at = None
+        silence_started_at = None
+        stop_reason = None
+        rms_samples = []  # For calculating average RMS (debug metric)
         
+        # Get pre-roll buffer from trigger (speech onset before wake word)
+        preroll_frames = []
+        try:
+            preroll_frames = self.trigger.get_preroll_buffer()
+        except Exception as e:
+            self.logger.debug(f"[Record] Could not retrieve pre-roll buffer: {e}")
+        
+        # Prepend pre-roll buffer to audio
+        if preroll_frames:
+            for frame in preroll_frames:
+                audio_buffer.append(frame)
+                total_samples += frame.shape[0]
+            if self.record_debug:
+                self.logger.info(f"[Record] Pre-roll: {len(preroll_frames)} frames ({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s)")
+        
+        recording_start_time = time.time()
+        stream = None
         try:
             stream = sd.InputStream(
                 channels=1,
@@ -566,6 +759,8 @@ class Coordinator:
                 dtype=np.int16,
             )
             stream.start()
+            
+            rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
             
             while total_samples < max_samples:
                 # Read one chunk
@@ -575,30 +770,81 @@ class Coordinator:
                 
                 audio_buffer.append(chunk)
                 total_samples += chunk.shape[0]
+                elapsed_time = time.time() - recording_start_time
                 
-                # Check for silence (RMS < threshold)
-                rms = np.sqrt(np.mean(chunk.astype(float) ** 2))
+                # Calculate RMS for this chunk (normalized 0-1)
+                rms = np.sqrt(np.mean(chunk.astype(float) ** 2)) / 32768.0  # Normalize int16 range
+                rms_samples.append(rms)
                 
-                if rms < self.SILENCE_THRESHOLD:
-                    consecutive_silence_samples += chunk.shape[0]
-                else:
-                    # Audio detected, reset silence counter
-                    consecutive_silence_samples = 0
+                # Detect speech (RMS > threshold) — only start silence timer after speech detected
+                if not speech_detected and rms > self.RMS_SPEECH_THRESHOLD:
+                    speech_detected = True
+                    speech_detected_at = elapsed_time
+                    if self.record_debug:
+                        rms_str = f"{rms:.4f}" if rms is not None else "N/A"
+                        self.logger.info(f"[Record] Speech detected at {elapsed_time:.3f}s (RMS={rms_str})")
                 
-                # Stop if enough silence detected
-                if consecutive_silence_samples >= silence_samples_threshold:
-                    self.logger.info(
-                        f"[Record] Silence detected, stopping recording "
-                        f"({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s recorded)"
+                # Track silence only after speech has been detected
+                if speech_detected:
+                    if rms < self.SILENCE_THRESHOLD:
+                        if silence_started_at is None:
+                            silence_started_at = elapsed_time
+                        consecutive_silence_samples += chunk.shape[0]
+                    else:
+                        # Audio detected, reset silence counter
+                        consecutive_silence_samples = 0
+                        silence_started_at = None
+                    
+                    # Stop if enough silence detected AND minimum duration reached
+                    if (consecutive_silence_samples >= silence_samples_threshold and
+                        total_samples >= min_samples):
+                        stop_reason = "silence"
+                        if self.record_debug:
+                            silence_duration = elapsed_time - silence_started_at if silence_started_at else 0
+                            self.logger.info(
+                                f"[Record] Silence detected ({silence_duration:.2f}s >= {self.SILENCE_TIMEOUT_SECONDS}s), "
+                                f"stopping recording ({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s recorded)"
+                            )
+                        break
+                
+                # Also stop if max duration reached
+                if total_samples >= max_samples:
+                    stop_reason = "max_duration"
+                    # Guard formatting (belt + suspenders: logging must never crash)
+                    avg_rms = np.mean(rms_samples) if rms_samples else 0.0
+                    avg_rms_str = f"{avg_rms:.2f}" if avg_rms is not None else "N/A"
+                    self.logger.warning(
+                        f"[Record] MAX DURATION REACHED (15.0s) - stopping recording | "
+                        f"total_samples={total_samples}, avg_rms={avg_rms_str}"
                     )
                     break
-            
-            stream.stop()
-            stream.close()
         
         except Exception as e:
             self.logger.error(f"[Record] Error during audio recording: {e}")
             raise
+        
+        finally:
+            # Guarantee stream cleanup even on exception or cancellation
+            if stream:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception as e:
+                    self.logger.warning(f"[Record] Error closing stream: {e}")
+        
+        # Emit debug metrics (gated by RECORD_DEBUG flag)
+        if self.record_debug and rms_samples:
+            avg_rms = np.mean(rms_samples)
+            avg_rms_str = f"{avg_rms:.4f}" if avg_rms is not None else "N/A"
+            self.logger.info(f"[Record] Recording Summary:")
+            self.logger.info(f"  Duration: {total_samples/self.AUDIO_SAMPLE_RATE:.2f}s (minimum: {self.MINIMUM_RECORD_DURATION}s)")
+            self.logger.info(f"  RMS average: {avg_rms_str} (normalized 0-1, threshold: {self.RMS_SPEECH_THRESHOLD})")
+            self.logger.info(f"  Speech detected at: {speech_detected_at:.3f}s" if speech_detected_at else "  Speech: NOT detected")
+            self.logger.info(f"  Stop reason: {stop_reason}")
+            self.logger.info(f"  Silence threshold: {self.SILENCE_THRESHOLD} (absolute RMS)")
+            self.logger.info(f"  Silence timeout: {self.SILENCE_TIMEOUT_SECONDS}s")
+            if self._last_transcript:
+                self.logger.info(f"  Transcript: '{self._last_transcript}'")
         
         # Concatenate all chunks
         if audio_buffer:
@@ -612,21 +858,22 @@ class Coordinator:
         
         If user speaks/wakes word detected, stop music immediately.
         
+        IMPORTANT: Reuses existing trigger instance (self.trigger) instead of
+        creating a new PorcupineWakeWordTrigger to avoid re-initialization overhead.
+        
         Args:
             music_player: MusicPlayer instance to stop on interrupt
         """
         import time
         
         try:
-            from core.input_trigger import PorcupineWakeWordTrigger
-            interrupt_detector = PorcupineWakeWordTrigger()
-            
             self.logger.info("[Music] Monitoring for interrupt...")
             
             # Poll while music is playing
             while music_player.is_playing:
                 try:
-                    if interrupt_detector._check_for_interrupt():
+                    # Reuse existing trigger instance to check for interrupt
+                    if self.trigger._check_for_interrupt():
                         self.logger.warning("[Music] User interrupted! Stopping music...")
                         music_player.stop()
                         break
@@ -641,63 +888,31 @@ class Coordinator:
     
     def _speak_with_interrupt_detection(self, response_text: str) -> None:
         """
-        Speak response with interrupt detection (simplified).
+        Speak response WITHOUT interrupt detection (Option A: simplest).
         
-        Runs TTS in main thread (blocking) while monitoring for interrupts in background.
+        Argo should NOT interrupt itself during TTS playback.
+        This matches standard assistant behavior (Alexa, Siri, Google Assistant).
+        
+        Runs TTS in main thread (blocking).
+        Disables interrupt monitoring during playback to prevent Argo self-interruption.
+        Re-enables after playback finishes.
         
         Args:
             response_text: Text to speak
         """
-        import threading
-        import time
-        
-        interrupt_detected = False
-        monitor_interval = 0.2  # Check every 200ms
-        
         try:
-            # Initialize Porcupine for interrupt detection
-            from core.input_trigger import PorcupineWakeWordTrigger
-            interrupt_detector = PorcupineWakeWordTrigger()
-            
-            self.logger.info("[Interrupt] Monitoring for user input during playback...")
-            
-            def monitor_for_interrupt():
-                """Monitor for user interrupt in background."""
-                nonlocal interrupt_detected
-                while self._is_speaking:
-                    try:
-                        if interrupt_detector._check_for_interrupt():
-                            interrupt_detected = True
-                            self.logger.warning("[Interrupt] User interrupted! Stopping TTS...")
-                            
-                            # Stop the TTS audio playback
-                            try:
-                                import asyncio
-                                loop = asyncio.get_event_loop()
-                                if loop.is_running():
-                                    asyncio.create_task(self.sink.stop())
-                                else:
-                                    loop.run_until_complete(self.sink.stop())
-                            except Exception as e:
-                                self.logger.debug(f"[Interrupt] Could not stop sink: {e}")
-                            break
-                    except Exception as e:
-                        self.logger.debug(f"[Interrupt] Check failed: {e}")
-                    
-                    time.sleep(monitor_interval)
-            
-            # Start interrupt monitor in background thread
-            monitor_thread = threading.Thread(target=monitor_for_interrupt, daemon=True)
-            monitor_thread.start()
+            self.logger.info("[TTS] Speaking response (interrupts disabled during playback)...")
             
             # Speak in main thread (blocking, event loop-safe)
+            # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
+            # This prevents Argo from interrupting itself with its own audio
             self.sink.speak(response_text)
             
-            # Wait for monitor thread to finish
-            monitor_thread.join(timeout=30)
-            
-            if interrupt_detected:
-                self.logger.info("[Interrupt] TTS interrupted by user")
+            self.logger.info("[TTS] Response finished")
         
         except Exception as e:
-            self.logger.error(f"[Interrupt] Error during interrupt detection: {e}")
+            self.logger.error(f"[TTS] Error during speech: {e}")
+        
+        finally:
+            # Ensure speaking flag is cleared even if exception occurred
+            self._is_speaking.clear()

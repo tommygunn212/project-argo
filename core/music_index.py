@@ -6,6 +6,8 @@ Persistent JSON catalog of local music library.
 Responsibilities:
 - Scan directory recursively
 - Extract genre from folder names (using GENRE_ALIASES)
+- Extract artist from parent folder
+- Extract song name from filename
 - Tokenize for keyword search
 - Save/load JSON for fast startup
 - Filter by genre or keyword
@@ -15,6 +17,16 @@ Responsibilities:
 - NO guessing
 
 Data plumbing only.
+
+Startup behavior:
+- IF MUSIC_ENABLED=true:
+  - Check MUSIC_DIR exists (fail fast if not)
+  - Load existing index OR build new one
+  - Save to MUSIC_INDEX_FILE
+  - Log exactly one message: "loaded" or "created"
+- IF MUSIC_ENABLED=false:
+  - Skip all initialization
+  - Return empty index
 """
 
 import os
@@ -103,10 +115,20 @@ class MusicIndex:
         Args:
             music_dir: Path to music directory (e.g., I:\My Music)
             index_file: Path to JSON index file (e.g., data/music_index.json)
+            
+        Raises:
+            ValueError: If MUSIC_ENABLED=true but music_dir doesn't exist
         """
         self.music_dir = music_dir
         self.index_file = index_file
         self.tracks: List[Dict] = []
+        
+        # Validate music directory exists if music is enabled
+        music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+        if music_enabled and not os.path.exists(self.music_dir):
+            msg = f"[ARGO] MUSIC_ENABLED=true but MUSIC_DIR not found: {self.music_dir}"
+            logger.error(msg)
+            raise ValueError(msg)
         
     def load_or_create(self) -> Dict:
         """
@@ -539,13 +561,46 @@ _index_instance: Optional[MusicIndex] = None
 
 
 def get_music_index() -> MusicIndex:
-    """Get or create global music index instance."""
+    """
+    Get or create global music index instance.
+    
+    Handles startup bootstrap:
+    - Check if MUSIC_ENABLED
+    - Validate MUSIC_DIR exists
+    - Load or create index
+    - Continue without music on error (don't crash)
+    
+    Returns:
+        MusicIndex instance (may be empty if music disabled or error)
+    """
     global _index_instance
     
     if _index_instance is None:
+        music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+        
+        if not music_enabled:
+            logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
+            _index_instance = MusicIndex("", "")
+            _index_instance.tracks = []
+            return _index_instance
+        
         music_dir = os.getenv("MUSIC_DIR", "I:\\My Music")
         index_file = os.getenv("MUSIC_INDEX_FILE", "data/music_index.json")
-        _index_instance = MusicIndex(music_dir, index_file)
-        _index_instance.load_or_create()
+        
+        try:
+            _index_instance = MusicIndex(music_dir, index_file)
+            _index_instance.load_or_create()
+        except ValueError as e:
+            # MUSIC_DIR doesn't exist
+            logger.error(str(e))
+            logger.error("[ARGO] Music will be unavailable")
+            _index_instance = MusicIndex("", "")
+            _index_instance.tracks = []
+        except Exception as e:
+            # Index build/load failed
+            logger.error(f"[ARGO] Unexpected music startup error: {e}")
+            logger.error("[ARGO] Music will be unavailable")
+            _index_instance = MusicIndex("", "")
+            _index_instance.tracks = []
     
     return _index_instance

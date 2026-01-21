@@ -1,0 +1,61 @@
+# =========================
+# SIMPLE FACTUAL (verbosity test)
+# =========================
+What is a capacitor?
+Why does ice float?
+Why do eggs get hard when boiled?
+What does RAM do?
+
+# =========================
+# KNOWN / OBVIOUS TOPICS (competence assumption)
+# =========================
+Why do cats knock things off tables?
+Why do dogs shed so much?
+Why does coffee taste bitter?
+
+# =========================
+# FOLLOW-UP CORRECTIONS (adaptability)
+# =========================
+That’s not what I meant.
+No, explain it simpler.
+Too long.
+Try again.
+
+# =========================
+# AMBIGUOUS / VAGUE (clarification discipline)
+# =========================
+That seems wrong.
+Explain that.
+What about the other one?
+
+# =========================
+# OPINION / CONVERSATIONAL (tone + personality)
+# =========================
+Why do people like bad coffee?
+Is technology making people lazy?
+Why do cats act offended all the time?
+
+# =========================
+# COMMANDS (zero personality allowed)
+# =========================
+Open Chrome.
+Stop.
+Play music.
+Next.
+
+# =========================
+# INTERRUPT / SELF-CORRECTION (timing control)
+# =========================
+Open Photoshop… no wait.
+Actually never mind.
+
+# =========================
+# SHOUTING / CAPS (emotional normalization)
+# =========================
+WHY DOES MY DOG SHED
+WHAT IS THE BEST TOOL TO USE
+
+# =========================
+# SILENCE / NO INPUT (insecurity test)
+# =========================
+…

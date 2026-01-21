@@ -255,6 +255,7 @@ class WhisperTranscriber:
             result = self.model.transcribe(
                 str(audio_file),
                 language=language,
+                fp16=False,  # Force FP32 (CPU optimized)
                 verbose=False
             )
             

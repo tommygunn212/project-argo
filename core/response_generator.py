@@ -26,7 +26,16 @@ v4 Update:
 
 from abc import ABC, abstractmethod
 import logging
+import re
 from typing import Optional
+
+# Minimal stop-word list for semantic overlap guard
+STOP_WORDS = {
+    "the", "a", "an", "and", "or", "but", "is", "are", "to", "of",
+    "in", "on", "for", "it", "this", "that", "as", "with", "have",
+    "has", "be", "by", "was", "were", "i", "you", "they", "we",
+    "he", "she", "not", "do", "does", "did", "what", "why", "how",
+}
 
 # === Logging ===
 logger = logging.getLogger(__name__)
@@ -108,6 +117,10 @@ class LLMResponseGenerator(ResponseGenerator):
         self.logger.debug(f"  Model: {self.model}")
         self.logger.debug(f"  Temperature: {self.temperature}")
         self.logger.debug(f"  Max tokens: {self.max_tokens}")
+        # Transient last response for single-process correction inheritance
+        self._last_response: Optional[str] = None
+        # Transient uncommitted command candidate (text)
+        self._uncommitted_command: Optional[str] = None
 
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
@@ -132,10 +145,142 @@ class LLMResponseGenerator(ResponseGenerator):
         raw_text = intent.raw_text  # Original user input
         confidence = intent.confidence
 
+        # === Correction Inheritance (Rule 1) ===
+        # If the user issues a short corrective utterance (or known correction phrase)
+        # and there is a previous explanatory response in memory, adapt that response
+        # directly (summarize/simplify/reframe) and return it. No clarification asked.
+        try:
+            # === Rule 3: Command Commitment Boundary (pre-dispatch guard) ===
+            # If there is an uncommitted command candidate from a prior turn,
+            # decide whether to abort, commit, or continue depending on current input.
+            if self._uncommitted_command is not None:
+                lt = raw_text.strip().lower()
+                abort_phrases = ("never mind", "actually never mind", "stop", "no", "cancel")
+                # Silence or ellipsis counts as abort
+                if lt == "" or lt == "…" or lt == "..." or lt in abort_phrases:
+                    self.logger.info("[generate] Uncommitted command aborted by user input")
+                    self._uncommitted_command = None
+                    return "Okay, canceled."
+                # If current input is not a command (new question or correction unrelated), abort
+                if intent_type != "command":
+                    self.logger.info("[generate] Uncommitted command aborted due to non-command follow-up")
+                    self._uncommitted_command = None
+                    return "Okay, canceled."
+                # If current input is a command and appears resolved (not ambiguous), commit and proceed
+                # (do nothing here; later logic will generate the execution response)
+        except Exception as e:
+            self.logger.debug(f"[generate] Rule3 pre-dispatch check failed: {e}")
+
+        try:
+            have_prev = (memory is not None and not memory.is_empty()) or (self._last_response is not None)
+            if have_prev:
+                lt = raw_text.strip().lower()
+                tokens = lt.split()
+                is_short = len(tokens) <= 4
+                # Known correction indicators
+                correction_phrases = (
+                    "no",
+                    "no.",
+                    "too long",
+                    "too long.",
+                    "that's not what i meant",
+                    "thats not what i meant",
+                    "try again",
+                    "explain it simpler",
+                    "explain it simpler.",
+                    "that’s not what i meant",
+                )
+
+                is_correction = is_short or any(p in lt for p in correction_phrases)
+
+                if is_correction:
+                    if memory is not None and not memory.is_empty():
+                        prev_intents = memory.get_recent_intents(1)
+                        prev_responses = memory.get_recent_responses(1)
+                    else:
+                        prev_intents = []
+                        prev_responses = [self._last_response] if self._last_response is not None else []
+
+                    if prev_responses:
+                        prev_intent = prev_intents[0] if prev_intents else ""
+                        # Only apply if previous turn was not a command
+                        if prev_intent.lower() != "command":
+                            prev_response = prev_responses[0]
+                            # === Scope guard: semantic overlap check ===
+                            try:
+                                # Tokenize and remove stop words
+                                user_tokens = [t for t in re.findall(r"\w+", lt) if t not in STOP_WORDS]
+                                prev_tokens = [t for t in re.findall(r"\w+", prev_response.lower()) if t not in STOP_WORDS]
+                                overlap = set(user_tokens) & set(prev_tokens)
+                                if not overlap:
+                                    # No semantic overlap: skip correction inheritance and reset correction context
+                                    self.logger.info("[generate] Correction inheritance skipped due to no semantic overlap")
+                                    try:
+                                        self._last_response = None
+                                    except Exception:
+                                        pass
+                                    # Continue to normal generation flow
+                                    raise StopIteration
+                            except StopIteration:
+                                pass
+                            except Exception as e:
+                                self.logger.debug(f"[generate] Overlap guard error: {e}")
+                            # Decide adaptation mode
+                            if "simpler" in lt or "too long" in lt:
+                                mode = "simplify"
+                            elif "not what" in lt or lt == "no" or "try again" in lt:
+                                mode = "reframe"
+                            elif is_short:
+                                mode = "summarize"
+                            else:
+                                mode = "reframe"
+
+                            prompt = (
+                                f"User indicated a correction: '{raw_text}'.\n"
+                                f"Please {mode} the previous assistant response below and produce a single committed answer (no clarification questions):\n\n"
+                                f"Previous response: {prev_response}\n\nResponse:"
+                            )
+
+                            self.logger.info("[generate] Correction inheritance: adapting previous response (mode=%s)", mode)
+                            # Call LLM directly to adapt previous response
+                            response_text = self._call_llm(prompt)
+                            response_text = self._enhance_response(response_text)
+                            return response_text
+        except Exception as e:
+            self.logger.debug(f"[generate] Correction inheritance check failed: {e}")
+
         self.logger.info(
             f"[generate] Intent: {intent_type} "
             f"(confidence={confidence:.2f}, text='{raw_text[:50]}')"
         )
+
+        # === Rule 2: One-shot Command Clarification ===
+        # If intent is a command and appears ambiguous/underspecified,
+        # ask one concise clarification (no polite fluff) and return it.
+        # This implements the single-clarify-and-either-execute-or-abort behavior.
+        try:
+            if intent_type == "command":
+                lt = raw_text.strip().lower()
+                # Ambiguity heuristics (exact, short command forms)
+                ambiguous_simple = (lt in ("play music", "play music.", "stop", "stop.", "next", "next."))
+                open_photoshop_interrupt = "open photoshop" in lt and ("no wait" in lt or "…" in raw_text or "..." in raw_text)
+
+                if ambiguous_simple or open_photoshop_interrupt:
+                    # Mark this command as an uncommitted candidate and return concise clarification
+                    self._uncommitted_command = raw_text
+                    # Map concise clarifications per command type (wording must remain concise)
+                    if "open photoshop" in lt:
+                        return "Do you want me to open Photoshop or cancel?"
+                    if lt.startswith("play music"):
+                        return "Do you want me to play music now or pick a genre/device?"
+                    if lt.startswith("stop"):
+                        return "Stop everything or stop the current activity?"
+                    if lt.startswith("next"):
+                        return "Skip to the next item?"
+                    # Fallback concise clarification
+                    return "Do you want me to proceed or cancel?"
+        except Exception as e:
+            self.logger.debug(f"[generate] Rule2 check failed: {e}")
         
         # Log memory state if available (read-only inspection)
         if memory is not None:
@@ -152,6 +297,11 @@ class LLMResponseGenerator(ResponseGenerator):
         try:
             response_text = self._call_llm(prompt)
             self.logger.info(f"[generate] Generated: '{response_text}'")
+            # Store last response for possible correction-inheritance in subsequent turns
+            try:
+                self._last_response = response_text
+            except Exception:
+                pass
             return response_text
 
         except Exception as e:
@@ -204,6 +354,16 @@ class LLMResponseGenerator(ResponseGenerator):
                 f"The user asked: '{raw_text}'\n"
                 f"You are ARGO. Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
                 f"If you don't know the answer, admit it honestly and suggest what they could try instead.\n"
+                f"Response:"
+            )
+        elif intent_type == "music":
+            # ZERO-LATENCY MUSIC-FIX: Explicit reminder about music player capability
+            prompt = (
+                f"{context}"
+                f"The user asked to play music: '{raw_text}'\n"
+                f"You are ARGO and you HAVE A MUSIC PLAYER ATTACHED. "
+                f"Your job is to play music for them. "
+                f"Extract the music genre or artist name from their request and play it enthusiastically.\n"
                 f"Response:"
             )
         elif intent_type == "command":
