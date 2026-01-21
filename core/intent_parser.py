@@ -264,8 +264,9 @@ class RuleBasedIntentParser(IntentParser):
 
         # Rule 4: Music phrases or "play" command (high priority - overrides everything)
         # "play music", "play punk", "play something", "surprise me", etc.
+        # Also matches variations like "playing", "played", "plays"
         # Extract keyword after "play" if present
-        if any(phrase in text_lower for phrase in self.music_phrases) or first_word == "play":
+        if any(phrase in text_lower for phrase in self.music_phrases) or first_word in {"play", "playing", "played", "plays"}:
             keyword = self._extract_music_keyword(text_lower)
             return Intent(
                 intent_type=IntentType.MUSIC,
@@ -364,11 +365,18 @@ class RuleBasedIntentParser(IntentParser):
             if text_normalized == f"play {generic}" or text_normalized == f"play some {generic}":
                 return None
         
-        # Find "play" anywhere in the sentence and extract everything after it
+        # Find "play" (or variations: playing, played, plays) anywhere in the sentence and extract everything after it
         words = text_normalized.split()
-        if "play" in words:
-            play_index = words.index("play")
-            # Get everything after "play"
+        play_index = -1
+        
+        # Look for play or its variations
+        for i, word in enumerate(words):
+            if word in {"play", "playing", "played", "plays"}:
+                play_index = i
+                break
+        
+        if play_index >= 0:
+            # Get everything after the play word
             keyword_words = words[play_index + 1:]
             
             if keyword_words:

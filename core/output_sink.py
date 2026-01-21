@@ -35,6 +35,9 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from typing import Optional, Callable
+import queue
+import threading
+import re
 
 
 # ============================================================================
@@ -222,53 +225,47 @@ def set_output_sink(sink: OutputSink) -> None:
 
 class PiperOutputSink(OutputSink):
     """
-    Piper TTS integration: deterministic, non-blocking, instantly stoppable.
+    Piper TTS integration using producer-consumer queue pattern.
     
-    Core behavior:
-    - send(text) → start async Piper subprocess task (non-blocking return)
-    - stop() → terminate process immediately (idempotent)
+    Fixes asyncio RuntimeError by using threading instead of asyncio.
+    - Producer (main/LLM thread): Generates sentences, queues them
+    - Consumer (worker thread): Pulls from queue, runs Piper subprocess
+    - Decoupled: LLM doesn't wait for TTS, TTS doesn't block LLM
     
-    Technical design:
-    - Piper subprocess runs via subprocess.Popen (controlled process)
-    - Process handle stored in self._piper_process for kill()
-    - Playback task stored in self._playback_task for cancellation
-    - stop() calls process.terminate() immediately (hard stop)
-    - Never uses time.sleep, never blocks event loop
-    - Multiple calls to stop() safe (idempotent)
+    Behavior:
+    - send(text) → queue sentence immediately (non-blocking)
+    - speak(text) → same as send() (sync interface)
+    - stop() → graceful shutdown with poison pill
     
     Configuration:
     - VOICE_ENABLED must be true (checked in caller)
     - PIPER_ENABLED must be true (checked in caller)
     - PIPER_PATH: path to piper.exe (from .env)
     - PIPER_VOICE: path to voice model (from .env)
-    - PIPER_PROFILING gates timing probes (non-blocking)
     """
     
     def __init__(self):
         """
-        Initialize Piper output sink.
+        Initialize Piper output sink with queue and worker thread.
         
         Reads configuration from .env:
         - PIPER_PATH: path to piper executable
         - VOICE_PROFILE: voice profile selection ('lessac' or 'allen')
         - PIPER_VOICE: path to voice model file (can be overridden)
         
-        Raises ValueError if Piper or voice model not found.
+        Starts background worker thread to consume from queue.
         
-        Phase 7D: Voice profile support (data/config only, no logic changes)
+        Raises ValueError if Piper or voice model not found.
         """
         self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
         
         # Get voice model path based on VOICE_PROFILE
         # Priority: PIPER_VOICE env var > VOICE_PROFILE setting > default (lessac)
-        # Note: Allen voice disabled - produces zero bytes with current Piper build
         if os.getenv("PIPER_VOICE"):
             self.voice_path = os.getenv("PIPER_VOICE")
         else:
             self.voice_path = _get_voice_model_path(VOICE_PROFILE)
         
-        self._playback_task: Optional[asyncio.Task] = None
-        self._piper_process: Optional[subprocess.Popen] = None
         self._profiling_enabled = PIPER_PROFILING
         
         # Log voice selection for diagnostics
@@ -283,426 +280,245 @@ class PiperOutputSink(OutputSink):
         if not os.path.exists(self.voice_path):
             if os.getenv("SKIP_VOICE_VALIDATION") != "true":
                 raise ValueError(f"Voice model not found: {self.voice_path}")
-            # For testing: allow missing voice model if explicitly skipped
+        
+        # Initialize producer-consumer queue
+        self.text_queue: queue.Queue = queue.Queue()
+        self._stop_event = threading.Event()
+        self._piper_process: Optional[subprocess.Popen] = None
+        
+        # Start background worker thread (daemon so it stops when main thread exits)
+        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
+        
+        if self._profiling_enabled:
+            print(f"[DEBUG] PiperOutputSink: Worker thread started", file=sys.stderr)
     
-    async def send(self, text: str) -> None:
+    def _worker(self):
         """
-        Send text to Piper for audio playback (non-blocking).
+        Background worker thread: consume sentences from queue and play via Piper.
         
-        Behavior:
-        1. Cancel any existing playback task
-        2. Log audio_request_start checkpoint (if PIPER_PROFILING)
-        3. Create async Piper subprocess task
-        4. Store task in self._playback_task for stop() to cancel
-        5. Await task completion (blocking mode for CLI)
-        6. Log audio_first_output checkpoint when audio starts
+        Runs in dedicated thread (not main, not event loop).
+        Loops until poison pill (None) received in queue.
+        """
+        while True:
+            try:
+                # Get next item from queue (blocking)
+                item = self.text_queue.get(timeout=0.5)
+                
+                # Poison pill: stop signal
+                if item is None:
+                    if self._profiling_enabled:
+                        print(f"[DEBUG] PiperOutputSink: Worker thread received poison pill, exiting", file=sys.stderr)
+                    break
+                
+                # Process sentence
+                self._play_sentence(item)
+                
+            except queue.Empty:
+                # Timeout on get() - check if we should stop
+                if self._stop_event.is_set():
+                    break
+                continue
+            except Exception as e:
+                print(f"[AUDIO_ERROR] Worker thread error: {type(e).__name__}: {e}", file=sys.stderr)
+                if self._profiling_enabled:
+                    import traceback
+                    traceback.print_exc()
+    
+    def _play_sentence(self, text: str):
+        """
+        Play a sentence via Piper subprocess.
         
-        Blocking: send() waits for audio to complete before returning.
-        Cancellable: stop() will halt the playback task and process.
+        Runs in worker thread (not event loop).
+        Uses subprocess.Popen directly (no asyncio).
+        Handles streaming audio with sounddevice.
         
         Args:
             text: Text to synthesize and play
         """
-        # Cancel any existing playback task
-        if self._playback_task and not self._playback_task.done():
-            self._playback_task.cancel()
-            try:
-                await self._playback_task
-            except asyncio.CancelledError:
-                pass
+        if not text or not text.strip():
+            return
         
-        # Log timing probe: audio_request_start
         if self._profiling_enabled:
             import time
-            print(f"[PIPER_PROFILING] audio_request_start: {text[:30]}... @ {time.time():.3f}")
+            time_start = time.time()
+            print(f"[PIPER_PROFILING] play_sentence_start: {text[:50]}... @ {time_start:.3f}")
         
-        # Create playback task and await it (blocking until audio completes)
-        self._playback_task = asyncio.create_task(self._play_audio(text))
+        piper_process = None
         try:
-            await self._playback_task
-        except asyncio.CancelledError:
-            pass  # Task was cancelled by stop()
-    
-    async def _play_audio(self, text: str) -> None:
-        """
-        Internal: run Piper subprocess to synthesize and play audio (with streaming).
-        
-        Streaming Flow (PHASE 7A-2):
-        1. Create Piper subprocess with subprocess.Popen
-        2. Send text via stdin, close stdin immediately
-        3. Read audio frames incrementally from stdout (non-blocking)
-        4. Start playback as soon as first frames are available (time-to-first-audio)
-        5. Continue reading/playing until synthesis complete
-        6. Log timing checkpoints for profiling
-        
-        Key behaviors:
-        - Playback begins immediately (not waiting for full synthesis)
-        - Reduces time-to-first-audio significantly
-        - STOP authority preserved: subprocess killed immediately on cancellation
-        - State machine authority preserved: no new states
-        - Profiling enabled: measure time-to-first-audio, duration, STOP latency
-        
-        Cancellation:
-        - If task is cancelled during await, process is terminated
-        - CancelledError propagates cleanly
-        - Process cleanup is guaranteed via finally block
-        
-        Hard stops:
-        - No fade-out, no tail audio
-        - Process killed immediately on cancellation
-        """
-        time_module = None
-        try:
-            if self._profiling_enabled:
-                import time as time_module
-                time_start = time_module.time()
-                print(f"[PIPER_PROFILING] audio_first_output: {text[:30]}... @ {time_start:.3f}")
-            
             # Start Piper subprocess
-            # Command: piper --model <voice_path> --output-raw to get raw PCM output
-            # PCM is more reliable than WAV for concatenated synthesis
-            
-            # Create subprocess in non-blocking mode
-            # Use --output-raw to get raw PCM audio to stdout (not WAV which can have header issues)
-            self._piper_process = await asyncio.create_subprocess_exec(
-                self.piper_path,
-                "--model", self.voice_path,
-                "--output-raw",
+            piper_process = subprocess.Popen(
+                [self.piper_path, "--model", self.voice_path, "--output-raw"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
+            
+            # Send text to stdin
+            piper_process.stdin.write(text.encode("utf-8"))
+            piper_process.stdin.close()
             
             if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] piper process started, sending text...")
+                print(f"[PIPER_PROFILING] piper process started, text sent")
             
-            try:
-                # Send text to Piper stdin (non-blocking)
-                # Close stdin immediately after sending text to signal end of input
-                self._piper_process.stdin.write(text.encode("utf-8"))
-                await self._piper_process.stdin.drain()
-                self._piper_process.stdin.close()
-                
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] text sent to piper stdin, starting streaming read...")
-                
-                # Stream audio data incrementally (PHASE 7A-2 UPGRADE)
-                # Read frames as they arrive, start playback immediately
-                await self._stream_audio_data(self._piper_process, text, time_module if self._profiling_enabled else None, time_start if self._profiling_enabled else None)
-                
-                # Wait for process to complete
-                await self._piper_process.wait()
-                
-                if self._profiling_enabled:
-                    stderr = await self._piper_process.stderr.read()
-                    if stderr:
-                        print(f"[PIPER_PROFILING] piper stderr: {stderr.decode('utf-8', errors='replace')}")
+            # Read audio and play
+            self._stream_and_play(piper_process)
             
-            except asyncio.CancelledError:
-                # Task was cancelled (stop() was called)
-                # Kill the Piper process immediately (guaranteed cleanup via finally below)
-                raise
-        
-        finally:
-            # GUARANTEE: Process cleanup on ANY exit path (exception, cancellation, or normal)
-            if self._piper_process:
-                try:
-                    # Check if process is still running
-                    if self._piper_process.returncode is None:
-                        # Process still alive, terminate it
-                        self._piper_process.terminate()
-                        try:
-                            # Give it a moment to terminate gracefully (100ms timeout)
-                            await asyncio.wait_for(
-                                self._piper_process.wait(),
-                                timeout=0.1
-                            )
-                        except asyncio.TimeoutError:
-                            # If still alive after 100ms, force kill
-                            self._piper_process.kill()
-                            try:
-                                await asyncio.wait_for(
-                                    self._piper_process.wait(),
-                                    timeout=0.5
-                                )
-                            except (asyncio.TimeoutError, ProcessLookupError):
-                                pass  # Process already gone
-                except Exception as e:
-                    print(f"[AUDIO_WARNING] Error cleaning up Piper process: {e}", file=sys.stderr)
-                finally:
-                    # Always clear reference
-                    self._piper_process = None
-    
-    async def _stream_audio_data(self, process, text: str, time_module=None, time_start=None) -> None:
-        """
-        Internal: stream audio data from Piper subprocess with minimal latency.
-        
-        STREAMING IMPLEMENTATION (PHASE 7A-2):
-        1. Read Piper output in fixed 100ms chunks (~4.4KB @ 22050 Hz 16-bit)
-        2. Buffer 200ms worth of audio before starting playback
-        3. Stream remaining chunks to speaker while reading more
-        4. Ensures no truncation at end-of-stream
-        
-        This reduces time-to-first-audio from ~500-800ms to ~200ms!
-        
-        Key metrics (from profiling):
-        - time-to-first-audio: when first chunk is available after 200ms buffer
-        - streaming_start: when playback begins
-        - streaming_complete: when all audio is played
-        
-        Args:
-            process: asyncio subprocess with stdout=PIPE
-            text: Original query text (for profiling)
-            time_module: time module for profiling (if enabled)
-            time_start: Start time for profiling (if enabled)
-        """
-        try:
-            import numpy as np
+            # Wait for process to finish
+            piper_process.wait(timeout=10)
             
-            # Piper outputs raw PCM int16 @ 22050 Hz mono
-            SAMPLE_RATE = 22050
-            SAMPLE_WIDTH = 2  # int16 = 2 bytes
-            CHUNK_MS = 100  # Read in 100ms chunks
-            CHUNK_BYTES = int(SAMPLE_RATE * SAMPLE_WIDTH * CHUNK_MS / 1000)
-            BUFFER_MS = 200  # Buffer 200ms before starting playback
-            BUFFER_CHUNKS = (BUFFER_MS + CHUNK_MS - 1) // CHUNK_MS  # Round up
-            
-            if self._profiling_enabled and time_module:
-                print(f"[PIPER_PROFILING] stream_setup: chunk={CHUNK_MS}ms ({CHUNK_BYTES} bytes), buffer={BUFFER_MS}ms ({BUFFER_CHUNKS} chunks)")
-            
-            # Phase 1: Buffer first N chunks before playback starts
-            buffered_chunks = []
-            bytes_buffered = 0
-            
-            while len(buffered_chunks) < BUFFER_CHUNKS:
-                chunk = await process.stdout.readexactly(CHUNK_BYTES) if len(buffered_chunks) < BUFFER_CHUNKS - 1 else await process.stdout.read(CHUNK_BYTES)
-                if not chunk:
-                    break  # EOF reached before buffer full
-                buffered_chunks.append(chunk)
-                bytes_buffered += len(chunk)
-            
-            if not buffered_chunks:
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] no_audio_received from Piper for: {text[:50]}")
-                print(f"[AUDIO_WARNING] No audio bytes from Piper for: {text[:50]}", file=sys.stderr)
-                return
-            
-            if self._profiling_enabled and time_module:
-                time_buffered = time_module.time()
-                latency_to_buffer = (time_buffered - time_start) * 1000
-                print(f"[PIPER_PROFILING] buffer_ready: {bytes_buffered} bytes ({len(buffered_chunks)} chunks) @ {latency_to_buffer:.1f}ms")
-            
-            # Phase 2: Stream buffered audio + remaining chunks to speaker
-            # Create task to stream audio while continuing to read more chunks
-            streaming_task = asyncio.create_task(
-                self._stream_to_speaker_progressive(buffered_chunks, process, CHUNK_BYTES, SAMPLE_RATE, text, time_module, time_start)
-            )
-            
-            await streaming_task
-            
-            if self._profiling_enabled and time_module:
-                time_end = time_module.time()
-                total_duration = (time_end - time_start) * 1000
-                print(f"[PIPER_PROFILING] streaming_complete: {total_duration:.1f}ms total")
-        
-        except asyncio.CancelledError:
             if self._profiling_enabled:
                 import time
-                print(f"[PIPER_PROFILING] stream_audio_data cancelled @ {time.time():.3f}")
-            raise
-        except asyncio.IncompleteReadError as e:
-            # Expected at EOF - we got partial chunk
-            if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] incomplete_read at EOF: {len(e.partial)} bytes")
-            # Try to stream whatever we have
-            try:
-                if e.partial:
-                    buffered_chunks = [e.partial]
-                    streaming_task = asyncio.create_task(
-                        self._stream_to_speaker_progressive(buffered_chunks, None, 0, 22050, text, time_module, time_start)
-                    )
-                    await streaming_task
-            except Exception as inner_e:
-                print(f"[AUDIO_ERROR] Error streaming final chunk: {inner_e}", file=sys.stderr)
-        except Exception as e:
-            print(f"[AUDIO_ERROR] Stream error: {type(e).__name__}: {e}", file=sys.stderr)
-            raise
-    
-    async def _stream_to_speaker_progressive(self, initial_chunks: list, process, chunk_bytes: int, sample_rate: int, text: str, time_module=None, time_start=None) -> None:
-        """
-        Internal: progressively stream audio chunks to speaker.
+                time_end = time.time()
+                print(f"[PIPER_PROFILING] play_sentence_complete: {(time_end-time_start)*1000:.1f}ms total")
         
-        Reads buffered chunks while continuing to read more from Piper process.
-        Ensures continuous playback without gaps or truncation.
+        except subprocess.TimeoutExpired:
+            print(f"[AUDIO_ERROR] Piper subprocess timeout", file=sys.stderr)
+            if piper_process:
+                piper_process.kill()
+        except Exception as e:
+            print(f"[AUDIO_ERROR] Play sentence error: {type(e).__name__}: {e}", file=sys.stderr)
+            if piper_process:
+                try:
+                    piper_process.terminate()
+                except:
+                    pass
+        finally:
+            self._piper_process = None
+    
+    def _stream_and_play(self, process: subprocess.Popen):
+        """
+        Stream audio from Piper subprocess and play via sounddevice.
+        
+        Reads raw PCM (int16, 22050 Hz mono) from Piper stdout.
+        Plays audio in real-time as data arrives.
         
         Args:
-            initial_chunks: Initial buffered chunks to start playback
-            process: Piper subprocess (or None if all data buffered)
-            chunk_bytes: Size of chunks to read (in bytes)
-            sample_rate: Audio sample rate (22050 Hz for Piper)
-            text: Original text (for profiling)
-            time_module: time module for profiling (if enabled)
-            time_start: Start time for profiling (if enabled)
+            process: Piper subprocess with stdout=PIPE
         """
         try:
             import sounddevice
+            import numpy as np
         except ImportError:
             if self._profiling_enabled:
-                print("[DEBUG] sounddevice not installed; audio playback disabled", file=sys.stderr)
+                print("[DEBUG] sounddevice/numpy not installed; audio playback disabled", file=sys.stderr)
             return
         
         try:
-            import numpy as np
+            SAMPLE_RATE = 22050
+            SAMPLE_WIDTH = 2  # int16 = 2 bytes
+            CHUNK_SIZE = 4410  # 200ms @ 22050Hz
             
-            # Combine all available chunks
-            all_chunks = list(initial_chunks)  # Make a copy
+            # Read all audio data from Piper
+            audio_bytes = b''
+            while True:
+                chunk = process.stdout.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                audio_bytes += chunk
             
-            # Continue reading from process if available
-            if process:
-                try:
-                    while True:
-                        chunk = await asyncio.wait_for(
-                            process.stdout.read(chunk_bytes),
-                            timeout=0.5  # 500ms timeout per read
-                        )
-                        if not chunk:
-                            break
-                        all_chunks.append(chunk)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass  # EOF or cancelled - that's OK
-                except Exception as e:
-                    if self._profiling_enabled:
-                        print(f"[PIPER_PROFILING] stream_read_ended: {type(e).__name__}")
+            if not audio_bytes:
+                if self._profiling_enabled:
+                    print(f"[PIPER_PROFILING] no_audio_received from Piper", file=sys.stderr)
+                return
             
-            # Convert all chunks to audio data
-            audio_bytes = b''.join(all_chunks)
+            # Convert to numpy array (int16 -> float32)
             audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             
             if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] audio_total: {len(audio_bytes)} bytes ({len(audio_data)} samples, {len(audio_data)/sample_rate:.2f}s)")
-                print(f"[PIPER_PROFILING] audio_range: [{audio_data.min():.4f}, {audio_data.max():.4f}]")
-                if time_module and time_start:
-                    print(f"[PIPER_PROFILING] playback_start @ {(time_module.time() - time_start)*1000:.1f}ms")
+                print(f"[PIPER_PROFILING] audio_total: {len(audio_bytes)} bytes ({len(audio_data)} samples, {len(audio_data)/SAMPLE_RATE:.2f}s)")
             
-            # Normalize if needed
+            # Normalize if clipping
             max_abs = np.abs(audio_data).max()
             if max_abs > 1.0:
                 if self._profiling_enabled:
                     print(f"[PIPER_PROFILING] normalizing audio (max was {max_abs:.4f})")
                 audio_data = audio_data / max_abs
             
-            # Play to speaker
-            loop = asyncio.get_event_loop()
-            
-            def play_sync():
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] speaker_play_start")
-                sounddevice.play(audio_data, samplerate=sample_rate, blocking=True)
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] speaker_play_complete")
-            
-            await loop.run_in_executor(None, play_sync)
-        
-        except Exception as e:
-            print(f"[AUDIO_ERROR] Progressive stream error: {type(e).__name__}: {e}", file=sys.stderr)
+            # Play audio
             if self._profiling_enabled:
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                import traceback
-                traceback.print_exc()
+                print(f"[PIPER_PROFILING] playback_start")
             
-            await loop.run_in_executor(None, play_sync)
+            sounddevice.play(audio_data, samplerate=SAMPLE_RATE, blocking=True)
+            
+            if self._profiling_enabled:
+                print(f"[PIPER_PROFILING] playback_complete")
+            
+            # Drain: brief sleep for hardware buffer
+            import time
+            time.sleep(0.2)
         
         except Exception as e:
-            print(f"[AUDIO_ERROR] Speaker stream error: {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"[AUDIO_ERROR] Stream and play error: {type(e).__name__}: {e}", file=sys.stderr)
             if self._profiling_enabled:
                 import traceback
                 traceback.print_exc()
     
-    def speak(self, text: str) -> None:
+    def send(self, text: str) -> None:
         """
-        Speak text synchronously (blocking wrapper around async send).
+        Send text for audio playback (non-blocking, queue-based).
         
-        Used by Coordinator v3 which uses sync interface.
-        Runs the async send() in event loop synchronously.
-
+        Splits text into sentences and queues them.
+        Worker thread consumes and plays sentences.
+        
         Args:
             text: Text to synthesize and play
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If event loop already running, we're in an async context
-                # Create a task and wait for it with a simple polling loop
-                import time
-                task = asyncio.create_task(self.send(text))
-                # Poll until task is done (blocking style)
-                while not task.done():
-                    time.sleep(0.1)
-                # Get result (will raise if there was an exception)
-                task.result()
-            else:
-                # Run send() synchronously
-                loop.run_until_complete(self.send(text))
-        except Exception as e:
-            print(f"[TTS_ERROR] speak() failed: {type(e).__name__}: {e}", file=sys.stderr)
+        if not text or not text.strip():
+            return
+        
+        # Split text into sentences using regex
+        # Split on . ! ? followed by space or end-of-string
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if sentence:
+                # Queue for worker thread (non-blocking)
+                self.text_queue.put(sentence)
+                if self._profiling_enabled:
+                    print(f"[DEBUG] Queued sentence: {sentence[:50]}...", file=sys.stderr)
+    
+    def speak(self, text: str) -> None:
+        """
+        Speak text synchronously (wrapper around send).
+        
+        Used by Coordinator which uses sync interface.
+        Queues text for background playback.
+        
+        Args:
+            text: Text to synthesize and play
+        """
+        self.send(text)
     
     async def stop(self) -> None:
         """
-        Stop audio playback immediately (idempotent, instant, async-safe).
-        Also stops music playback if active.
+        Stop audio playback immediately (graceful shutdown).
         
-        Behavior:
-        1. If playback_task exists and is running: cancel it
-        2. If piper_process exists: terminate it immediately
-        3. Await CancelledError from task (instant)
-        4. If no task running: no-op (idempotent)
-        5. If called multiple times: safe (idempotent)
-        6. Never raises exceptions
-        
-        Semantics:
-        - stop() is idempotent: can call multiple times safely
-        - stop() is instant: < 50ms latency
-        - stop() is async-safe: uses only asyncio primitives
-        - Hard termination: no fade-out, no tail audio, no apology
+        Signals worker thread to exit and waits for it.
+        No poison pill in queue to avoid blocking on wait.
         """
-        # Terminate Piper process immediately (hard stop)
-        if self._piper_process and self._piper_process.returncode is None:
+        self._stop_event.set()
+        
+        # Send poison pill to worker thread
+        self.text_queue.put(None)
+        
+        # Wait for worker thread to finish (timeout to avoid hanging)
+        self.worker_thread.join(timeout=1.0)
+        
+        # Kill any running Piper process
+        if self._piper_process:
             try:
                 self._piper_process.terminate()
-                # Give it a moment
+                self._piper_process.wait(timeout=0.5)
+            except:
                 try:
-                    await asyncio.wait_for(
-                        asyncio.sleep(0.05),
-                        timeout=0.05
-                    )
-                except asyncio.TimeoutError:
-                    pass
-                
-                # If still alive, kill hard
-                if self._piper_process.returncode is None:
                     self._piper_process.kill()
-            except Exception:
-                pass  # Already terminated
+                except:
+                    pass
             finally:
                 self._piper_process = None
-        
-        # Cancel playback task
-        if self._playback_task and not self._playback_task.done():
-            self._playback_task.cancel()
-            try:
-                await self._playback_task
-            except asyncio.CancelledError:
-                if self._profiling_enabled:
-                    import time
-                    print(f"[PIPER_PROFILING] stop() called, task cancelled @ {time.time():.3f}")
-                pass  # Expected: task was cancelled
-        else:
-            # No task or already done: idempotent no-op
-            if self._profiling_enabled and self._playback_task:
-                import time
-                print(f"[PIPER_PROFILING] stop() called, task already done (idempotent) @ {time.time():.3f}")
-            pass
         
         # Also stop music playback if active
         try:

@@ -1,0 +1,1 @@
+ARGO is a local-first AI operator that refuses to guess, refuses to act silently, and refuses to take control away from the user.

@@ -34,7 +34,9 @@
 16. Color temperature control
 17. RGB lighting control
 18. Scene presets
-19. Whole-house lighting commands
+19. Whole-house lighting commands were running music brain  api last night tang my muxi files
+
+
 20. Time-based lighting routines
 21. Motion-triggered lighting
 22. Manual switch override respected

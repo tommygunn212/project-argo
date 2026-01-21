@@ -1,20 +1,24 @@
 """
-MUSIC INDEX AUTHORITATIVE v1.0.x
+MUSIC INDEX AUTHORITATIVE v1.1.0 (Hardened)
 
 Persistent JSON catalog of local music library.
 
 Responsibilities:
 - Scan directory recursively
 - Extract genre from folder names (using GENRE_ALIASES)
-- Extract artist from parent folder
-- Extract song name from filename
+- Extract metadata using ID3 tags (PRIMARY)
+- Fallback to Folder/Filename heuristics (SECONDARY)
 - Tokenize for keyword search
 - Save/load JSON for fast startup
 - Filter by genre or keyword
 - NO audio decoding
 - NO ffmpeg dependency
-- NO ID3 tag parsing
-- NO guessing
+
+Hardening Features:
+- Validates ID3 tags (strips whitespace, checks for "Unknown", "Track 01")
+- Centralized normalization in _clean_tag
+- Graceful degradation if tags missing
+- Zero network I/O
 
 Data plumbing only.
 
@@ -37,6 +41,13 @@ import re
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
+
+# Try to import mutagen for ID3 support
+try:
+    from mutagen.easyid3 import EasyID3
+    HAS_MUTAGEN = True
+except ImportError:
+    HAS_MUTAGEN = False
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +110,7 @@ GENRE_ALIASES = {
 
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 FILLER_WORDS = {"the", "a", "an", "some", "track", "music"}
+INVALID_TAG_VALUES = {"unknown", "unknown artist", "unknown album", "track", "title"}
 
 
 # ============================================================================
@@ -204,9 +216,35 @@ class MusicIndex:
         
         return tracks
     
+    def _clean_tag(self, value: str) -> Optional[str]:
+        """Normalize and validate a metadata tag."""
+        if not value:
+            return None
+        
+        # Strip whitespace
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+            
+        lower = cleaned.lower()
+        
+        # Check against generic placeholders
+        if lower in INVALID_TAG_VALUES:
+            return None
+            
+        # Check for "Track XX" pattern
+        if re.match(r'^track\s*\d+$', lower):
+            return None
+            
+        return cleaned
+
     def _build_track_record(self, full_path: str) -> Optional[Dict]:
         """
-        Build a single track record.
+        Build a single track record using hardened ID3 strategy.
+        
+        Strategy:
+        1. ID3 Tags (Primary Truth)
+        2. Folder/Filename (Fallback)
         
         Args:
             full_path: Absolute path to audio file
@@ -220,19 +258,51 @@ class MusicIndex:
             ext = path_obj.suffix.lower()
             name = path_obj.stem.lower()
             
-            # Extract genre from folder hierarchy
+            # Initialize Metadata
+            artist = None
+            song = None
+            genre = None
+
+            # 1. Try ID3 Tags (Primary)
+            # We trust Mutagen if available and format is supported
+            if HAS_MUTAGEN and ext == ".mp3":
+                try:
+                    audio = EasyID3(full_path)
+                    
+                    # Extract and Validate Artist
+                    if audio.get('artist'):
+                        # Take first artist, clean it
+                        artist = self._clean_tag(audio['artist'][0])
+                            
+                    # Extract and Validate Title
+                    if audio.get('title'):
+                        # Take title, clean it
+                        song = self._clean_tag(audio['title'][0])
+                            
+                except Exception:
+                    # Tag reading failed (corrupt header, missing tags, etc.)
+                    # Silently proceed to fallback strategies
+                    pass
+            
+            # 2. Fallbacks (If ID3 missing or invalid)
+            
+            # Genre: Always prefer folder hierarchy (User's folders are curated "Rock", "Pop", etc.)
+            # ID3 genres are notoriously messy ("Rock/Pop", "Indie-Rock", "My Faves")
             genre = self._extract_genre(full_path)
             
-            # Extract artist from folder structure
-            artist = self._extract_artist(full_path)
+            # Artist: Fallback to folder assumption
+            if not artist:
+                artist = self._extract_artist(full_path)
             
-            # Extract song name from filename
-            song = self._extract_song(full_path)
+            # Song: Fallback to filename cleaning
+            if not song:
+                song = self._extract_song(full_path)
             
-            # Tokenize for search
+            # 3. Tokenize (Using final confirmed values)
+            # This ensures search matches the actual metadata we settled on
             tokens = self._tokenize(full_path, genre, artist, song)
             
-            # Generate stable ID from path
+            # 4. Generate stable ID
             track_id = hashlib.md5(full_path.lower().encode()).hexdigest()[:16]
             
             return {

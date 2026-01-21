@@ -1,0 +1,69 @@
+# ARGO GUI - Quick Start (30 seconds)
+
+## Install (One-time)
+Everything is already installed. No setup needed.
+
+## Run ARGO with GUI
+
+**Easiest way**: Open File Explorer, go to `I:\argo`, and double-click:
+```
+launch_gui.bat
+```
+
+**Alternative**: Open PowerShell and type:
+```powershell
+cd I:\argo
+python gui_launcher.py
+```
+
+## What You'll See
+
+1. **Window pops up** with red circle (ready)
+2. **Click START** button
+3. **Red light** = waiting for wake word "Argo"
+4. **Say "Argo"** clearly
+5. **Light turns GREEN** while you talk
+6. **Ask your question** (e.g., "What time is it?")
+7. **Light turns RED** after you finish speaking
+8. **ARGO speaks answer** + shows in log
+
+## The Lights
+
+- 🔴 **RED** = Ready (waiting for you to say "Argo")
+- 🟢 **GREEN** = Recording (listening to your voice)
+
+## The Log Box
+
+Shows everything happening:
+- When ARGO starts
+- When it hears "Argo"
+- What it transcribed
+- If there are errors
+- Copy/paste errors for debugging
+
+## Stop ARGO
+
+Click **STOP** button or close the window.
+
+## Troubleshooting
+
+**Light doesn't turn green?**
+- Speak "Argo" clearly
+- Check microphone volume
+- Try "Argo hey" instead
+
+**No response?**
+- Make sure Ollama is running: `ollama serve`
+- Check internet connection
+- Look for errors in the log
+
+**Audio cuts off?**
+- Speak more slowly
+- It records max 10 seconds
+- Silence stops recording automatically
+
+## That's It!
+
+No PowerShell commands. No terminal. Just click and go.
+
+Questions? Check `GUI_README.md` for more details.

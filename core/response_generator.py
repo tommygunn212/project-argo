@@ -22,6 +22,11 @@ v4 Update:
 - Can include recent interactions in prompt
 - Never modifies memory
 - Memory is read-only scratchpad
+
+v5 Update:
+- Example-driven personality injection
+- Two modes: Mild (default) + Claptrap (explicit only)
+- Personality loaded via examples, not heuristics
 """
 
 from abc import ABC, abstractmethod
@@ -111,12 +116,18 @@ class LLMResponseGenerator(ResponseGenerator):
         self.temperature = 0.85  # Increased for more personality and creativity (0.7 was too dry)
         self.max_tokens = 2000  # Plenty of room for full answers (2-3 min speech worth)
         
+        # Personality injection (example-driven)
+        from core.personality import get_personality_loader
+        self.personality_loader = get_personality_loader()
+        self.personality_mode = "mild"  # Default mode
+        
         self.logger = logger
-        self.logger.info("[LLMResponseGenerator v4] Initialized")
+        self.logger.info("[LLMResponseGenerator v5] Initialized")
         self.logger.debug(f"  Endpoint: {self.ollama_url}")
         self.logger.debug(f"  Model: {self.model}")
         self.logger.debug(f"  Temperature: {self.temperature}")
         self.logger.debug(f"  Max tokens: {self.max_tokens}")
+        self.logger.debug(f"  Personality mode: {self.personality_mode}")
         # Transient last response for single-process correction inheritance
         self._last_response: Optional[str] = None
         # Transient uncommitted command candidate (text)
@@ -288,6 +299,18 @@ class LLMResponseGenerator(ResponseGenerator):
             self.logger.debug(f"[generate] Recent interactions: {memory.get_recent_count()}")
         else:
             self.logger.debug(f"[generate] No memory available")
+
+        # === Personality Injection (v5) ===
+        # Check personality examples before calling LLM
+        # Only applies to non-command intents (commands stay humor-free)
+        if intent_type != "command":
+            try:
+                example = self.personality_loader.get_example(self.personality_mode, raw_text)
+                if example:
+                    self.logger.info(f"[generate] Personality match ({self.personality_mode}): returning example")
+                    return example
+            except Exception as e:
+                self.logger.debug(f"[generate] Personality lookup failed: {e}")
 
         # Build prompt for LLM
         prompt = self._build_prompt(intent_type, raw_text, confidence, memory)

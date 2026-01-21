@@ -1,0 +1,175 @@
+# ARGO GUI - Visual Guide
+
+## Window Layout
+
+```
+╔═══════════════════════════════════════════════════════════╗
+║                ARGO Voice Assistant                       ║
+╠═══════════════════════════════════════════════════════════╣
+║                                                           ║
+║                      ●                                    ║
+║                   (Red Circle)                            ║
+║                                                           ║
+║              Status: Ready                               ║
+║                                                           ║
+║            [START]      [STOP]                           ║
+║            (Green)      (Red)                            ║
+║                                                           ║
+║  ┌─────────────────────────────────────────────────────┐  ║
+║  │ Activity Log:                                       │  ║
+║  │ ────────────────────────────────────────────────── │  ║
+║  │ 14:23:15 [INFO] Starting ARGO...                  │  ║
+║  │ 14:23:16 [INFO] Ready - waiting for wake word...  │  ║
+║  │                                                     │  ║
+║  │                                                     │  ║
+║  │                                                     │  ║
+║  │                                                     │  ║
+║  │ (Scroll down to see latest messages)               │  ║
+║  └─────────────────────────────────────────────────────┘  ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+```
+
+## Light States
+
+### State 1: READY (Red Light)
+```
+    ●
+  (RED)
+  Ready
+```
+Waiting for wake word "Argo"
+
+### State 2: RECORDING (Green Light)
+```
+    ●
+  (GREEN)
+  Recording - Listening...
+```
+Microphone is active, capturing your voice
+
+### State 3: PROCESSING (Red Light)
+```
+    ●
+  (RED)
+  Ready
+```
+ARGO is thinking/responding
+
+## Timeline Example
+
+```
+You open the GUI
+         ↓
+    [Red Light]
+    (Waiting)
+         ↓
+You say "Argo"
+         ↓
+    [Green Light]
+    (Recording)
+         ↓
+You ask "What time is it?"
+         ↓
+    [Green Light]
+    (Still recording)
+         ↓
+You stop talking
+    (Silence detected)
+         ↓
+    [Red Light]
+    (Processing)
+         ↓
+ARGO: "It is 2:30 PM"
+         ↓
+    [Red Light]
+    (Ready for next question)
+```
+
+## Log Examples
+
+### Successful Interaction
+```
+14:23:15 [INFO] Starting ARGO...
+14:23:16 [INFO] Ready - waiting for wake word
+14:23:20 [INFO] Recording started (green light)
+14:23:21 [INFO] Heard: "What is your name"
+14:23:21 [INFO] Intent: QUESTION
+14:23:22 [INFO] Recording stopped (red light)
+14:23:23 [INFO] Response: "I am ARGO, your voice assistant"
+14:23:28 [INFO] Ready for next question
+```
+
+### Error Example
+```
+14:23:15 [INFO] Starting ARGO...
+14:23:16 [INFO] Ready - waiting for wake word
+14:23:45 [ERROR] Ollama connection failed: Connection refused
+14:23:45 [ERROR] Make sure to run: ollama serve
+```
+
+## Button Actions
+
+### START Button
+- Enables: Activates ARGO, changes to STOP button
+- Disables: After clicking until STOP is pressed
+- Effect: Light turns red, system enters listening mode
+
+### STOP Button
+- Enables: After clicking START
+- Disables: Returns to disabled after stopping
+- Effect: Light goes red, system shuts down gracefully
+
+## Color Meanings
+
+| Color | Part | Meaning |
+|-------|------|---------|
+| Red | Light Circle | Ready/Waiting/Idle |
+| Red | Start Button | Available to click |
+| Green | Light Circle | Recording/Listening |
+| Green | Stop Button | Available to click |
+| Red | Stop Button | Disabled/Not ready |
+
+## Hot Spots
+
+Things to watch in the log:
+
+1. **"Recording started"** - Green light should turn on
+2. **"Heard: ..."** - What ARGO understood you said
+3. **"Intent: QUESTION"** - Type of request
+4. **"Recording stopped"** - Red light should turn on
+5. **"Response: ..."** - What ARGO will say
+6. **"ERROR"** - Something went wrong (read the message)
+
+## Tips
+
+- Check log if something seems wrong
+- Light changes are instant (< 100ms)
+- Green light = CPU is processing audio
+- Red light = Waiting or processing response
+- Copy errors from log for debugging
+
+## Keyboard Shortcuts (Future)
+
+Currently: None
+
+Click buttons with mouse.
+
+## Size & Position
+
+- Window: 600x500 pixels
+- Not resizable (stays fixed size)
+- Not maximizable
+- Center it yourself if needed
+
+## Log Features
+
+- Shows 12 lines at a time
+- Scrolls automatically to latest
+- Scroll bar on right side
+- Timestamps for all messages
+- Color coded: [INFO], [ERROR], [DEBUG]
+
+---
+
+**Pro Tip**: Pin this window to top-left corner of screen so you can see it while working in other apps.

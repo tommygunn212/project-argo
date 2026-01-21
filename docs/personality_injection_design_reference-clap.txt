@@ -1,0 +1,132 @@
+PERSONALITY INJECTION — DESIGN REFERENCE (NON-EXECUTABLE)
+
+NOTE:
+This document is conceptual and NON-EXECUTABLE.
+
+All personality behavior in Argo must be driven exclusively by
+example-based imitation. No rules, heuristics, tone descriptors,
+or abstract personality guidance in this document should be
+implemented directly in code.
+
+Qwen-class models do not reliably interpret intent, subtlety,
+or tone instructions. They learn personality only through
+concrete examples of completed responses.
+
+This file exists for:
+- Human reference
+- Design rationale
+- Future model upgrades (GPT-class, Claude-class, etc.)
+
+It does NOT have execution authority.
+
+------------------------------------------------------------
+
+CORE PRINCIPLE
+
+Personality is learned, not instructed.
+
+Argo’s tone, humor, and manner of speech must emerge from
+nearest-neighbor imitation of curated response examples.
+
+If there is no example, Argo defaults to the Mild personality.
+
+------------------------------------------------------------
+
+SUPPORTED PERSONALITY MODES
+
+1. Mild (Default)
+2. Claptrap (Explicitly invoked only)
+
+Personality modes are mutually exclusive.
+No blending, interpolation, or automatic escalation is allowed.
+
+------------------------------------------------------------
+
+ACTIVATION RULES
+
+- Mild is always active by default.
+- Claptrap activates only when explicitly requested by the user
+  (e.g. “Claptrap mode”, “Answer in Claptrap”, etc.).
+- No personality inference or mood detection is permitted.
+
+------------------------------------------------------------
+
+STRUCTURAL RESPONSE SHAPE (REFERENCE ONLY)
+
+Approved response shape (discovered via example selection):
+
+1. One sharp or attention-grabbing opening sentence
+2. Immediate grounding with a factual, calm explanation
+3. Optional single pop culture reference
+4. No joke stacking
+5. No callbacks
+6. No humor during commands, safety, or error handling
+
+This structure must be demonstrated through examples,
+not enforced through logic.
+
+------------------------------------------------------------
+
+WHAT NOT TO IMPLEMENT
+
+- No tone flags
+- No style parameters
+- No adjective-based prompts (e.g. “sarcastic”, “playful”)
+- No conditional humor logic
+- No joke counters
+- No temperature hacks
+- No response rewriting for personality purposes
+
+Corrections may adjust content, length, or framing,
+but must preserve the original personality shape.
+
+------------------------------------------------------------
+
+CANONICAL STORAGE MODEL
+
+Personality examples must be stored as plain Q → A pairs only.
+
+Recommended structure:
+
+examples/
+  mild/
+    cats_offended.txt
+    bad_coffee.txt
+    technology_lazy.txt
+  claptrap/
+    cats_offended.txt
+    bad_coffee.txt
+
+Each file contains:
+- A question
+- A complete answer
+- No metadata
+- No explanations
+- No rules
+
+------------------------------------------------------------
+
+FAILSAFE BEHAVIOR
+
+If:
+- Example loading fails
+- Personality mode is unknown
+- Eval is unavailable
+- Memory is incomplete
+
+Argo must revert to Mild personality automatically.
+
+------------------------------------------------------------
+
+RATIONALE
+
+Rules decay.
+Examples generalize.
+
+This design minimizes drift, prevents tone creep,
+and allows personalities to be added, removed,
+or replaced without refactoring core logic.
+
+------------------------------------------------------------
+
+END OF REFERENCE

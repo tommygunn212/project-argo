@@ -217,6 +217,11 @@ class Coordinator:
         # Debug/profiling flag from environment (can override class default)
         self.record_debug = os.getenv("RECORD_DEBUG", "").lower() == "true" or self.RECORD_DEBUG
         
+        # GUI Callbacks (optional, can be set by external GUI)
+        self.on_recording_start = None
+        self.on_recording_stop = None
+        self.on_status_update = None
+        
         # Loop state (v3)
         self.interaction_count = 0
         self.stop_requested = False
@@ -307,11 +312,25 @@ class Coordinator:
                             # TASK 15: Mark recording start
                             self.current_probe.mark("recording_start")
                             
+                            # GUI Callback: Recording started
+                            if self.on_recording_start:
+                                try:
+                                    self.on_recording_start()
+                                except Exception as e:
+                                    self.logger.debug(f"[Coordinator] on_recording_start callback error: {e}")
+                            
                             # Record audio dynamically with silence detection
                             audio = self._record_with_silence_detection()
                             
                             # TASK 15: Mark recording end
                             self.current_probe.mark("recording_end")
+                            
+                            # GUI Callback: Recording stopped
+                            if self.on_recording_stop:
+                                try:
+                                    self.on_recording_stop()
+                                except Exception as e:
+                                    self.logger.debug(f"[Coordinator] on_recording_stop callback error: {e}")
                             
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
@@ -702,6 +721,11 @@ class Coordinator:
             # Clear memory even on error
             self.memory.clear()
             raise
+    
+    def stop(self) -> None:
+        """Stop the coordinator loop gracefully."""
+        self.logger.info("[stop] Stop requested via stop() method")
+        self.stop_requested = True
     
     def _record_with_silence_detection(self) -> np.ndarray:
         """

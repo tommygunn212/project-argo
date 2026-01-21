@@ -1,0 +1,24 @@
+[
+  {
+    "model": "argo:latest",
+    "timestamp": "2026-01-19T02:55:57.794457",
+    "prompt": "Tell me something interesting about machine learning in 2-3 sentences.",
+    "ttft_ms": 2315.1878118515015,
+    "ttfa_ms": null,
+    "text_to_voice_gap_ms": null,
+    "full_response": "Imagine a world where computers can learn like humans do. Machine learning is like teaching a robot to recognize patterns, adapt and improve its skills without being explicitly programmed. It's a fascinating way for technology to evolve and grow smarter on its own.",
+    "piper_start": null,
+    "first_token_time": null
+  },
+  {
+    "model": "argo-qwen-test",
+    "timestamp": "2026-01-19T02:56:02.425360",
+    "prompt": "Tell me something interesting about machine learning in 2-3 sentences.",
+    "ttft_ms": 1674.6907234191895,
+    "ttfa_ms": null,
+    "text_to_voice_gap_ms": null,
+    "full_response": "One interesting aspect of machine learning is the ability to learn from experience without explicit programming. This makes machine learning a powerful tool for solving complex problems.",
+    "piper_start": null,
+    "first_token_time": null
+  }
+]
