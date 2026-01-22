@@ -61,6 +61,11 @@ from typing import Optional
 from datetime import datetime
 import sounddevice as sd
 import numpy as np
+import warnings
+
+# Suppress sounddevice callback cleanup warnings (Windows cffi issue)
+warnings.filterwarnings("ignore", category=AttributeError, module="sounddevice")
+
 from core.intent_parser import IntentType
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats

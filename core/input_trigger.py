@@ -27,6 +27,10 @@ Configuration:
 from abc import ABC, abstractmethod
 import logging
 from typing import Callable, Optional
+import warnings
+
+# Suppress sounddevice callback cleanup warnings (Windows cffi issue)
+warnings.filterwarnings("ignore", category=AttributeError, module="sounddevice")
 
 # === Logging ===
 logger = logging.getLogger(__name__)
