@@ -226,6 +226,9 @@ class Coordinator:
         self.interaction_count = 0
         self.stop_requested = False
         
+        # Dynamic timeout for next recording (starts at default, updates after each transcription)
+        self.dynamic_silence_timeout = self.SILENCE_TIMEOUT_SECONDS
+        
         self.logger.info("[Coordinator v4] Initialized (with interaction loop + session memory)")
         self.logger.debug(f"  InputTrigger: {type(self.trigger).__name__}")
         self.logger.debug(f"  SpeechToText: {type(self.stt).__name__}")
@@ -235,6 +238,32 @@ class Coordinator:
         self.logger.debug(f"  SessionMemory: capacity={self.memory.capacity}")
         self.logger.debug(f"  Max interactions: {self.MAX_INTERACTIONS}")
         self.logger.debug(f"  Stop keywords: {self.STOP_KEYWORDS}")
+    
+    def get_dynamic_timeout(self, transcribed_text: str) -> float:
+        """
+        Smart Timing Logic: Adjust silence timeout based on query type.
+        
+        Quick queries (factual questions) → snappy 1.0s timeout
+        Stories/explanations (detailed questions) → patient 3.5s timeout
+        
+        Args:
+            transcribed_text: The transcribed user input
+            
+        Returns:
+            Timeout in seconds (1.0 or 3.5)
+        """
+        quick_triggers = ["what is", "who is", "time", "stop", "next", "status"]
+        
+        text_lower = transcribed_text.lower()
+        
+        # If it's a simple, short query, be snappy
+        if any(trigger in text_lower for trigger in quick_triggers):
+            self.logger.info(f"[SmartTiming] Quick query detected: '{transcribed_text[:50]}' → 1.0s timeout")
+            return 1.0
+        
+        # If it's a story or explanation, be patient
+        self.logger.info(f"[SmartTiming] Detailed query detected: '{transcribed_text[:50]}' → 3.5s timeout")
+        return 3.5
     
     def run(self) -> None:
         """
@@ -365,6 +394,9 @@ class Coordinator:
                             # PHASE 16: Capture for observer snapshot
                             self._last_wake_timestamp = datetime.now()
                             self._last_transcript = text
+                            
+                            # SmartTiming: Set dynamic timeout for next recording based on query type
+                            self.dynamic_silence_timeout = self.get_dynamic_timeout(text)
                             
                             self.logger.info(
                                 f"[Iteration {self.interaction_count}] "
@@ -752,7 +784,8 @@ class Coordinator:
         # Chunk size for processing (100ms)
         chunk_samples = int(self.AUDIO_SAMPLE_RATE * 0.1)
         min_samples = int(self.AUDIO_SAMPLE_RATE * self.MINIMUM_RECORD_DURATION)
-        silence_samples_threshold = int(self.AUDIO_SAMPLE_RATE * self.SILENCE_TIMEOUT_SECONDS)
+        # Use dynamic silence timeout (updated after each transcription based on query type)
+        silence_samples_threshold = int(self.AUDIO_SAMPLE_RATE * self.dynamic_silence_timeout)
         max_samples = int(self.AUDIO_SAMPLE_RATE * self.MAX_RECORDING_DURATION)
         
         audio_buffer = []
