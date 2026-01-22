@@ -153,7 +153,7 @@ class Coordinator:
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
     SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — TUNED for fast response
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
-    SILENCE_TIMEOUT_SECONDS = 3.0  # Seconds of silence to stop recording — Allows time to think
+    SILENCE_TIMEOUT_SECONDS = 5.0  # Seconds of silence to stop recording — Increased for detailed explanations
     SILENCE_THRESHOLD = 100  # Audio level below this = silence (RMS absolute) — Increased to ignore breathing pauses
     RMS_SPEECH_THRESHOLD = 0.003  # RMS normalized level (0-1) to START silence timer — More lenient threshold
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
@@ -244,13 +244,13 @@ class Coordinator:
         Smart Timing Logic: Adjust silence timeout based on query type.
         
         Quick queries (factual questions) → snappy 1.0s timeout
-        Stories/explanations (detailed questions) → patient 3.5s timeout
+        Stories/explanations (detailed questions) → patient 5.0s timeout
         
         Args:
             transcribed_text: The transcribed user input
             
         Returns:
-            Timeout in seconds (1.0 or 3.5)
+            Timeout in seconds (1.0 or 5.0)
         """
         quick_triggers = ["what is", "who is", "time", "stop", "next", "status"]
         
@@ -262,8 +262,8 @@ class Coordinator:
             return 1.0
         
         # If it's a story or explanation, be patient
-        self.logger.info(f"[SmartTiming] Detailed query detected: '{transcribed_text[:50]}' → 3.5s timeout")
-        return 3.5
+        self.logger.info(f"[SmartTiming] Detailed query detected: '{transcribed_text[:50]}' → 5.0s timeout")
+        return 5.0
     
     def run(self) -> None:
         """
