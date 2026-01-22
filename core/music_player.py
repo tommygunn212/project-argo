@@ -70,6 +70,32 @@ MUSIC_SOURCE = os.getenv("MUSIC_SOURCE", "local").lower()
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 """Supported audio file extensions."""
 
+MUSIC_FIXES = {
+    # Common transcription errors (Whisper misheard)
+    "ramen": "Ramones",          # Ramen (food) → Ramones (band)
+    "ramon": "Ramones",          # Ramon (name) → Ramones
+    "the ramon": "The Ramones",  # The Ramon → The Ramones
+    "trexx": "T. Rex",           # Trexx → T. Rex
+    "t-rex": "T. Rex",           # T-Rex (with hyphen) → T. Rex
+    "the doors": "The Doors",    # Capitalize properly
+    "pink floyd": "Pink Floyd",  # Capitalize properly
+    "david bowie": "David Bowie", # Capitalize properly
+}
+"""Correction map for common artist name transcription errors."""
+
+KNOWN_ARTISTS = {
+    "generation x",
+    "ramones",
+    "the ramones",
+    "t rex",
+    "t. rex",
+    "the clash",
+    "live",
+    "yes",
+    "boston",
+}
+"""Known artist names that bypass LLM extraction. Artist sovereignty - no guessing."""
+
 
 # ============================================================================
 # GENRE MAPPING AND ADJACENCY
@@ -225,6 +251,7 @@ class MusicPlayer:
         self.index = None
         self.jellyfin_provider = None
         self.current_process: Optional[object] = None
+        self._music_process = None  # For ffplay/mpv/vlc streaming process
         self.is_playing = False
         self.current_track: Dict = {}  # Track metadata (artist, song, path, etc.)
 
@@ -434,10 +461,11 @@ class MusicPlayer:
         Supports both local index and Jellyfin.
         
         For Jellyfin: Uses hybrid extraction approach:
-        1. Try LLM-based extraction (handles natural language like "play loud rock from the 70s")
-        2. Fallback to regex-based extraction (fast for structured patterns like "metal from 1984")
-        3. Use advanced server-side filtering with extracted parameters
-        4. Final fallback to simple keyword search
+        1. Check for artist sovereignty (KNOWN_ARTISTS) - bypass LLM if match
+        2. Try LLM-based extraction (handles natural language like "play loud rock from the 70s")
+        3. Fallback to regex-based extraction (fast for structured patterns like "metal from 1984")
+        4. Use advanced server-side filtering with extracted parameters
+        5. Final fallback to simple keyword search
         
         Args:
             keyword: Search term (partial keyword match)
@@ -456,17 +484,44 @@ class MusicPlayer:
             # Try to extract structured parameters from keyword using hybrid approach
             parsed = None
             
-            # Step 1: Try LLM-based extraction for natural language (might be slower but more flexible)
-            logger.info(f"[ARGO] Attempting LLM extraction for: '{keyword}'")
-            llm_extracted = self._extract_metadata_with_llm(keyword)
-            if llm_extracted and (llm_extracted.get("year") or llm_extracted.get("genre") or llm_extracted.get("artist") or llm_extracted.get("song")):
-                logger.info(f"[ARGO] LLM extraction succeeded: {llm_extracted}")
-                parsed = llm_extracted
+            # ARTIST SOVEREIGNTY: Check if keyword is a known artist (bypass LLM)
+            keyword_lower = keyword.lower().strip()
+            if keyword_lower in KNOWN_ARTISTS:
+                logger.info(f"[ARGO] Artist sovereignty matched: '{keyword}' → artist-only search")
+                parsed = {"artist": keyword, "song": None, "genre": None, "year": None}
+            else:
+                # Step 1: Try LLM-based extraction for natural language (might be slower but more flexible)
+                logger.info(f"[ARGO] Attempting LLM extraction for: '{keyword}'")
+                llm_extracted = self._extract_metadata_with_llm(keyword)
+                if llm_extracted and (llm_extracted.get("year") or llm_extracted.get("genre") or llm_extracted.get("artist") or llm_extracted.get("song")):
+                    logger.info(f"[ARGO] LLM extraction succeeded: {llm_extracted}")
+                    parsed = llm_extracted
+                
+                # Step 2: Fallback to regex-based extraction if LLM didn't provide useful data
+                if not parsed or not (parsed.get("year") or parsed.get("genre") or parsed.get("artist") or parsed.get("song")):
+                    logger.info(f"[ARGO] Using regex extraction (LLM didn't extract metadata)")
+                    parsed = self._parse_music_keyword(keyword)
             
-            # Step 2: Fallback to regex-based extraction if LLM didn't provide useful data
-            if not parsed or not (parsed.get("year") or parsed.get("genre") or parsed.get("artist") or parsed.get("song")):
-                logger.info(f"[ARGO] Using regex extraction (LLM didn't extract metadata)")
-                parsed = self._parse_music_keyword(keyword)
+            # Step 3: Apply corrections for common transcription errors
+            if parsed:
+                # Fix artist names
+                if parsed.get("artist"):
+                    artist_lower = parsed["artist"].lower()
+                    if artist_lower in MUSIC_FIXES:
+                        original = parsed["artist"]
+                        parsed["artist"] = MUSIC_FIXES[artist_lower]
+                        logger.info(f"[ARGO] Artist correction: '{original}' → '{parsed['artist']}'")
+                
+                # Fix genres that are actually artist names (ramen → Ramones)
+                if parsed.get("genre"):
+                    genre_lower = parsed["genre"].lower()
+                    if genre_lower in MUSIC_FIXES:
+                        # This genre might actually be an artist
+                        logger.info(f"[ARGO] Genre correction detected: '{parsed['genre']}' → artist '{MUSIC_FIXES[genre_lower]}'")
+                        if not parsed.get("artist"):
+                            parsed["artist"] = MUSIC_FIXES[genre_lower]
+                            parsed["genre"] = None  # Clear the bad genre
+                            logger.info(f"[ARGO] Applied artist correction (no artist found)")
             
             # CASCADING FALLBACK SEARCH: Optimistic but forgiving
             # LLM might hallucinate year/genre/song, so try multiple strategies
@@ -973,76 +1028,45 @@ Response (JSON ONLY):"""
             self.current_track = track
             self.is_playing = True
             
-            # Play via URL streaming
-            try:
-                # Use pydub which knows where ffmpeg is installed
-                from pydub import AudioSegment
-                from pydub.playback import play
-                from pydub.utils import which as pydub_which
-                import requests
-                import tempfile
-                import threading
-                
-                logger.debug("[ARGO] Downloading stream for pydub playback...")
-                
-                # Check if ffmpeg is available (pydub needs it)
-                if not pydub_which("ffmpeg"):
-                    logger.debug("[ARGO] ffmpeg not found for pydub, trying fallback...")
-                    raise ImportError("ffmpeg not found")
-                
-                # Download stream to temp MP3 file
-                response = requests.get(stream_url, stream=True, timeout=30)
-                if response.status_code != 200:
-                    logger.error(f"[ARGO] Failed to download stream: {response.status_code}")
-                    return False
-                
-                # Save to temp file explicitly as MP3
-                bytes_written = 0
-                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
-                    tmp_path = tmp.name
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            tmp.write(chunk)
-                            bytes_written += len(chunk)
-                
-                logger.debug(f"[ARGO] Downloaded {bytes_written} bytes to {tmp_path}")
-                
-                # Play async in background
-                def play_stream():
-                    try:
-                        logger.debug("[ARGO] Loading audio with pydub...")
-                        audio = AudioSegment.from_mp3(tmp_path)
-                        logger.debug(f"[ARGO] Playing {len(audio)}ms of audio")
-                        play(audio)
-                        logger.debug("[ARGO] Playback complete")
-                    except Exception as e:
-                        logger.debug(f"[ARGO] pydub playback error: {e}")
-                    finally:
-                        try:
-                            import os
-                            os.unlink(tmp_path)
-                            logger.debug(f"[ARGO] Cleaned up temp file")
-                        except:
-                            pass
-                
-                play_thread = threading.Thread(target=play_stream, daemon=True)
-                play_thread.start()
-                logger.info("[ARGO] Playback thread started")
-                return True
-                
-            except Exception as e:
-                logger.debug(f"[ARGO] pydub streaming failed: {e}")
-            
-            # Fallback: Try external players
+            # Direct streaming with ffplay (no download, no temp file, instant start)
             import subprocess
             import shutil
             
-            # Try ffplay first
-            ffplay_path = shutil.which("ffplay")
-            if ffplay_path:
-                logger.debug("[ARGO] Using ffplay for streaming")
-                subprocess.Popen(
-                    [ffplay_path, "-nodisp", "-autoexit", stream_url],
+            try:
+                ffplay_path = shutil.which("ffplay")
+                if not ffplay_path:
+                    logger.debug("[ARGO] ffplay not found, trying fallback players...")
+                    raise FileNotFoundError("ffplay not found")
+                
+                logger.debug(f"[ARGO] Starting ffplay streaming from {stream_url[:80]}...")
+                
+                # Launch ffplay with streaming flags for instant playback
+                self._music_process = subprocess.Popen(
+                    [
+                        ffplay_path,
+                        "-nodisp",           # Don't display video window
+                        "-noborder",         # No window border (save resources)
+                        "-autoexit",         # Exit when done
+                        "-probesize", "32",  # Fast stream probing
+                        "-analyzeduration", "0",  # Don't analyze duration
+                        "-infbuf",           # CRITICAL: Infinite buffer for network stability
+                        stream_url
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info(f"[ARGO] ffplay process started (PID: {self._music_process.pid})")
+                return True
+            
+            except Exception as e:
+                logger.debug(f"[ARGO] ffplay streaming failed: {e}")
+            
+            # Fallback: Try mpv
+            mpv_path = shutil.which("mpv")
+            if mpv_path:
+                logger.debug("[ARGO] Using mpv for streaming")
+                self._music_process = subprocess.Popen(
+                    [mpv_path, "--no-video", stream_url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
@@ -1154,7 +1178,7 @@ Response (JSON ONLY):"""
             logger.info("[ARGO] Music playback stopped")
 
     def stop(self) -> None:
-        """Stop current playback (idempotent)."""
+        """Stop current playback immediately (idempotent). No graceful fade, just STOP."""
         # Always reset playback state, regardless of is_playing flag
         playback_state = get_playback_state()
         playback_state.reset()
@@ -1163,11 +1187,24 @@ Response (JSON ONLY):"""
             return
 
         try:
+            # Kill ffplay/mpv/vlc process immediately
+            if self._music_process:
+                try:
+                    self._music_process.terminate()
+                    self._music_process.wait(timeout=2)
+                except (subprocess.TimeoutExpired, AttributeError):
+                    try:
+                        self._music_process.kill()
+                    except:
+                        pass
+                finally:
+                    self._music_process = None
+            
+            # Legacy simpleaudio support
             if self.current_process:
-                # For simpleaudio
                 if hasattr(self.current_process, "stop"):
                     self.current_process.stop()
-                # For ffplay, process will be killed by parent
+            
             self.is_playing = False
             self.current_track = {}
             
