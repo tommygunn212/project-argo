@@ -149,11 +149,11 @@ class Coordinator:
     
     # Audio recording parameters
     AUDIO_SAMPLE_RATE = 16000  # Hz
-    MAX_RECORDING_DURATION = 10.0  # seconds max (safety net) — Increased for longer questions
+    MAX_RECORDING_DURATION = 15.0  # seconds max (safety net) — Extended for longer LED explanation
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
     SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — TUNED for fast response
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
-    SILENCE_TIMEOUT_SECONDS = 2.5  # Seconds of silence to stop recording — Allows normal speaking pace
+    SILENCE_TIMEOUT_SECONDS = 3.0  # Seconds of silence to stop recording — Allows time to think
     SILENCE_THRESHOLD = 30  # Audio level below this = silence (RMS absolute) — TUNED for sensitivity
     RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — TUNED instant trigger
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context

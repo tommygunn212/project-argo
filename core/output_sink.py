@@ -801,6 +801,10 @@ class EdgeTTSOutputSink(OutputSink):
             print(f"[EdgeTTS_ERROR] speak() failed: {type(e).__name__}: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
+        
+        # Drainage buffer: ensure M-Audio hardware finishes playback before process swaps to listening
+        import time
+        time.sleep(1.5)
     
     async def send(self, text: str) -> None:
         """
