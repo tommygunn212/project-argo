@@ -156,7 +156,7 @@ class Coordinator:
     SILENCE_TIMEOUT_SECONDS = 2.5  # Seconds of silence to stop recording — Allows normal speaking pace
     SILENCE_THRESHOLD = 30  # Audio level below this = silence (RMS absolute) — TUNED for sensitivity
     RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — TUNED instant trigger
-    PRE_ROLL_BUFFER_MS_MIN = 800  # Min milliseconds of pre-speech audio to capture — 800ms pre-wake context
+    PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
     # Debug/profiling flags
@@ -197,7 +197,7 @@ class Coordinator:
         self.recorded_audio = None
         
         # Session memory (v4) — short-term working memory for this session only
-        self.memory = SessionMemory(capacity=3)
+        self.memory = SessionMemory(capacity=1)
         
         # TASK 15: Latency instrumentation
         self.latency_stats = LatencyStats()
