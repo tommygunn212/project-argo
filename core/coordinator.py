@@ -156,8 +156,8 @@ class Coordinator:
     SILENCE_TIMEOUT_SECONDS = 2.5  # Seconds of silence to stop recording — Allows normal speaking pace
     SILENCE_THRESHOLD = 30  # Audio level below this = silence (RMS absolute) — TUNED for sensitivity
     RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — TUNED instant trigger
-    PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
-    PRE_ROLL_BUFFER_MS_MAX = 1500  # Max milliseconds to keep in rolling buffer — 1.5 second look-back
+    PRE_ROLL_BUFFER_MS_MIN = 800  # Min milliseconds of pre-speech audio to capture — 800ms pre-wake context
+    PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
     # Debug/profiling flags
     RECORD_DEBUG = False  # Set to True for detailed recording metrics (or via env var)
@@ -401,17 +401,14 @@ class Coordinator:
                                 f"(confidence={intent.confidence:.2f})"
                             )
                             
-                            # 4. Generate response (LLM, with SessionMemory available)
-                            self.logger.info(
-                                f"[Iteration {self.interaction_count}] Generating response..."
-                            )
-                            
-                            # TASK 15: Mark LLM start
-                            self.current_probe.mark("llm_start")
+                            # 4. Check procedural commands FIRST (before LLM generation)
+                            # Procedural commands must execute immediately without LLM latency
                             
                             # Check if this is a procedural command (count to N, etc.)
                             if self.executor.can_execute(text):
                                 self.logger.info(f"[Iteration {self.interaction_count}] Procedural command detected: '{text}'")
+                                # TASK 15: Mark LLM start (skip for procedural commands)
+                                self.current_probe.mark("llm_start")
                                 try:
                                     # Execute command directly (bypasses LLM)
                                     self.executor.execute(text)
@@ -425,6 +422,14 @@ class Coordinator:
                                     response_text = "Command failed."
                                     self.current_probe.mark("llm_end")
                                     return
+                            
+                            # Generate response (LLM, with SessionMemory available)
+                            self.logger.info(
+                                f"[Iteration {self.interaction_count}] Generating response..."
+                            )
+                            
+                            # TASK 15: Mark LLM start
+                            self.current_probe.mark("llm_start")
                             
                             # Check if this is a STOP command (highest priority - short-circuit)
                             elif intent.intent_type == IntentType.MUSIC_STOP:

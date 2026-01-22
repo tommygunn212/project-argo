@@ -751,9 +751,9 @@ class EdgeTTSOutputSink(OutputSink):
             # Use actual sample rate from WAV header, not hard-coded constant
             print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
-            # Pre-buffer audio to prevent underrun (100ms buffer for M-Audio)
+            # Pre-buffer audio to prevent underrun (800ms buffer for M-Audio)
             import time
-            time.sleep(0.1)
+            time.sleep(0.8)  # TEMP: audio drain buffer for Windows / M-Audio hardware
             
             # Step 4: Force correct playback parameters
             # Try using simpleaudio instead of sounddevice to avoid driver issues
