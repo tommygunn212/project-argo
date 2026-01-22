@@ -432,7 +432,7 @@ class Coordinator:
                             self.current_probe.mark("llm_start")
                             
                             # Check if this is a STOP command (highest priority - short-circuit)
-                            elif intent.intent_type == IntentType.MUSIC_STOP:
+                            if intent.intent_type == IntentType.MUSIC_STOP:
                                 self.logger.info(f"[Iteration {self.interaction_count}] STOP command: Stopping music")
                                 from core.music_player import get_music_player
                                 music_player = get_music_player()
