@@ -63,8 +63,8 @@ import sounddevice as sd
 import numpy as np
 import warnings
 
-# Suppress sounddevice callback cleanup warnings (Windows cffi issue)
-warnings.filterwarnings("ignore", category=AttributeError, module="sounddevice")
+# Suppress sounddevice Windows cffi warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 
 from core.intent_parser import IntentType
 from core.session_memory import SessionMemory
