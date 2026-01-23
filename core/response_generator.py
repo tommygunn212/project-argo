@@ -8,7 +8,7 @@ Does NOT:
 - Access audio
 - Access triggers
 - Control flow
-- Call OutputSink or SpeechToText
+- Call OutputSink or SpeechToText (except optional sentence streaming when enabled)
 - Maintain memory (SessionMemory is read-only input)
 - Store internal state
 - Modify SessionMemory
@@ -30,11 +30,14 @@ v5 Update:
 """
 
 from abc import ABC, abstractmethod
+import json
 import logging
 import re
 from typing import Optional
+from core.config import ENABLE_LLM_TTS_STREAMING, get_config
 from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
 from core.watchdog import Watchdog
+from core.output_sink import get_output_sink
 
 # Minimal stop-word list for semantic overlap guard
 STOP_WORDS = {
@@ -134,6 +137,16 @@ class LLMResponseGenerator(ResponseGenerator):
         self._last_response: Optional[str] = None
         # Transient uncommitted command candidate (text)
         self._uncommitted_command: Optional[str] = None
+        # Feature flag (default off)
+        try:
+            config = get_config()
+            self._enable_tts_streaming = bool(
+                config.get("llm.enable_tts_streaming", ENABLE_LLM_TTS_STREAMING)
+            )
+        except Exception:
+            self._enable_tts_streaming = ENABLE_LLM_TTS_STREAMING
+        # Streaming output tracker (per call)
+        self._streamed_output = False
 
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
@@ -423,18 +436,47 @@ class LLMResponseGenerator(ResponseGenerator):
             RuntimeError: If connection fails or LLM returns error
         """
         try:
+            # Reset streaming tracker per call
+            self._streamed_output = False
             # Make request to Ollama
             url = f"{self.ollama_url}/api/generate"
             
             payload = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False,  # Single response, not streaming
+                "stream": bool(self._enable_tts_streaming),
                 "temperature": self.temperature,
                 "num_predict": self.max_tokens,
             }
 
             self.logger.debug(f"[_call_llm] Calling {url}")
+            if self._enable_tts_streaming:
+                self.logger.debug("[_call_llm] Streaming enabled")
+                with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as wd:
+                    response = self.requests.post(
+                        url, json=payload, timeout=LLM_TIMEOUT_SECONDS, stream=True
+                    )
+
+                    if response.status_code != 200:
+                        raise RuntimeError(
+                            f"LLM returned status {response.status_code}: {response.text}"
+                        )
+
+                    response_text = self._stream_llm_and_enqueue(response)
+
+                if wd.triggered:
+                    self.logger.warning("[WATCHDOG] LLM response exceeded watchdog; returning fallback response")
+                    return WATCHDOG_FALLBACK_RESPONSE
+
+                if not response_text:
+                    raise RuntimeError("LLM returned empty response")
+
+                # Enhance response quality
+                response_text = self._enhance_response(response_text)
+
+                return response_text
+
+            # Non-streaming default (unchanged)
             with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as wd:
                 response = self.requests.post(url, json=payload, timeout=LLM_TIMEOUT_SECONDS)
             
@@ -466,6 +508,86 @@ class LLMResponseGenerator(ResponseGenerator):
             )
         except Exception as e:
             raise RuntimeError(f"LLM call failed: {e}")
+
+    def _stream_llm_and_enqueue(self, response) -> str:
+        """
+        Stream LLM output, enqueue complete sentences to TTS, and return full text.
+        """
+        self.logger.debug("[_stream_llm_and_enqueue] Streaming started")
+
+        sink = None
+        try:
+            sink = get_output_sink()
+        except Exception:
+            sink = None
+
+        buffer = ""
+        full_response_parts = []
+        first_sentence_enqueued = False
+
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            try:
+                data = json.loads(raw_line)
+            except Exception:
+                continue
+
+            chunk = data.get("response", "")
+            if chunk:
+                buffer += chunk
+                full_response_parts.append(chunk)
+
+                sentences, buffer = self._extract_complete_sentences(buffer)
+                for sentence in sentences:
+                    self._enqueue_sentence(sink, sentence)
+                    if not first_sentence_enqueued:
+                        self.logger.debug("[_stream_llm_and_enqueue] First sentence enqueued")
+                        first_sentence_enqueued = True
+
+            if data.get("done"):
+                break
+
+        # Flush remaining partial sentence
+        remaining = buffer.strip()
+        if remaining:
+            self._enqueue_sentence(sink, remaining)
+
+        self.logger.debug("[_stream_llm_and_enqueue] Streaming complete")
+
+        return "".join(full_response_parts).strip()
+
+    def _extract_complete_sentences(self, text: str) -> tuple[list, str]:
+        """
+        Extract complete sentences from text buffer.
+        Sentence boundary = ., ?, ! followed by whitespace.
+        Returns (sentences, remainder).
+        """
+        sentences = []
+        while True:
+            match = re.search(r"[.!?]\s+", text)
+            if not match:
+                break
+            cut = match.end()
+            sentence = text[:cut].strip()
+            if sentence:
+                sentences.append(sentence)
+            text = text[cut:]
+        return sentences, text
+
+    def _enqueue_sentence(self, sink, sentence: str) -> None:
+        """
+        Enqueue a sentence to the TTS queue without blocking.
+        """
+        if not sentence or not sentence.strip():
+            return
+        if sink is None or not hasattr(sink, "text_queue"):
+            return
+        try:
+            sink.text_queue.put(sentence.strip())
+            self._streamed_output = True
+        except Exception:
+            return
     def _enhance_response(self, response_text: str) -> str:
         """
         Post-process response to ensure quality and personality.

@@ -662,17 +662,22 @@ class Coordinator:
                             
                             # Only speak if response is not empty (music playback has empty response)
                             if response_text and response_text.strip():
-                                # TASK 17: Set speaking flag (half-duplex audio gate)
-                                self._is_speaking.set()
-                                try:
-                                    # Speak and monitor for user interrupt (voice input during playback)
-                                    with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as tts_wd:
-                                        self._speak_with_interrupt_detection(response_text)
-                                    if tts_wd.triggered:
-                                        self.logger.warning("[WATCHDOG] TTS exceeded watchdog threshold")
+                                streamed_output = bool(getattr(self.generator, "_streamed_output", False))
+                                if streamed_output:
+                                    self.logger.debug("[TTS] Streaming enabled; skipping duplicate speak")
                                     output_produced = True
-                                finally:
-                                    self._is_speaking.clear()
+                                else:
+                                    # TASK 17: Set speaking flag (half-duplex audio gate)
+                                    self._is_speaking.set()
+                                    try:
+                                        # Speak and monitor for user interrupt (voice input during playback)
+                                        with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as tts_wd:
+                                            self._speak_with_interrupt_detection(response_text)
+                                        if tts_wd.triggered:
+                                            self.logger.warning("[WATCHDOG] TTS exceeded watchdog threshold")
+                                        output_produced = True
+                                    finally:
+                                        self._is_speaking.clear()
                             else:
                                 self.logger.info(
                                     f"[Iteration {self.interaction_count}] "

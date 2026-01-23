@@ -17,6 +17,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Feature flags
+ENABLE_LLM_TTS_STREAMING = False
+
 
 class Config:
     """Simple config wrapper with dot-notation access."""
@@ -86,7 +89,8 @@ _DEFAULT_CONFIG = {
     "llm": {
         "model": "qwen",
         "base_url": "http://localhost:11434",
-        "timeout_seconds": 30
+        "timeout_seconds": 30,
+        "enable_tts_streaming": ENABLE_LLM_TTS_STREAMING
     },
     "music": {
         "enabled": True,
