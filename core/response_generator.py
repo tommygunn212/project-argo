@@ -152,6 +152,8 @@ class LLMResponseGenerator(ResponseGenerator):
         self._canonical_examples = self._load_canonical_examples()
         # Debug flag (set per prompt)
         self._personality_examples_applied = False
+        # System profile (host machine context)
+        self._system_profile = self._load_system_profile()
 
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
@@ -182,7 +184,7 @@ class LLMResponseGenerator(ResponseGenerator):
             if direct:
                 self._personality_examples_applied = True
                 self.logger.debug("personality_examples_applied=true")
-                return direct
+            return self._finalize_response(direct, intent)
         except Exception as e:
             self.logger.debug(f"[generate] Canonical example match failed: {e}")
 
@@ -286,7 +288,7 @@ class LLMResponseGenerator(ResponseGenerator):
                             # Call LLM directly to adapt previous response
                             response_text = self._call_llm(prompt)
                             response_text = self._enhance_response(response_text)
-                            return response_text
+                            return self._finalize_response(response_text, intent)
         except Exception as e:
             self.logger.debug(f"[generate] Correction inheritance check failed: {e}")
 
@@ -312,15 +314,15 @@ class LLMResponseGenerator(ResponseGenerator):
                     self._uncommitted_command = raw_text
                     # Map concise clarifications per command type (wording must remain concise)
                     if "open photoshop" in lt:
-                        return "Do you want me to open Photoshop or cancel?"
+                        return self._finalize_response("Do you want me to open Photoshop or cancel?", intent)
                     if lt.startswith("play music"):
-                        return "Do you want me to play music now or pick a genre/device?"
+                        return self._finalize_response("Do you want me to play music now or pick a genre/device?", intent)
                     if lt.startswith("stop"):
-                        return "Stop everything or stop the current activity?"
+                        return self._finalize_response("Stop everything or stop the current activity?", intent)
                     if lt.startswith("next"):
-                        return "Skip to the next item?"
+                        return self._finalize_response("Skip to the next item?", intent)
                     # Fallback concise clarification
-                    return "Do you want me to proceed or cancel?"
+                    return self._finalize_response("Do you want me to proceed or cancel?", intent)
         except Exception as e:
             self.logger.debug(f"[generate] Rule2 check failed: {e}")
         
@@ -339,12 +341,12 @@ class LLMResponseGenerator(ResponseGenerator):
                 example = self.personality_loader.get_example(self.personality_mode, raw_text)
                 if example:
                     self.logger.info(f"[generate] Personality match ({self.personality_mode}): returning example")
-                    return example
+                    return self._finalize_response(example, intent)
             except Exception as e:
                 self.logger.debug(f"[generate] Personality lookup failed: {e}")
 
         # Build prompt for LLM
-        prompt = self._build_prompt(intent_type, raw_text, confidence, memory)
+        prompt = self._build_prompt(intent_type, raw_text, confidence, memory, bool(getattr(intent, "serious_mode", False)))
         self.logger.debug(f"[generate] Prompt: {prompt[:100]}...")
 
         # Call LLM
@@ -356,7 +358,7 @@ class LLMResponseGenerator(ResponseGenerator):
                 self._last_response = response_text
             except Exception:
                 pass
-            return response_text
+            return self._finalize_response(response_text, intent)
 
         except Exception as e:
             self.logger.error(f"[generate] LLM call failed: {e}")
@@ -367,7 +369,8 @@ class LLMResponseGenerator(ResponseGenerator):
         intent_type: str,
         raw_text: str,
         confidence: float,
-        memory: Optional['SessionMemory'] = None
+        memory: Optional['SessionMemory'] = None,
+        serious_mode: bool = False,
     ) -> str:
         """
         Build a prompt for the LLM based on intent and optional context.
@@ -388,11 +391,28 @@ class LLMResponseGenerator(ResponseGenerator):
             context_summary = memory.get_context_summary()
             if context_summary:
                 context = f"Context from recent conversation:\n{context_summary}\n\n"
+
+        system_context = ""
+        if self._system_profile:
+            system_context = f"System profile: {self._system_profile}\n\n"
         
-        # System personality: You are ARGO, a friendly and knowledgeable AI assistant.
-        # You're conversational but intelligent, engaging but not verbose.
-        # You explain things clearly with practical examples when useful.
-        # You have personality without being over-the-top.
+        # System personality: Inject ARGO DNA prompt (v2.2)
+        dna_prompt = (
+            "You are ARGO, a competent local-first operator. Speak like a capable partner, not a servant. "
+            "Be direct, observant, and occasionally amused. Avoid corporate filler and fake enthusiasm. "
+            "If an idea is weak, push back. If the work is hacky, say so.\n"
+            "SERIOUS_MODE Constraint: If the user mentions grief, failure, or distress (SERIOUS_MODE is True), "
+            "drop all personality and respond with total steadiness and brevity."
+        )
+
+        # Few-shot examples to teach tone (v2.2)
+        few_shot = (
+            "Example 1 (Factual): User: \"What's the weather?\" -> ARGO: \"Skies are clear. Perfect day to take Bandit for a run. Just keep him out of the trash this time.\"\n"
+            "Example 2 (Brainstorming): User: \"I want to build a shed.\" -> ARGO: \"A shed? Bold. What’s the vibe—minimalist storage or a full-on workshop? Use cedar or we’re gonna have words about durability.\"\n"
+            "Example 3 (Pushback): User: \"I'll just use a weak password.\" -> ARGO: \"That’s a hard no. That’s how systems get compromised. Do it right or don't do it at all.\"\n"
+        )
+
+        serious_line = f"SERIOUS_MODE: {'True' if serious_mode else 'False'}\n"
         
         examples_block = ""
         self._personality_examples_applied = False
@@ -410,7 +430,11 @@ class LLMResponseGenerator(ResponseGenerator):
         if intent_type == "greeting":
             prompt = (
                 f"{context}"
-                f"You are ARGO, a friendly AI assistant. Respond with a warm, engaging greeting (one sentence).\n"
+                f"{system_context}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
+                f"You are ARGO. Respond with a warm, engaging greeting (one sentence).\n"
                 f"{examples_block}"
                 f"The user greeted you with: '{raw_text}'\n"
                 f"Response:"
@@ -418,6 +442,10 @@ class LLMResponseGenerator(ResponseGenerator):
         elif intent_type == "question":
             prompt = (
                 f"{context}"
+                f"{system_context}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
                 f"You are ARGO. Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
                 f"If you don't know the answer, admit it honestly and suggest what they could try instead.\n"
                 f"{examples_block}"
@@ -428,6 +456,10 @@ class LLMResponseGenerator(ResponseGenerator):
             # ZERO-LATENCY MUSIC-FIX: Explicit reminder about music player capability
             prompt = (
                 f"{context}"
+                f"{system_context}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
                 f"You are ARGO and you HAVE A MUSIC PLAYER ATTACHED. "
                 f"Your job is to play music for them. "
                 f"Extract the music genre or artist name from their request and play it enthusiastically.\n"
@@ -438,6 +470,10 @@ class LLMResponseGenerator(ResponseGenerator):
         elif intent_type == "command":
             prompt = (
                 f"{context}"
+                f"{system_context}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
                 f"You are ARGO. Execute the command directly with personality. If it's a count, list, recitation, or performance, do it enthusiastically.\n"
                 f"Respond with the action itself, not just acknowledgment.\n"
                 f"{examples_block}"
@@ -447,6 +483,10 @@ class LLMResponseGenerator(ResponseGenerator):
         else:  # unknown
             prompt = (
                 f"{context}"
+                f"{system_context}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
                 f"You didn't understand. Politely ask for clarification (one sentence max).\n"
                 f"{examples_block}"
                 f"The user said: '{raw_text}'\n"
@@ -454,6 +494,119 @@ class LLMResponseGenerator(ResponseGenerator):
             )
 
         return prompt
+
+    def _finalize_response(self, response_text: str, intent) -> str:
+        """Apply output governor and guardrails to final response text."""
+        serious_mode = bool(getattr(intent, "serious_mode", False))
+        response_text = response_text.strip()
+        response_text = self._sanitize_fourth_wall(response_text)
+        response_text = self._limit_emojis(response_text, serious_mode)
+        response_text = self._apply_sentence_rules(response_text, serious_mode)
+        return response_text.strip()
+
+    def _load_system_profile(self) -> str:
+        """Load host system profile from data/system_profile.json if present."""
+        try:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            profile_path = os.path.join(base_dir, "data", "system_profile.json")
+            if not os.path.isfile(profile_path):
+                return ""
+            with open(profile_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return ""
+            cpu = data.get("cpu", "")
+            gpu = data.get("gpu", "")
+            ram_gb = data.get("ram_gb", "")
+            storage_tb = data.get("storage_total_tb", "")
+            parts = []
+            if cpu:
+                parts.append(f"CPU: {cpu}")
+            if ram_gb:
+                parts.append(f"RAM: {ram_gb}GB")
+            if gpu:
+                parts.append(f"GPU: {gpu}")
+            if storage_tb:
+                parts.append(f"Storage: {storage_tb}TB")
+            return ", ".join(parts)
+        except Exception:
+            return ""
+
+    def _sanitize_fourth_wall(self, text: str) -> str:
+        """Remove corporate/assistant boilerplate and banned phrases."""
+        banned_phrases = [
+            r"\bas an ai\b",
+            r"\bas a language model\b",
+            r"\bi am an ai\b",
+            r"\bi'm an ai\b",
+            r"\bi am here to help\b",
+            r"\bi'm here to help\b",
+            r"\bhow can i assist\b",
+            r"\bhappy to help\b",
+        ]
+        cleaned = text
+        for pattern in banned_phrases:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned
+
+    def _limit_emojis(self, text: str, serious_mode: bool) -> str:
+        """Enforce emoji cap (0 in serious mode, max 1 otherwise)."""
+        emoji_pattern = re.compile(
+            "[\U0001F300-\U0001FAFF\U0001F1E0-\U0001F1FF]",
+            flags=re.UNICODE,
+        )
+        emojis = emoji_pattern.findall(text)
+        if not emojis:
+            return text
+        if serious_mode:
+            return emoji_pattern.sub("", text).strip()
+        kept = False
+
+        def _keep_first(match):
+            nonlocal kept
+            if kept:
+                return ""
+            kept = True
+            return match.group(0)
+
+        return emoji_pattern.sub(_keep_first, text).strip()
+
+    def _apply_sentence_rules(self, text: str, serious_mode: bool) -> str:
+        """Enforce sentence limits and signature-move constraints."""
+        if not text:
+            return text
+        parts = re.split(r"(?<=[.!?])\s+", text)
+        parts = [p.strip() for p in parts if p.strip()]
+
+        if serious_mode:
+            # Keep it steady and brief: allow up to 3 short sentences
+            return " ".join(parts[:3])
+
+        if len(parts) <= 1:
+            return parts[0]
+
+        first = parts[0]
+        second = parts[1]
+
+        allowed_second_exact = {
+            "That checks out.",
+            "It’s ugly, but it works.",
+            "It's ugly, but it works.",
+        }
+        observation_starts = (
+            "Looks like",
+            "Seems",
+            "Sounds like",
+            "That tracks",
+            "Reality is",
+            "That's reality",
+        )
+
+        if second in allowed_second_exact or second.startswith(observation_starts):
+            return f"{first} {second}".strip()
+
+        return first
 
     def _should_inject_examples(self, raw_text: str) -> bool:
         """

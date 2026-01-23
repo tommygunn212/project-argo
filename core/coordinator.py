@@ -216,7 +216,7 @@ class Coordinator:
         self.recorded_audio = None
         
         # Session memory (v4) — short-term working memory for this session only
-        self.memory = SessionMemory(capacity=1)
+        self.memory = SessionMemory(capacity=5)
         
         # TASK 15: Latency instrumentation
         self.latency_stats = LatencyStats()

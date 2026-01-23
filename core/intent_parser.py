@@ -108,29 +108,23 @@ class RuleBasedIntentParser(IntentParser):
         }
 
         # SERIOUS_MODE keywords (safety / high-stress signals)
-        # Presence of these keywords flips Intent.serious_mode = True
+        # Presence of these keywords flips self.serious_mode = True
         self.serious_mode_keywords = {
             "death",
             "dying",
+            "hurt",
+            "sick",
             "panic",
-            "panic attack",
-            "overdose",
-            "suicide",
-            "self harm",
-            "self-harm",
-            "i want to die",
-            "kill myself",
-            "chest pain",
-            "can't breathe",
-            "cant breathe",
-            "not breathing",
-            "heart attack",
-            "stroke",
-            "bleeding",
-            "emergency",
-            "help me",
-            "help",
+            "failed",
+            "lost",
+            "broken heart",
+            "sad",
+            "depression",
+            "hard time",
         }
+
+        # SERIOUS_MODE state (per-parse)
+        self.serious_mode = False
 
         # Question indicators
         self.question_indicators = {"?"}
@@ -286,7 +280,8 @@ class RuleBasedIntentParser(IntentParser):
         first_word = text_lower.split()[0] if text_lower.split() else ""
 
         # SERIOUS_MODE signal (keyword presence)
-        serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
+        self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
+        serious_mode = self.serious_mode
 
         # Rule 0: SLEEP keywords (highest priority - short-circuit)
         if (
