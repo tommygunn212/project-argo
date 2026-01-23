@@ -306,6 +306,8 @@ class PiperOutputSink(OutputSink):
         Runs in dedicated thread (not main, not event loop).
         Loops until poison pill (None) received in queue.
         """
+        import time
+
         while True:
             try:
                 # Get next item from queue (blocking)
@@ -319,6 +321,8 @@ class PiperOutputSink(OutputSink):
                 
                 # Process sentence
                 self._play_sentence(item)
+                # Small buffer-clear delay to reduce stutter between sentences
+                time.sleep(0.1)
                 
             except queue.Empty:
                 # Timeout on get() - check if we should stop
@@ -449,7 +453,8 @@ class PiperOutputSink(OutputSink):
             # Play audio
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_start")
-            
+
+            sounddevice.default.latency = "high"
             sounddevice.play(audio_data, samplerate=SAMPLE_RATE, blocking=True)
             
             if self._profiling_enabled:

@@ -105,6 +105,7 @@ class WhisperSTT(SpeechToText):
             language="en",
             fp16=False,  # Force FP32 (CPU optimized, silences FP16 not supported warning)
             verbose=False,
+            initial_prompt="User: ARGO, check the 3950X status.",
         )
 
         text = result.get("text", "").strip()

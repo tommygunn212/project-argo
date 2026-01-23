@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+import re
 
 
 class IntentType(Enum):
@@ -29,6 +30,7 @@ class IntentType(Enum):
     MUSIC_NEXT = "music_next"
     MUSIC_STATUS = "music_status"
     SLEEP = "sleep"
+    DEVELOP = "develop"
     UNKNOWN = "unknown"
 
 
@@ -244,6 +246,54 @@ class RuleBasedIntentParser(IntentParser):
             "that is all",
         }
 
+        # Development/build intent keywords
+        self.develop_phrases = {
+            "build a tool",
+            "write a script",
+            "create an app",
+            "code a feature",
+            "draft a plugin",
+        }
+
+        # Technical keywords (force QUESTION/DEVELOP, never MUSIC)
+        self.tech_keywords = {
+            "3950x",
+            "cpu",
+            "gpu",
+            "ram",
+            "rtx",
+            "upgrade",
+            "motherboard",
+            "sandbox",
+            "python",
+            "script",
+            "klipper",
+            "e3d",
+            "revo",
+        }
+
+        # Known music genres (used to validate "play <genre>")
+        self.music_genres = {
+            "rock",
+            "jazz",
+            "metal",
+            "pop",
+            "classical",
+            "punk",
+            "blues",
+            "hiphop",
+            "rap",
+            "electronic",
+            "country",
+            "folk",
+            "disco",
+            "funk",
+            "reggae",
+            "soul",
+            "rnb",
+            "indie",
+        }
+
     def parse(self, text: str) -> Intent:
         """
         Classify text using hardcoded rules.
@@ -277,7 +327,10 @@ class RuleBasedIntentParser(IntentParser):
 
         text = text.strip()
         text_lower = text.lower()
-        first_word = text_lower.split()[0] if text_lower.split() else ""
+        # Strip wake word prefix (e.g., "argo, ...") from parsing logic
+        text_lower = re.sub(r"^(argo[\s,]+)+", "", text_lower).strip()
+        tokens = re.findall(r"[a-z0-9']+", text_lower)
+        first_word = tokens[0] if tokens else ""
 
         # SERIOUS_MODE signal (keyword presence)
         self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
@@ -293,6 +346,24 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.SLEEP,
                 confidence=1.0,
+                raw_text=text,
+                serious_mode=serious_mode,
+            )
+
+        # Rule 0.5: DEVELOP keywords (high priority - developer context)
+        if any(phrase in text_lower for phrase in self.develop_phrases):
+            return Intent(
+                intent_type=IntentType.DEVELOP,
+                confidence=0.98,
+                raw_text=text,
+                serious_mode=serious_mode,
+            )
+
+        # Tech keyword override: force QUESTION for hardware/technical queries
+        if any(keyword in text_lower for keyword in self.tech_keywords):
+            return Intent(
+                intent_type=IntentType.QUESTION,
+                confidence=0.9,
                 raw_text=text,
                 serious_mode=serious_mode,
             )
@@ -327,11 +398,13 @@ class RuleBasedIntentParser(IntentParser):
                 serious_mode=serious_mode,
             )
 
-        # Rule 4: Music phrases or "play" command (high priority - overrides everything)
-        # "play music", "play punk", "play something", "surprise me", etc.
-        # Also matches variations like "playing", "played", "plays"
-        # Extract keyword after "play" if present
-        if any(phrase in text_lower for phrase in self.music_phrases) or first_word in {"play", "playing", "played", "plays", "put", "throw", "queue"}:
+        # Rule 4: Music intent (disambiguated)
+        # Only trigger if music-specific terms are present (play/music/song) and no tech keywords
+        music_terms = {"music", "song", "artist", "album"}
+        has_play = "play" in text_lower
+        has_music_term = any(term in text_lower for term in music_terms)
+        has_genre_play = any(f"play {genre}" in text_lower for genre in self.music_genres)
+        if (has_play or has_music_term) and not any(keyword in text_lower for keyword in self.tech_keywords):
             keyword = self._extract_music_keyword(text_lower)
             return Intent(
                 intent_type=IntentType.MUSIC,
@@ -344,7 +417,7 @@ class RuleBasedIntentParser(IntentParser):
         # Rule 2: Performance/action words (high priority - overrides questions)
         # "Can you count to five?" should be COMMAND, not QUESTION
         performance_words = {"count", "sing", "recite", "spell", "list", "name"}
-        if any(word in text_lower for word in performance_words):
+        if any(word in tokens for word in performance_words):
             return Intent(
                 intent_type=IntentType.COMMAND,
                 confidence=0.9,
@@ -352,8 +425,8 @@ class RuleBasedIntentParser(IntentParser):
                 serious_mode=serious_mode,
             )
 
-        # Rule 3: Question mark at end (high confidence)
-        if text.endswith("?"):
+        # Rule 3: Question mark present (high confidence)
+        if "?" in text:
             return Intent(
                 intent_type=IntentType.QUESTION,
                 confidence=1.0,

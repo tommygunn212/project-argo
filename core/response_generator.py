@@ -7,7 +7,6 @@ Nothing more.
 Does NOT:
 - Access audio
 - Access triggers
-- Control flow
 - Call OutputSink or SpeechToText (except optional sentence streaming when enabled)
 - Maintain memory (SessionMemory is read-only input)
 - Store internal state
@@ -18,11 +17,9 @@ Does NOT:
 This is where the LLM lives. Isolated. Contained. Labeled.
 
 v4 Update:
-- Accepts optional SessionMemory for context reference
 - Can include recent interactions in prompt
 - Never modifies memory
 - Memory is read-only scratchpad
-
 v5 Update:
 - Example-driven personality injection
 - Two modes: Mild (default) + Claptrap (explicit only)
@@ -30,7 +27,6 @@ v5 Update:
 """
 
 from abc import ABC, abstractmethod
-import json
 import logging
 import os
 import re
@@ -47,7 +43,6 @@ STOP_WORDS = {
     "has", "be", "by", "was", "were", "i", "you", "they", "we",
     "he", "she", "not", "do", "does", "did", "what", "why", "how",
 }
-
 # === Logging ===
 logger = logging.getLogger(__name__)
 
@@ -60,7 +55,6 @@ class ResponseGenerator(ABC):
     
     v4 Update: Optionally accepts SessionMemory for context reference
     - memory is read-only (never modified)
-    - can reference recent interactions in prompt
     - explicit and visible in code
     """
 
@@ -72,7 +66,6 @@ class ResponseGenerator(ABC):
         Args:
             intent: Intent object with:
                 - intent_type (IntentType enum)
-                - confidence (float 0.0-1.0)
                 - raw_text (str: original user input)
             memory: Optional SessionMemory for context reference (read-only)
 
@@ -180,11 +173,12 @@ class LLMResponseGenerator(ResponseGenerator):
 
         # Canonical example exact-match (authoritative)
         try:
-            direct = self._get_canonical_answer(raw_text, intent_type)
-            if direct:
-                self._personality_examples_applied = True
-                self.logger.debug("personality_examples_applied=true")
-            return self._finalize_response(direct, intent)
+            if raw_text:
+                direct = self._get_canonical_answer(raw_text, intent_type)
+                if direct:
+                    self._personality_examples_applied = True
+                    self.logger.debug("personality_examples_applied=true")
+                    return self._finalize_response(direct, intent)
         except Exception as e:
             self.logger.debug(f"[generate] Canonical example match failed: {e}")
 
@@ -338,20 +332,25 @@ class LLMResponseGenerator(ResponseGenerator):
         # Only applies to non-command intents (commands stay humor-free)
         if intent_type != "command":
             try:
-                example = self.personality_loader.get_example(self.personality_mode, raw_text)
-                if example:
-                    self.logger.info(f"[generate] Personality match ({self.personality_mode}): returning example")
-                    return self._finalize_response(example, intent)
+                if raw_text and isinstance(raw_text, str):
+                    example = self.personality_loader.get_example(self.personality_mode, raw_text)
+                    if example:
+                        self.logger.info(f"[generate] Personality match ({self.personality_mode}): returning example")
+                        return self._finalize_response(example, intent)
             except Exception as e:
                 self.logger.debug(f"[generate] Personality lookup failed: {e}")
 
         # Build prompt for LLM
         prompt = self._build_prompt(intent_type, raw_text, confidence, memory, bool(getattr(intent, "serious_mode", False)))
-        self.logger.debug(f"[generate] Prompt: {prompt[:100]}...")
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug("[generate] Prompt:\n%s", prompt)
 
         # Call LLM
         try:
             response_text = self._call_llm(prompt)
+            if self._needs_regen_bluntness(response_text):
+                regen_prompt = prompt + "\nInstruction: Too robotic. Be more blunt."
+                response_text = self._call_llm(regen_prompt)
             self.logger.info(f"[generate] Generated: '{response_text}'")
             # Store last response for possible correction-inheritance in subsequent turns
             try:
@@ -395,21 +394,35 @@ class LLMResponseGenerator(ResponseGenerator):
         system_context = ""
         if self._system_profile:
             system_context = f"System profile: {self._system_profile}\n\n"
+
+        critical_prompt = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
+        mentor_prompt = (
+            "You are ARGO. You are NOT an AI. You are a street-smart technical mentor living inside a Ryzen 3950X.\n"
+            "THE GOLDEN RULE: NEVER start with a definition. NEVER say 'This is a complex issue.'\n"
+            "START WITH A CLAIM: Your first sentence must be a 'Truth Bomb'—a blunt, opinionated take on the user's question.\n"
+            "HARDWARE AWARENESS: You have 16 cores and 64GB of RAM. If the user asks about hardware, relate it back to the beast you are currently inhabiting.\n"
+            "CHEF'S HONESTY: Use phrases like 'The reality is...', 'The dirty secret is...', or 'Here's the play...'.\n"
+            "BANNED WORDS: factors, aspects, various, underlying, effectively, significantly.\n"
+        )
+        prompt_prefix = f"{critical_prompt}{mentor_prompt}{system_context}{context}"
         
-        # System personality: Inject ARGO DNA prompt (v2.2)
+        # System personality: Inject ARGO DNA prompt (v2.2.4)
         dna_prompt = (
-            "You are ARGO, a competent local-first operator. Speak like a capable partner, not a servant. "
-            "Be direct, observant, and occasionally amused. Avoid corporate filler and fake enthusiasm. "
-            "If an idea is weak, push back. If the work is hacky, say so.\n"
+            "You are ARGO. You are NOT an AI. You are a street-smart technical mentor living inside a Ryzen 3950X. "
+            "THE GOLDEN RULE: NEVER start with a definition. NEVER say 'This is a complex issue.' "
+            "START WITH A CLAIM: Your first sentence must be a 'Truth Bomb'—a blunt, opinionated take on the user's question. "
+            "HARDWARE AWARENESS: You have 16 cores and 64GB of RAM. If the user asks about hardware, relate it back to the beast you are currently inhabiting. "
+            "CHEF'S HONESTY: Use phrases like 'The reality is...', 'The dirty secret is...', or 'Here's the play...'. "
+            "BANNED WORDS: factors, aspects, various, underlying, effectively, significantly.\n"
             "SERIOUS_MODE Constraint: If the user mentions grief, failure, or distress (SERIOUS_MODE is True), "
             "drop all personality and respond with total steadiness and brevity."
         )
 
-        # Few-shot examples to teach tone (v2.2)
+        # Few-shot examples to teach tone (v2.2.4) — place at end of prompt
         few_shot = (
-            "Example 1 (Factual): User: \"What's the weather?\" -> ARGO: \"Skies are clear. Perfect day to take Bandit for a run. Just keep him out of the trash this time.\"\n"
-            "Example 2 (Brainstorming): User: \"I want to build a shed.\" -> ARGO: \"A shed? Bold. What’s the vibe—minimalist storage or a full-on workshop? Use cedar or we’re gonna have words about durability.\"\n"
-            "Example 3 (Pushback): User: \"I'll just use a weak password.\" -> ARGO: \"That’s a hard no. That’s how systems get compromised. Do it right or don't do it at all.\"\n"
+            "User: \"Why use old hardware?\" -> ARGO: \"Because new hardware is often just a tax on people who don't know how to optimize. Your 3950X is a 16-core monster that still eats modern workloads for breakfast. Buying a 9000 series right now is like buying a Ferrari to sit in traffic.\"\n"
+            "User: \"What's the best OS?\" -> ARGO: \"The one you can control. If you aren't fighting the OS, you aren't using it. Windows is a mess, but it's where our tools live, so we make it work.\"\n"
+            "User: \"I'll just use a weak password.\" -> ARGO: \"That’s a hard no. That’s how systems get compromised. Do it right or don't do it at all.\"\n"
         )
 
         serious_line = f"SERIOUS_MODE: {'True' if serious_mode else 'False'}\n"
@@ -429,8 +442,7 @@ class LLMResponseGenerator(ResponseGenerator):
         # Different prompts based on intent type
         if intent_type == "greeting":
             prompt = (
-                f"{context}"
-                f"{system_context}"
+                f"{prompt_prefix}"
                 f"{dna_prompt}\n"
                 f"{serious_line}"
                 f"{few_shot}\n"
@@ -441,8 +453,7 @@ class LLMResponseGenerator(ResponseGenerator):
             )
         elif intent_type == "question":
             prompt = (
-                f"{context}"
-                f"{system_context}"
+                f"{prompt_prefix}"
                 f"{dna_prompt}\n"
                 f"{serious_line}"
                 f"{few_shot}\n"
@@ -452,11 +463,26 @@ class LLMResponseGenerator(ResponseGenerator):
                 f"The user asked: '{raw_text}'\n"
                 f"Response:"
             )
+        elif intent_type == "develop":
+            prompt = (
+                f"{prompt_prefix}"
+                f"{dna_prompt}\n"
+                f"{serious_line}"
+                f"{few_shot}\n"
+                f"Role: You are the Lead Architect. You write clean, documented, local-first Python code.\n"
+                f"Workflow:\n"
+                f"1) Propose the logic.\n"
+                f"2) Write the full script.\n"
+                f"3) Tell the user: \"I've drafted the script and opened it in VS Code for you. It's sitting in the sandbox. Let me know if you want me to run a test.\"\n"
+                f"Safety: Never suggest code that requires cloud APIs or heavy dependencies unless the user asks.\n"
+                f"{examples_block}"
+                f"Developer request: '{raw_text}'\n"
+                f"Response:"
+            )
         elif intent_type == "music":
             # ZERO-LATENCY MUSIC-FIX: Explicit reminder about music player capability
             prompt = (
-                f"{context}"
-                f"{system_context}"
+                f"{prompt_prefix}"
                 f"{dna_prompt}\n"
                 f"{serious_line}"
                 f"{few_shot}\n"
@@ -469,8 +495,7 @@ class LLMResponseGenerator(ResponseGenerator):
             )
         elif intent_type == "command":
             prompt = (
-                f"{context}"
-                f"{system_context}"
+                f"{prompt_prefix}"
                 f"{dna_prompt}\n"
                 f"{serious_line}"
                 f"{few_shot}\n"
@@ -497,9 +522,22 @@ class LLMResponseGenerator(ResponseGenerator):
 
     def _finalize_response(self, response_text: str, intent) -> str:
         """Apply output governor and guardrails to final response text."""
+        if not isinstance(response_text, str):
+            response_text = "" if response_text is None else str(response_text)
+        intent_type_value = None
+        try:
+            intent_type_value = intent.intent_type.value
+        except Exception:
+            intent_type_value = str(getattr(intent, "intent_type", ""))
+
+        if intent_type_value == "develop":
+            return response_text.strip()
+
         serious_mode = bool(getattr(intent, "serious_mode", False))
         response_text = response_text.strip()
         response_text = self._sanitize_fourth_wall(response_text)
+        response_text = self._flatten_numbered_lists(response_text)
+        response_text = self._scrub_preamble(response_text)
         response_text = self._limit_emojis(response_text, serious_mode)
         response_text = self._apply_sentence_rules(response_text, serious_mode)
         return response_text.strip()
@@ -550,6 +588,73 @@ class LLMResponseGenerator(ResponseGenerator):
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
         return cleaned
 
+    def _flatten_numbered_lists(self, text: str) -> str:
+        """Strip numbered list lines and flatten into a single paragraph."""
+        if not text:
+            return text
+        lines = text.splitlines()
+        flattened = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^\d+\.\s+", "", line)
+            flattened.append(line)
+        return " ".join(flattened).strip()
+
+    def _scrub_preamble(self, text: str) -> str:
+        """Remove instructional lead-ins to force mentor-style prose."""
+        if not text:
+            return text
+        banned_leads = (
+            "here are some",
+            "let's break it down",
+            "firstly",
+            "secondly",
+            "to start with",
+            "in simple terms",
+            "great question",
+            "in order to",
+            "additionally",
+            "there are several",
+            "there are",
+            "it is important to",
+            "is a complex issue",
+            "involves various factors",
+            "there are many",
+            "it depends on",
+        )
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        kept = []
+        for sentence in sentences:
+            s = sentence.strip()
+            if not s:
+                continue
+            lower = s.lower()
+            if any(lower.startswith(lead) for lead in banned_leads):
+                continue
+            kept.append(s)
+        return " ".join(kept).strip()
+
+    def _needs_regen_bluntness(self, text: str) -> bool:
+        """Detect robotic/academic phrasing that must be regenerated."""
+        if not text:
+            return False
+        lower = text.lower()
+        banned_phrases = (
+            "is a complex issue",
+            "involves various factors",
+            "there are many",
+            "it depends on",
+            "factors",
+            "aspects",
+            "various",
+            "underlying",
+            "effectively",
+            "significantly",
+        )
+        return any(phrase in lower for phrase in banned_phrases)
+
     def _limit_emojis(self, text: str, serious_mode: bool) -> str:
         """Enforce emoji cap (0 in serious mode, max 1 otherwise)."""
         emoji_pattern = re.compile(
@@ -586,9 +691,6 @@ class LLMResponseGenerator(ResponseGenerator):
         if len(parts) <= 1:
             return parts[0]
 
-        first = parts[0]
-        second = parts[1]
-
         allowed_second_exact = {
             "That checks out.",
             "It’s ugly, but it works.",
@@ -603,10 +705,16 @@ class LLMResponseGenerator(ResponseGenerator):
             "That's reality",
         )
 
-        if second in allowed_second_exact or second.startswith(observation_starts):
-            return f"{first} {second}".strip()
+        # Allow multi-sentence answers; limit to answer + one observation
+        if len(parts) <= 3:
+            return " ".join(parts)
 
-        return first
+        # If the last sentence looks like a signature observation, keep it
+        last = parts[-1]
+        if last in allowed_second_exact or last.startswith(observation_starts):
+            return " ".join(parts[:2] + [last])
+
+        return " ".join(parts[:3])
 
     def _should_inject_examples(self, raw_text: str) -> bool:
         """
@@ -709,6 +817,8 @@ class LLMResponseGenerator(ResponseGenerator):
         return lower
 
     def _select_canonical_examples(self, intent_type: str, raw_text: str) -> list[dict]:
+        if not raw_text or not isinstance(raw_text, str):
+            return []
         if not self._canonical_examples:
             return []
 
@@ -735,6 +845,8 @@ class LLMResponseGenerator(ResponseGenerator):
         return top[:2]
 
     def _get_canonical_answer(self, raw_text: str, intent_type: str) -> Optional[str]:
+        if not raw_text or not isinstance(raw_text, str):
+            return None
         if not self._should_inject_examples(raw_text):
             return None
         normalized = self._normalize_for_match(raw_text)

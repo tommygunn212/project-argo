@@ -1,0 +1,31 @@
+
+This is the correct discipline. If the Soul (Personality), the Ears (Continuous Listening), and the Vibe (Music) aren't perfect, the system will always feel like a gadget instead of a partner.
+Here is your "House Map"—the specific files responsible for these three core pillars. You can have Bob audit these files to ensure they match the ledger you provided.
+Pillar 1: The Soul (Personality & Tone)
+These files ensure ARGO sounds like a "Trusted Operator" and knows when to be serious.
+core/response_generator.py: The Master File.
+What to check: Look for the DNA Prompt and the Few-Shot Examples (T. Rex, Delete Core, etc.). Ensure the "One-Human-Sentence" rule logic is here.
+core/intent_parser.py: The Mood Sensor.
+What to check: Look for the SERIOUS_MODE boolean and the list of heavy keywords (death, panic, etc.).
+data/system_profile.json: The Self-Awareness.
+What to check: Ensure your hardware specs (3950X, 64GB RAM) are listed here so she can reference them.
+core/personality.py: The Example Cache.
+What to check: This is where the specific Q&A examples are stored. Make sure the "NoneType" fix Bob implemented is here.
+Pillar 2: The Ears (Continuous Listening / No "Hey Argo")
+These files manage the "State Machine" so you only have to wake her once.
+core/coordinator.py: The Conductor.
+What to check: Look for the run() loop. It should handle the transition from SLEEPING (wake word needed) to AWAKE (free listening).
+core/state_machine.py: The Logic Gates.
+What to check: This defines the three states: SLEEPING, AWAKE, and DOZING.
+core/input_trigger.py: The Porcupine Handler.
+What to check: Ensure the wake-word detector is paused when she is in AWAKE mode so it doesn't try to find "Argo" inside your own sentences.
+Pillar 3: The Vibe (Music System)
+These files ensure that music is snappy, searchable, and doesn't crash the conversation.
+core/music_player.py: The Muscle.
+What to check: Handles play, stop, next, and what's playing. It should also handle the Jellyfin connection.
+core/music_index.py: The Librarian.
+What to check: Manages the JSON database of your 13,000+ local tracks.
+core/jellyfin_provider.py: The Server Link.
+What to check: If your MUSIC_SOURCE is set to jellyfin, this file does the heavy lifting.
+core/intent_parser.py: The Keyword Extractor.
+What to check: It needs to be able to strip "Play some" and just find "Bowie."

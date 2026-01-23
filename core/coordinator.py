@@ -58,6 +58,7 @@ This is controlled, bounded orchestration with short-term scratchpad memory.
 import logging
 import threading
 import time
+import re
 from typing import Optional
 from datetime import datetime
 import sounddevice as sd
@@ -67,7 +68,7 @@ import warnings
 # Suppress sounddevice Windows cffi warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 
-from core.intent_parser import IntentType
+from core.intent_parser import Intent, IntentType
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 from core.policy import (
@@ -78,6 +79,7 @@ from core.policy import (
 )
 from core.watchdog import Watchdog
 from core.state_machine import StateMachine, State
+from core.actuators.python_builder import PythonBuilder
 
 # === Logging ===
 logger = logging.getLogger(__name__)
@@ -165,11 +167,11 @@ class Coordinator:
     AUDIO_SAMPLE_RATE = 16000  # Hz
     MAX_RECORDING_DURATION = 15.0  # seconds max (safety net) — Extended for longer LED explanation
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
-    SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — TUNED for fast response
+    SILENCE_DURATION = 0.7  # Seconds of silence to stop recording — TUNED for fast response
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
     SILENCE_TIMEOUT_SECONDS = 5.0  # Seconds of silence to stop recording — Increased for detailed explanations
-    SILENCE_THRESHOLD = 100  # Audio level below this = silence (RMS absolute) — Increased to ignore breathing pauses
-    RMS_SPEECH_THRESHOLD = 0.003  # RMS normalized level (0-1) to START silence timer — More lenient threshold
+    SILENCE_THRESHOLD = 1800  # Audio level below this = silence (RMS absolute) — Tuned for room hum
+    RMS_SPEECH_THRESHOLD = 0.015  # RMS normalized level (0-1) to START silence timer — Reduced sensitivity
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
@@ -232,6 +234,8 @@ class Coordinator:
         # Use threading.Event for thread-safe atomic state (not boolean)
         self._is_speaking = threading.Event()
         self._is_speaking.clear()  # Initially not speaking
+        self._is_processing = threading.Event()
+        self._is_processing.clear()
         
         # Debug/profiling flag from environment (can override class default)
         self.record_debug = os.getenv("RECORD_DEBUG", "").lower() == "true" or self.RECORD_DEBUG
@@ -244,6 +248,11 @@ class Coordinator:
         # Loop state (v3)
         self.interaction_count = 0
         self.stop_requested = False
+
+        # Python builder actuator (sandbox tools)
+        self.builder = PythonBuilder()
+        self._last_built_script: Optional[str] = None
+        self.last_response_text: Optional[str] = None
 
         # State machine (sleep/listening lifecycle)
         self.state_machine = StateMachine(on_state_change=self._on_state_change)
@@ -377,6 +386,12 @@ class Coordinator:
         self.logger.info(f"{'='*60}")
 
         try:
+            # Half-duplex: abort if speaking
+            if self._is_speaking.is_set():
+                self.logger.info("[Iteration] Skipping interaction: currently speaking")
+                self.interaction_count -= 1
+                return False
+            self._is_processing.set()
             # TASK 15: Initialize latency probe for this interaction
             self.current_probe = LatencyProbe(self.interaction_count)
             if mark_wake:
@@ -452,6 +467,45 @@ class Coordinator:
                 f"[Iteration {self.interaction_count}] "
                 f"Transcribed: '{text}'"
             )
+
+            # Self-echo filter: drop transcripts too similar to last response
+            if self.last_response_text:
+                similarity = self._similarity_ratio(text, self.last_response_text)
+                if similarity >= 0.80:
+                    self.logger.info(
+                        f"[Iteration {self.interaction_count}] "
+                        f"Self-echo detected (similarity={similarity:.2f}); discarding transcript"
+                    )
+                    self.interaction_count -= 1
+                    return False
+
+            # Feedback loop: run/test last built script
+            run_triggers = {"run it", "test it", "run", "test"}
+            if self._last_built_script and text.lower().strip() in run_triggers:
+                self.logger.info(
+                    f"[Iteration {self.interaction_count}] Running sandbox script: {self._last_built_script}"
+                )
+                output = self.builder.test_run(self._last_built_script)
+                analysis_intent = Intent(
+                    intent_type=IntentType.DEVELOP,
+                    confidence=1.0,
+                    raw_text=(
+                        f"The script '{self._last_built_script}' was executed. "
+                        f"Output:\n{output}\n" 
+                        f"Summarize the result and suggest next steps."
+                    ),
+                )
+                response_text = self.generator.generate(analysis_intent, self.memory)
+                self._last_response = response_text
+                self.last_response_text = response_text
+                self.sink.speak(response_text)
+                self.memory.append(
+                    user_utterance=text,
+                    parsed_intent=analysis_intent.intent_type.value,
+                    generated_response=response_text,
+                )
+                self._last_utterance_time = time.time()
+                return True
 
             # Skip if transcription is empty (just silence/noise)
             if not text or not text.strip():
@@ -714,6 +768,17 @@ class Coordinator:
                 f"[Iteration {self.interaction_count}] "
                 f"Response: '{response_text}'"
             )
+            self.last_response_text = response_text
+
+            # If DEVELOP intent produced code, write/open in sandbox
+            if intent.intent_type == IntentType.DEVELOP:
+                code_block = self._extract_code_block(response_text)
+                if code_block:
+                    filename = self._infer_sandbox_filename(text, response_text)
+                    self.builder.write_script(filename, code_block)
+                    self.builder.open_in_vscode(filename)
+                    self._last_built_script = filename
+                    response_text = self._strip_code_blocks(response_text)
 
             # 5. Speak response (with interrupt-on-voice support)
             self.logger.info(
@@ -799,6 +864,8 @@ class Coordinator:
                 f"[Iteration {self.interaction_count}] Failed: {e}"
             )
             raise
+        finally:
+            self._is_processing.clear()
     
     def run(self) -> None:
         """
@@ -854,6 +921,9 @@ class Coordinator:
                         continue
 
                     def on_trigger_detected():
+                        if self._is_processing.is_set():
+                            self.logger.info("[Iteration] Trigger ignored: already processing")
+                            return
                         self.logger.info("[Wake] Wake word detected")
                         self.state_machine.wake()
                         self._last_utterance_time = time.time()
@@ -879,6 +949,11 @@ class Coordinator:
 
                 # Don't listen while speaking
                 if self._is_speaking.is_set():
+                    time.sleep(0.05)
+                    continue
+
+                # Don't listen while processing a turn
+                if self._is_processing.is_set():
                     time.sleep(0.05)
                     continue
 
@@ -1018,6 +1093,11 @@ class Coordinator:
             rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
             
             while total_samples < max_samples:
+                if self._is_speaking.is_set():
+                    stop_reason = "speaking_gate"
+                    if self.record_debug:
+                        self.logger.info("[Record] Aborting: speaking gate active")
+                    break
                 # Read one chunk
                 chunk, _ = stream.read(chunk_samples)
                 if chunk.size == 0:
@@ -1139,6 +1219,73 @@ class Coordinator:
         
         except Exception as e:
             self.logger.error(f"[Music] Monitor error: {e}")
+
+    def _extract_code_block(self, text: str) -> Optional[str]:
+        """Extract the first fenced code block from text."""
+        if not text:
+            return None
+        match = re.search(r"```(?:python)?\n([\s\S]*?)```", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        code = match.group(1).strip("\n")
+        return code or None
+
+    def _strip_code_blocks(self, text: str) -> str:
+        """Remove fenced code blocks from text for speech output."""
+        if not text:
+            return text
+        stripped = re.sub(r"```[\s\S]*?```", "", text).strip()
+        return stripped
+
+    def _infer_sandbox_filename(self, user_text: str, response_text: str) -> str:
+        """Infer a sandbox filename from user request or response."""
+        match = re.search(r"([a-zA-Z0-9_\-]+\.py)", response_text)
+        if match:
+            return match.group(1)
+        match = re.search(r"([a-zA-Z0-9_\-]+\.py)", user_text)
+        if match:
+            return match.group(1)
+
+        lowered = user_text.lower()
+        if "storage" in lowered or "disk" in lowered or "space" in lowered:
+            return "storage_check.py"
+        if "cpu" in lowered or "monitor" in lowered:
+            return "cpu_monitor.py"
+        return "sandbox_tool.py"
+
+    def _similarity_ratio(self, a: str, b: str) -> float:
+        """Compute similarity ratio using Levenshtein distance."""
+        if not a or not b:
+            return 0.0
+        a_norm = a.strip().lower()
+        b_norm = b.strip().lower()
+        if a_norm == b_norm:
+            return 1.0
+        dist = self._levenshtein_distance(a_norm, b_norm)
+        max_len = max(len(a_norm), len(b_norm))
+        if max_len == 0:
+            return 0.0
+        return 1.0 - (dist / max_len)
+
+    @staticmethod
+    def _levenshtein_distance(a: str, b: str) -> int:
+        """Compute Levenshtein distance between two strings."""
+        if a == b:
+            return 0
+        if not a:
+            return len(b)
+        if not b:
+            return len(a)
+        prev_row = list(range(len(b) + 1))
+        for i, ca in enumerate(a, start=1):
+            curr_row = [i]
+            for j, cb in enumerate(b, start=1):
+                insert_cost = curr_row[j - 1] + 1
+                delete_cost = prev_row[j] + 1
+                replace_cost = prev_row[j - 1] + (0 if ca == cb else 1)
+                curr_row.append(min(insert_cost, delete_cost, replace_cost))
+            prev_row = curr_row
+        return prev_row[-1]
 
     
     def _speak_with_interrupt_detection(self, response_text: str) -> None:
