@@ -1,0 +1,7 @@
+Q
+
+This is a race condition. What’s first?
+
+A
+
+Reproduce it deterministically. Until you can trigger it on demand, every fix is a guess.

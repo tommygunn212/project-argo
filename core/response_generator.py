@@ -32,6 +32,7 @@ v5 Update:
 from abc import ABC, abstractmethod
 import json
 import logging
+import os
 import re
 from typing import Optional
 from core.config import ENABLE_LLM_TTS_STREAMING, get_config
@@ -147,6 +148,10 @@ class LLMResponseGenerator(ResponseGenerator):
             self._enable_tts_streaming = ENABLE_LLM_TTS_STREAMING
         # Streaming output tracker (per call)
         self._streamed_output = False
+        # Canonical examples (mild)
+        self._canonical_examples = self._load_canonical_examples()
+        # Debug flag (set per prompt)
+        self._personality_examples_applied = False
 
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
@@ -170,6 +175,15 @@ class LLMResponseGenerator(ResponseGenerator):
         intent_type = intent.intent_type.value  # "greeting", "question", etc.
         raw_text = intent.raw_text  # Original user input
         confidence = intent.confidence
+
+        # Canonical example exact-match (authoritative)
+        try:
+            direct = self._get_canonical_answer(raw_text, intent_type)
+            if direct:
+                self.logger.debug("personality_examples_applied=true")
+                return direct
+        except Exception as e:
+            self.logger.debug(f"[generate] Canonical example match failed: {e}")
 
         # === Correction Inheritance (Rule 1) ===
         # If the user issues a short corrective utterance (or known correction phrase)
@@ -280,6 +294,7 @@ class LLMResponseGenerator(ResponseGenerator):
             f"(confidence={confidence:.2f}, text='{raw_text[:50]}')"
         )
 
+
         # === Rule 2: One-shot Command Clarification ===
         # If intent is a command and appears ambiguous/underspecified,
         # ask one concise clarification (no polite fluff) and return it.
@@ -378,49 +393,208 @@ class LLMResponseGenerator(ResponseGenerator):
         # You explain things clearly with practical examples when useful.
         # You have personality without being over-the-top.
         
+        examples_block = ""
+        self._personality_examples_applied = False
+        if self._should_inject_examples(raw_text):
+            examples = self._select_canonical_examples(intent_type, raw_text)
+            if examples:
+                examples_block = self._format_examples(examples)
+                self._personality_examples_applied = True
+        self.logger.debug(
+            "personality_examples_applied=%s",
+            "true" if self._personality_examples_applied else "false",
+        )
+
         # Different prompts based on intent type
         if intent_type == "greeting":
             prompt = (
                 f"{context}"
-                f"The user greeted you with: '{raw_text}'\n"
                 f"You are ARGO, a friendly AI assistant. Respond with a warm, engaging greeting (one sentence).\n"
+                f"{examples_block}"
+                f"The user greeted you with: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "question":
             prompt = (
                 f"{context}"
-                f"The user asked: '{raw_text}'\n"
                 f"You are ARGO. Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
                 f"If you don't know the answer, admit it honestly and suggest what they could try instead.\n"
+                f"{examples_block}"
+                f"The user asked: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "music":
             # ZERO-LATENCY MUSIC-FIX: Explicit reminder about music player capability
             prompt = (
                 f"{context}"
-                f"The user asked to play music: '{raw_text}'\n"
                 f"You are ARGO and you HAVE A MUSIC PLAYER ATTACHED. "
                 f"Your job is to play music for them. "
                 f"Extract the music genre or artist name from their request and play it enthusiastically.\n"
+                f"{examples_block}"
+                f"The user asked to play music: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "command":
             prompt = (
                 f"{context}"
-                f"The user gave a command: '{raw_text}'\n"
                 f"You are ARGO. Execute the command directly with personality. If it's a count, list, recitation, or performance, do it enthusiastically.\n"
                 f"Respond with the action itself, not just acknowledgment.\n"
+                f"{examples_block}"
+                f"The user gave a command: '{raw_text}'\n"
                 f"Response:"
             )
         else:  # unknown
             prompt = (
                 f"{context}"
-                f"The user said: '{raw_text}'\n"
                 f"You didn't understand. Politely ask for clarification (one sentence max).\n"
+                f"{examples_block}"
+                f"The user said: '{raw_text}'\n"
                 f"Response:"
             )
 
         return prompt
+
+    def _should_inject_examples(self, raw_text: str) -> bool:
+        """
+        Guardrail to avoid injecting examples into artifacts/logs/safety paths.
+        """
+        text = raw_text.strip()
+        lower = text.lower()
+        if not text:
+            return False
+        if text.startswith("[") or text.startswith("{"):
+            return False
+        if "[internal error trigger]" in lower:
+            return False
+        if "watchdog" in lower:
+            return False
+        if "traceback" in lower or "stack trace" in lower:
+            return False
+        if "log" in lower and ("error" in lower or "exception" in lower):
+            return False
+        return True
+
+    def _load_canonical_examples(self) -> list[dict]:
+        """
+        Load canonical mild examples from examples/mild/.
+        """
+        examples = []
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        examples_dir = os.path.join(base_dir, "examples", "mild")
+        if not os.path.isdir(examples_dir):
+            return examples
+
+        for filename in sorted(os.listdir(examples_dir)):
+            if not filename.endswith(".txt"):
+                continue
+            path = os.path.join(examples_dir, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+            except Exception:
+                continue
+
+            question, answer = self._parse_example_file(content)
+            if not question or not answer:
+                continue
+
+            examples.append(
+                {
+                    "filename": filename,
+                    "question": question.strip(),
+                    "answer": answer.strip(),
+                    "intent_hint": self._intent_hint_for_example(filename),
+                    "stress": self._is_stress_text(question),
+                    "length": len(question.split()),
+                }
+            )
+
+        return examples
+
+    def _parse_example_file(self, content: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Parse Q/A from a canonical example file.
+        """
+        if not content:
+            return None, None
+        if "\nA\n" not in content:
+            return None, None
+        parts = content.split("\nA\n", 1)
+        if not parts:
+            return None, None
+        q_part = parts[0]
+        a_part = parts[1] if len(parts) > 1 else ""
+        if q_part.startswith("Q"):
+            q_part = q_part[1:]
+        question = q_part.strip()
+        answer = a_part.strip()
+        return question, answer
+
+    def _intent_hint_for_example(self, filename: str) -> str:
+        name = filename.replace(".txt", "")
+        if name in ("sky_blue",):
+            return "question"
+        if name in ("fix_this", "race_condition_first", "instructions_for_bob"):
+            return "command"
+        if name in ("frustration",):
+            return "unknown"
+        return "unknown"
+
+    def _is_stress_text(self, text: str) -> bool:
+        lower = text.lower()
+        return any(
+            phrase in lower
+            for phrase in ("pissing me off", "frustrated", "angry", "mad", "upset")
+        )
+
+    def _normalize_for_match(self, text: str) -> str:
+        lower = text.strip().lower()
+        lower = lower.replace("’", "'")
+        lower = re.sub(r"[^a-z0-9\s]", "", lower)
+        lower = re.sub(r"[\s]+", " ", lower)
+        return lower
+
+    def _select_canonical_examples(self, intent_type: str, raw_text: str) -> list[dict]:
+        if not self._canonical_examples:
+            return []
+
+        normalized = self._normalize_for_match(raw_text)
+        stress = self._is_stress_text(raw_text)
+        raw_len = len(raw_text.split())
+
+        scored = []
+        for ex in self._canonical_examples:
+            score = 0
+            if self._normalize_for_match(ex["question"]) == normalized:
+                score += 100
+            if ex["intent_hint"] == intent_type:
+                score += 10
+            if ex["stress"] == stress:
+                score += 10
+            length_delta = abs(ex["length"] - raw_len)
+            score += max(0, 5 - (length_delta // 4))
+            scored.append((score, ex))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        top = [ex for score, ex in scored if score >= 20][:2]
+        return top
+
+    def _get_canonical_answer(self, raw_text: str, intent_type: str) -> Optional[str]:
+        if not self._should_inject_examples(raw_text):
+            return None
+        normalized = self._normalize_for_match(raw_text)
+        for ex in self._canonical_examples:
+            if self._normalize_for_match(ex["question"]) == normalized:
+                return ex["answer"]
+        return None
+
+    def _format_examples(self, examples: list[dict]) -> str:
+        lines = ["Canonical examples:"]
+        for ex in examples:
+            lines.append(f"Q: {ex['question']}")
+            lines.append(f"A: {ex['answer']}")
+        lines.append("")
+        return "\n".join(lines)
 
     def _call_llm(self, prompt: str) -> str:
         """

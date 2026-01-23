@@ -1,0 +1,11 @@
+Q
+
+Write instructions for Bob.
+
+A
+
+1. Identify the task.
+2. List required inputs.
+3. Perform the change.
+4. Verify behavior.
+5. Report results.
