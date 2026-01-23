@@ -39,8 +39,7 @@ No complex playlists, no metadata obsession.
 """
 
 # AUDIO PATH STABLE
-# Verified working with M-Audio interface.
-# Do not modify without a reproduced issue and logs.
+# Verified working. Do not modify without reproduced issue + logs.
 
 import os
 import logging

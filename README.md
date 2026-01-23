@@ -94,6 +94,9 @@ ARGO processes voice through a **complete 7-stage pipeline**:
 - TTS synthesis (Piper): ~5.6s
 - **Total:** ~9 seconds (wake → response)
 
+**Latency Reality (Expected):**
+This timing is normal for a local CPU LLM, a serial pipeline, and non-streaming TTS. It is not a bug.
+
 **Audio Quality:**
 - Piper TTS: 22.05 kHz, full response playback (7-8 seconds for long sentences)
 - Zero truncation: Full "Counting to ten: one, two, three, four, five, six, seven, eight, nine, ten" ✅
