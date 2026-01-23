@@ -45,10 +45,14 @@ Nothing more.
 ### Intent Types (Enum)
 
 ```python
-GREETING  # Greetings, pleasantries
-QUESTION  # Questions, requests for information
-COMMAND   # Commands, imperative actions
-UNKNOWN   # Unclassified, low confidence
+GREETING     # Greetings, pleasantries
+QUESTION     # Questions, requests for information
+COMMAND      # Commands, imperative actions
+MUSIC        # Music playback requests
+MUSIC_STOP   # Stop music
+MUSIC_NEXT   # Next/skip music
+MUSIC_STATUS # What's playing
+UNKNOWN      # Unclassified, low confidence
 ```
 
 ### Intent Structure
@@ -56,7 +60,7 @@ UNKNOWN   # Unclassified, low confidence
 ```python
 @dataclass
 class Intent:
-    intent_type: IntentType  # GREETING, QUESTION, COMMAND, UNKNOWN
+    intent_type: IntentType  # GREETING, QUESTION, COMMAND, MUSIC, UNKNOWN
     confidence: float        # 0.0 (low) to 1.0 (high)
     raw_text: str           # Original input (for debugging)
 ```
@@ -65,11 +69,16 @@ class Intent:
 
 | Rule | Pattern | Intent | Confidence |
 |------|---------|--------|------------|
-| 1 | Text ends with `?` | QUESTION | 1.00 (certain) |
-| 2 | First word in question words | QUESTION | 0.85 (high) |
-| 3 | First word in greeting keywords | GREETING | 0.95 (very high) |
-| 4 | First word in command verbs | COMMAND | 0.75 (medium) |
-| 5 | (None match) | UNKNOWN | 0.10 (low) |
+| 1 | Music STOP keywords | MUSIC_STOP | 1.00 (certain) |
+| 2 | Music NEXT keywords | MUSIC_NEXT | 1.00 (certain) |
+| 3 | Music STATUS keywords | MUSIC_STATUS | 1.00 (certain) |
+| 4 | Music phrases / play verbs | MUSIC | 0.95 (high) |
+| 5 | Performance words (count/sing/etc.) | COMMAND | 0.90 (high) |
+| 6 | Text ends with `?` | QUESTION | 1.00 (certain) |
+| 7 | First word in question words | QUESTION | 0.85 (high) |
+| 8 | First word in greeting keywords | GREETING | 0.95 (very high) |
+| 9 | First word in command verbs | COMMAND | 0.75 (medium) |
+| 10 | (None match) | UNKNOWN | 0.10 (low) |
 
 ### Hardcoded Keywords
 
@@ -89,6 +98,11 @@ can, could, would, should, do, does, did
 ```
 play, stop, start, turn, set, open, close, get, show, 
 tell, find, search, call, send, create, make, do, run
+```
+
+**Music Phrases**:
+```
+play, put on, throw on, queue up, i want, give me, let me hear
 ```
 
 ---
@@ -130,9 +144,9 @@ parser = RuleBasedIntentParser()
 intent = parser.parse("what time is it?")
 # → Intent(QUESTION, confidence=1.0, raw_text="what time is it?")
 
-# Example 2: Command
+# Example 2: Music
 intent = parser.parse("play some music")
-# → Intent(COMMAND, confidence=0.75, raw_text="play some music")
+# → Intent(MUSIC, confidence=0.95, raw_text="play some music")
 
 # Example 3: Greeting
 intent = parser.parse("hello")
@@ -163,7 +177,7 @@ Text: 'what's the weather?'
   -> QUESTION (confidence: 1.00)
 
 Text: 'play some music'
-  -> COMMAND (confidence: 0.75)
+    -> MUSIC (confidence: 0.95)
 
 Text: 'this is just random text'
   -> UNKNOWN (confidence: 0.10)

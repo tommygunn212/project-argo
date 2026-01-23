@@ -2,7 +2,7 @@
 
 ## Overview
 
-ARGO can now handle complex music requests using Jellyfin's advanced query filters. Instead of pulling 10,000 tracks and guessing which one you want, ARGO sends **specific filters to the Jellyfin server** and gets back only the matching results.
+ARGO resolves human music requests via a strict cascade. Instead of guessing or falling back to random, ARGO applies aliases, era parsing, exact metadata matches, fuzzy matching, and (only if needed) LLM intent parsing. The local index remains authoritative.
 
 ## How It Works
 
@@ -12,29 +12,14 @@ User: "Play metal from 1984"
 Parser detects: music intent with keyword="metal from 1984"
 ```
 
-### 2. Keyword → Structured Parameters
-```
-Parser extracts:
-- Genre: Metal
-- Year: 1984
-- Artist: (not specified)
-```
+### 2. Resolver Cascade (Order Matters)
+1. Alias cache (`music_aliases.json`)
+2. Era/year filter (regex, no LLM)
+3. Exact metadata match (artist/album/song)
+4. Fuzzy token match (>=85%)
+5. LLM intent parse (metadata only)
 
-### 3. Jellyfin Server-Side Search
-```python
-advanced_search(
-    genre="Metal",      # Filter by genre
-    year=1984,          # Filter by year  
-    artist=None         # No artist filter
-)
-```
-
-### 4. Results Returned
-```
-Found 2 matching Metal tracks from 1984:
-1. Ratt - Wanted Man
-2. Ratt - The Morning After
-```
+If nothing matches, ARGO reports no match and does not play a random track.
 
 ## Voice Commands Supported
 
@@ -53,6 +38,10 @@ Found 2 matching Metal tracks from 1984:
 - "Play Alice Cooper"
 - "Play Led Zeppelin"
 - "Play Metallica"
+
+### By Alias / Album
+- "Play Dark Side" (alias → The Dark Side of the Moon)
+- "Play Ziggy Stardust" (alias → Ziggy Stardust album)
 
 ### Combined
 - "Play metal from 1984" (Genre + Year)
@@ -74,8 +63,10 @@ All voice command patterns tested successfully:
 
 ## Implementation Details
 
-### `advanced_search()` Method
-Located in `core/jellyfin_provider.py`
+### `MusicResolver` Cascade
+Located in `core/music_resolver.py`
+
+Resolves queries using alias, era, exact metadata, fuzzy match, then LLM intent parsing.
 
 ```python
 def advanced_search(self, query_text=None, year=None, genre=None, artist=None):
@@ -93,33 +84,20 @@ def advanced_search(self, query_text=None, year=None, genre=None, artist=None):
     """
 ```
 
-### `_parse_music_keyword()` Method
-Located in `core/music_player.py`
+### Alias Cache
+Located in `music_aliases.json`
 
-Extracts structured parameters from natural language:
-- Recognizes 20+ genre keywords
-- Handles year patterns ("1984", "from 80s", "from 1980")
-- Removes filler words ("play", "some", "music", etc.)
-- Maps genre aliases to canonical names
+Defines human shorthand:
+- Alias key → target + scope
+- Optional `boost_album` to prioritize an album for artist aliases
 
 ### Integration Point
-In `play_by_keyword()`:
-```python
-parsed = self._parse_music_keyword(keyword)
-
-# Call advanced search with extracted filters
-tracks = self.jellyfin_provider.advanced_search(
-    query_text=None,  # IMPORTANT: Don't use query_text with filters
-    year=parsed.get("year"),
-    genre=parsed.get("genre"),
-    artist=parsed.get("artist")
-)
-```
+In `play_by_keyword()` the resolver output decides what to play. If no match is found, ARGO stops and reports it.
 
 ## Why This Matters
 
-**Before:** ARGO loaded 10,000 tracks, sorted through them, and often fell back to random selection
-**After:** ARGO asks Jellyfin "give me Metal tracks from 1984" and gets 2 results instantly
+**Before:** String matching and random fallback when guesses failed
+**After:** Intent resolution with explicit alias + era rules, deterministic matches, and no random fallback
 
 ### Performance
 - Zero indexing delay
@@ -138,17 +116,17 @@ Jellyfin genre names (case-sensitive):
 
 ## Files Modified
 
-1. **core/jellyfin_provider.py**
-   - Added `advanced_search()` method with year/genre/artist filters
-   - Full Jellyfin API integration
+1. **core/music_resolver.py**
+    - Strict cascade: alias → era → exact → fuzzy → LLM intent
 
-2. **core/music_player.py**
-   - Added `_parse_music_keyword()` method
-   - Updated `play_by_keyword()` to use advanced search
-   - Supports both local and Jellyfin modes
+2. **music_aliases.json**
+    - Canonical alias map (human shorthand)
 
-3. **core/music_player.py** (Bug fix)
-   - Fixed `_play_jellyfin_track()`: added missing `track` parameter to `set_artist_mode()`
+3. **core/music_player.py**
+    - Resolver integration and fail-safe on no match
+
+4. **core/music_index.py**
+    - Album/year capture for local metadata matches
 
 ## Testing
 
@@ -176,10 +154,8 @@ All tests pass ✓
 
 ## Known Limitations
 
-- Genre names must match Jellyfin's library metadata
-- Year filtering requires tracks to have ProductionYear set
-- Artist filtering uses partial matching (case-insensitive)
-- Some genre aliases (e.g., "heavy metal" → "Metal") are lossy
+- Genre/year filters require metadata to be present
+- Alias coverage grows over time (add missing slang to `music_aliases.json`)
 
 ## Configuration
 

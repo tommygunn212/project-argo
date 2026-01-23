@@ -1,6 +1,6 @@
 # ARGO Documentation Index (v1.0.0-voice-core)
 
-Complete navigation for ARGO system documentation. All documentation current as of January 18, 2026.
+Complete navigation for ARGO system documentation. All documentation current as of January 22, 2026.
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
@@ -63,6 +63,19 @@ Centralized safety policies and watchdogs were added to prevent hangs and silent
 - NO_OUTPUT detection with safe fallback response
 
 See also: [TODO / Next Steps](TODO.md)
+
+## Music Resolver (January 22, 2026)
+
+Human music requests are now resolved via a strict cascade:
+- Alias cache (`music_aliases.json`)
+- Era/year filter (regex only)
+- Exact metadata match (artist/album/song)
+- Fuzzy token match (>=85%)
+- LLM intent parse (metadata only, local index is authority)
+
+Fail-safe: if no match, ARGO admits it and does not play a random track.
+
+See: [Advanced Music Search](ADVANCED_MUSIC_SEARCH.md)
 
 ## Voice System (Phase 7A)
 

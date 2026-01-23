@@ -32,7 +32,7 @@ ARGO is a production voice assistant that prioritizes **stability, clarity, and 
 
 ## What ARGO Does
 
-ARGO processes voice through a **complete 7-stage pipeline**:
+ARGO processes voice through a **complete 9-stage pipeline**:
 
 ```
 [1. InputTrigger]        — Porcupine wake word detection ("hello"/"computer")
@@ -41,15 +41,17 @@ ARGO processes voice through a **complete 7-stage pipeline**:
         ↓
 [3. SpeechToText]        — Whisper transcription (16kHz → text)
         ↓
-[4. IntentParser]        — Rule-based classification (COMMAND/QUESTION/GREETING/UNKNOWN)
+[4. IntentParser]        — Rule-based classification (COMMAND/QUESTION/GREETING/MUSIC/UNKNOWN)
         ↓
-[5. ResponseGenerator]   — Qwen LLM via Ollama (2000 token budget)
+[5. MusicResolver]       — Alias/era/fuzzy/LLM-parse cascade (MUSIC intents only)
         ↓
-[6. OutputSink (Piper)]  — Local TTS synthesis (22.05kHz PCM, NO squeal)
+[6. ResponseGenerator]   — Qwen LLM via Ollama (2000 token budget)
         ↓
-[7. InterruptDetection]  — Monitor for voice activity during playback
+[7. OutputSink (Piper)]  — Local TTS synthesis (22.05kHz PCM, NO squeal)
         ↓
-[8. Coordinator v4]      — 3-interaction loop + session memory + latency profiling
+[8. InterruptDetection]  — Monitor for voice activity during playback
+        ↓
+[9. Coordinator v4]      — 3-interaction loop + session memory + latency profiling
 ```
 
 **How it works:**
@@ -57,11 +59,12 @@ ARGO processes voice through a **complete 7-stage pipeline**:
 1. System waits for wake word ("hello" or "computer")
 2. Upon detection, records audio until 1.5 seconds of silence detected (max 15s)
 3. Transcribes audio to text (Whisper, CPU-optimized)
-4. Classifies intent (rule-based: COMMAND, QUESTION, GREETING, or UNKNOWN)
-5. Generates response via Qwen LLM (local Ollama, temperature=0.7, max=2000 tokens)
-6. Synthesizes response via Piper TTS (local, 22.05kHz, no cloud dependency)
-7. Monitors for user interruption during playback
-8. Repeats up to 2 more times OR exits if response contains stop keyword (stop, goodbye, quit, exit)
+4. Classifies intent (rule-based: COMMAND, QUESTION, GREETING, MUSIC, or UNKNOWN)
+5. Resolves music requests via alias/era/fuzzy cascade (local index is authority)
+6. Generates response via Qwen LLM (local Ollama, temperature=0.7, max=2000 tokens)
+7. Synthesizes response via Piper TTS (local, 22.05kHz, no cloud dependency)
+8. Monitors for user interruption during playback
+9. Repeats up to 2 more times OR exits if response contains stop keyword (stop, goodbye, quit, exit)
 
 ## What's Fixed (January 20, 2026)
 
@@ -83,6 +86,7 @@ ARGO processes voice through a **complete 7-stage pipeline**:
 | Empty music index crash | ✅ FIXED | Defensive handling for empty music catalog |
 | Qwen 3 speed test timeout | ✅ FIXED | Model-specific timeout handling and reporting |
 | Transcription contract gaps | ✅ FIXED | transcribe_and_confirm always returns an artifact |
+| Music intent resolution | ✅ FIXED | Alias/era/fuzzy cascade + no random fallback |
 
 ## Performance
 
@@ -168,7 +172,7 @@ SpeechToText:       "I transcribe audio. That's it."
 IntentParser:       "I classify intent. That's it."
 ResponseGenerator:  "I generate responses via LLM. That's it."
 OutputSink:         "I speak text and handle audio transport. That's it."
-Coordinator v3:     "I orchestrate the loop and enforce bounds. That's it."
+Coordinator v4:     "I orchestrate the loop and enforce bounds. That's it."
 ```
 
 **Dumb Layers Before Smart Layers**
@@ -206,7 +210,7 @@ Because each layer is isolated.
 - `porcupine` (wake word detection)
 - `pvporcupine` (Porcupine Python SDK)
 - `openai-whisper` (speech-to-text)
-- `edge-tts` (text-to-speech)
+- `piper-tts` (text-to-speech)
 - `livekit` (RTC transport)
 - `ollama` (local LLM server running on localhost:11434)
 
@@ -241,7 +245,8 @@ Also download your custom "argo" wake word model from the Picovoice console and 
 ### Run
 
 ```powershell
-python run_coordinator_v3.py
+$env:PYTHONPATH = $PWD
+.\.venv\Scripts\python.exe legacy\run_coordinator_v4.py
 ```
 
 The system will:
@@ -260,9 +265,10 @@ The system will:
 2. **SpeechToText** (`core/speech_to_text.py`) — Whisper transcription
 3. **IntentParser** (`core/intent_parser.py`) — Rule-based classification
 4. **ResponseGenerator** (`core/response_generator.py`) — Qwen LLM response generation
-5. **OutputSink** (`core/output_sink.py`) — Edge-TTS + LiveKit audio output
-6. **Coordinator v3** (`core/coordinator.py`) — Bounded interaction loop
-7. **Run Script** (`run_coordinator_v3.py`) — Initialization and teardown
+5. **MusicResolver** (`core/music_resolver.py`) — Alias/era/fuzzy resolution for music requests
+6. **OutputSink** (`core/output_sink.py`) — Piper TTS audio output
+7. **Coordinator v4** (`core/coordinator.py`) — Bounded interaction loop
+8. **Run Script** (`legacy/run_coordinator_v4.py`) — Initialization and teardown
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed layer responsibilities and design decisions.
 
@@ -275,6 +281,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed layer responsibilities and d
 - **[docs/response_generator.md](docs/response_generator.md)** — LLM response generation
 - **[docs/speech_to_text.md](docs/speech_to_text.md)** — Whisper integration
 - **[docs/intent_parser.md](docs/intent_parser.md)** — Intent classification logic
+- **[docs/ADVANCED_MUSIC_SEARCH.md](docs/ADVANCED_MUSIC_SEARCH.md)** — Music resolver cascade + alias behavior
+- **[music_aliases.json](music_aliases.json)** — Human shorthand alias map for music resolution
 
 ## Key Design Constraints
 
