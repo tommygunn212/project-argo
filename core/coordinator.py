@@ -167,7 +167,7 @@ class Coordinator:
     AUDIO_SAMPLE_RATE = 16000  # Hz
     MAX_RECORDING_DURATION = 15.0  # seconds max (safety net) — Extended for longer LED explanation
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
-    SILENCE_DURATION = 0.7  # Seconds of silence to stop recording — TUNED for fast response
+    SILENCE_DURATION = 2.2  # Seconds of silence to stop recording — Tuned for natural pauses
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
     SILENCE_TIMEOUT_SECONDS = 5.0  # Seconds of silence to stop recording — Increased for detailed explanations
     SILENCE_THRESHOLD = 1800  # Audio level below this = silence (RMS absolute) — Tuned for room hum
@@ -1146,7 +1146,9 @@ class Coordinator:
                 if total_samples >= max_samples:
                     stop_reason = "max_duration"
                     # Guard formatting (belt + suspenders: logging must never crash)
-                    avg_rms = np.mean(rms_samples) if rms_samples else 0.0
+                    calibration_chunks = 3  # Ignore first 300ms (3 x 100ms)
+                    filtered_rms = rms_samples[calibration_chunks:] if len(rms_samples) > calibration_chunks else rms_samples
+                    avg_rms = np.mean(filtered_rms) if filtered_rms else 0.0
                     avg_rms_str = f"{avg_rms:.2f}" if avg_rms is not None else "N/A"
                     self.logger.warning(
                         f"[Record] MAX DURATION REACHED (15.0s) - stopping recording | "
@@ -1169,7 +1171,9 @@ class Coordinator:
         
         # Emit debug metrics (gated by RECORD_DEBUG flag)
         if self.record_debug and rms_samples:
-            avg_rms = np.mean(rms_samples)
+            calibration_chunks = 3  # Ignore first 300ms (3 x 100ms)
+            filtered_rms = rms_samples[calibration_chunks:] if len(rms_samples) > calibration_chunks else rms_samples
+            avg_rms = np.mean(filtered_rms) if filtered_rms else 0.0
             avg_rms_str = f"{avg_rms:.4f}" if avg_rms is not None else "N/A"
             self.logger.info(f"[Record] Recording Summary:")
             self.logger.info(f"  Duration: {total_samples/self.AUDIO_SAMPLE_RATE:.2f}s (minimum: {self.MINIMUM_RECORD_DURATION}s)")

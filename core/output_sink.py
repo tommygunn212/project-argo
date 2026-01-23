@@ -399,6 +399,11 @@ class PiperOutputSink(OutputSink):
                 except:
                     pass
         finally:
+            if piper_process:
+                try:
+                    piper_process.terminate()
+                except Exception:
+                    pass
             self._piper_process = None
     
     def _stream_and_play(self, process: subprocess.Popen):
@@ -455,7 +460,7 @@ class PiperOutputSink(OutputSink):
                 print(f"[PIPER_PROFILING] playback_start")
 
             sounddevice.default.latency = "high"
-            sounddevice.play(audio_data, samplerate=SAMPLE_RATE, blocking=True)
+            sounddevice.play(audio_data, samplerate=SAMPLE_RATE, blocksize=2048, blocking=True)
             
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_complete")

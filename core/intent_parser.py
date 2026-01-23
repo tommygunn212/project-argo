@@ -327,8 +327,20 @@ class RuleBasedIntentParser(IntentParser):
 
         text = text.strip()
         text_lower = text.lower()
+
+        # Phonetic fixes for common mishears
+        phonetic_fixes = {
+            "porcupine": "argo",
+            "pocket point": "argo",
+            "pocketpoint": "argo",
+            "led like": "led light",
+        }
+        for mistake, fix in phonetic_fixes.items():
+            text_lower = text_lower.replace(mistake, fix)
+
         # Strip wake word prefix (e.g., "argo, ...") from parsing logic
         text_lower = re.sub(r"^(argo[\s,]+)+", "", text_lower).strip()
+        text = text_lower
         tokens = re.findall(r"[a-z0-9']+", text_lower)
         first_word = tokens[0] if tokens else ""
 
