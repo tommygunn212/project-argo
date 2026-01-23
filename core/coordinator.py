@@ -603,12 +603,6 @@ class Coordinator:
                                         if playback_started:
                                             self.logger.info(f"[Iteration {self.interaction_count}] Music route: KEYWORD match")
                                     
-                                    # 5. Random fallback
-                                    if not playback_started:
-                                        playback_started = music_player.play_random(None)  # No sink here
-                                        if playback_started:
-                                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM fallback")
-                                    
                                     # If still no playback, consolidate error into single message
                                     if not playback_started:
                                         error_message = f"No music found for '{keyword}'."

@@ -4,4 +4,4 @@ This is pissing me off.
 
 A
 
-Understood. What’s the last concrete thing that failed?
+Yeah, those are the worst. What changed right before it broke?

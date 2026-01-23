@@ -4,4 +4,4 @@ Why is the sky blue?
 
 A
 
-Because air molecules scatter shorter wavelengths of light more than longer ones. Blue light gets scattered across the sky, so that’s what you see.
+Because air scatters blue light more than the rest. Physics did the decorating.

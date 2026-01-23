@@ -1,0 +1,32 @@
+{
+  "ziggy": {
+    "target": "David Bowie",
+    "scope": "artist",
+    "boost_album": "The Rise and Fall of Ziggy Stardust and the Spiders from Mars"
+  },
+  "ziggy stardust": {
+    "target": "David Bowie",
+    "scope": "artist",
+    "boost_album": "The Rise and Fall of Ziggy Stardust and the Spiders from Mars"
+  },
+  "dark side": {
+    "target": "Pink Floyd",
+    "scope": "album",
+    "title": "The Dark Side of the Moon"
+  },
+  "abbey road": {
+    "target": "The Beatles",
+    "scope": "album",
+    "title": "Abbey Road"
+  },
+  "the wall": {
+    "target": "Pink Floyd",
+    "scope": "album",
+    "title": "The Wall"
+  },
+  "major tom": {
+    "target": "Space Oddity",
+    "scope": "song",
+    "artist": "David Bowie"
+  }
+}

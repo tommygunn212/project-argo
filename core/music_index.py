@@ -269,6 +269,8 @@ class MusicIndex:
             artist = None
             song = None
             genre = None
+            album = None
+            year = None
 
             # 1. Try ID3 Tags (Primary)
             # We trust Mutagen if available and format is supported
@@ -285,6 +287,12 @@ class MusicIndex:
                     if audio.get('title'):
                         # Take title, clean it
                         song = self._clean_tag(audio['title'][0])
+                    # Extract and Validate Album
+                    if audio.get('album'):
+                        album = self._clean_tag(audio['album'][0])
+                    # Extract and Normalize Year
+                    if audio.get('date'):
+                        year = self._extract_year(audio['date'][0])
                             
                 except Exception:
                     # Tag reading failed (corrupt header, missing tags, etc.)
@@ -301,13 +309,17 @@ class MusicIndex:
             if not artist:
                 artist = self._extract_artist(full_path)
             
+            # Album: Fallback to folder assumption
+            if not album:
+                album = self._extract_album(full_path, artist)
+
             # Song: Fallback to filename cleaning
             if not song:
                 song = self._extract_song(full_path)
             
             # 3. Tokenize (Using final confirmed values)
             # This ensures search matches the actual metadata we settled on
-            tokens = self._tokenize(full_path, genre, artist, song)
+            tokens = self._tokenize(full_path, genre, artist, song, album)
             
             # 4. Generate stable ID
             track_id = hashlib.md5(full_path.lower().encode()).hexdigest()[:16]
@@ -319,6 +331,8 @@ class MusicIndex:
                 "name": name,
                 "artist": artist,
                 "song": song,
+                "album": album,
+                "year": year,
                 "tokens": tokens,
                 "genre": genre,
                 "ext": ext
@@ -449,8 +463,44 @@ class MusicIndex:
         except Exception as e:
             logger.debug(f"[ARGO] Song extraction error: {e}")
             return None
+
+    def _extract_album(self, full_path: str, artist: Optional[str]) -> Optional[str]:
+        """
+        Extract album from folder hierarchy or ID3 fallback.
+
+        Heuristic: Album is typically the folder between artist and filename.
+        """
+        try:
+            rel_path = os.path.relpath(full_path, self.music_dir)
+            folders = rel_path.split(os.sep)[:-1]
+
+            if len(folders) < 2:
+                return None
+
+            potential_album = folders[-1]
+            if artist and potential_album.lower() == artist.lower():
+                return None
+
+            album_indicators = {"album", "albums", "compilations", "singles", "live", "remaster", "remix"}
+            if potential_album.lower() in album_indicators:
+                return None
+
+            return potential_album.strip() if potential_album.strip() else None
+        except Exception as e:
+            logger.debug(f"[ARGO] Album extraction error: {e}")
+            return None
+
+    def _extract_year(self, year_text: str) -> Optional[int]:
+        """Normalize year text (e.g., 1984, 1984-01-01, 84)."""
+        if not year_text:
+            return None
+        year_str = str(year_text).strip()
+        match = re.search(r"(19|20)\d{2}", year_str)
+        if match:
+            return int(match.group())
+        return None
     
-    def _tokenize(self, full_path: str, genre: Optional[str], artist: Optional[str] = None, song: Optional[str] = None) -> List[str]:
+    def _tokenize(self, full_path: str, genre: Optional[str], artist: Optional[str] = None, song: Optional[str] = None, album: Optional[str] = None) -> List[str]:
         """
         Tokenize for keyword search.
         
@@ -480,6 +530,11 @@ class MusicIndex:
             if song:
                 song_lower = song.lower()
                 tokens.update(song_lower.split())
+
+            # Album (high weight)
+            if album:
+                album_lower = album.lower()
+                tokens.update(album_lower.split())
             
             # Folder names
             rel_path = os.path.relpath(full_path, self.music_dir)

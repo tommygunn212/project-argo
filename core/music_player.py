@@ -46,6 +46,7 @@ import logging
 import random
 import threading
 import json
+import time
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -60,6 +61,7 @@ from core.watchdog import Watchdog
 # Import music index for catalog and filtering
 from core.music_index import get_music_index
 from core.playback_state import get_playback_state
+from core.music_resolver import MusicResolver
 
 # ============================================================================
 # LOGGER
@@ -265,6 +267,7 @@ class MusicPlayer:
         self._music_process = None  # For ffplay/mpv/vlc streaming process
         self.is_playing = False
         self.current_track: Dict = {}  # Track metadata (artist, song, path, etc.)
+        self._resolver: Optional[MusicResolver] = None
 
         if not MUSIC_ENABLED:
             logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
@@ -278,6 +281,7 @@ class MusicPlayer:
                 # Pre-load library for searches
                 tracks = self.jellyfin_provider.load_music_library()
                 logger.info(f"[ARGO] Jellyfin connected: {len(tracks)} tracks")
+                self._resolver = MusicResolver(self.jellyfin_provider.tracks)
                 return
             except Exception as e:
                 logger.error(f"[ARGO] Jellyfin connection failed: {e}")
@@ -289,6 +293,7 @@ class MusicPlayer:
             self.index = get_music_index()
             track_count = len(self.index.tracks) if self.index.tracks else 0
             logger.info(f"[ARGO] Music index loaded: {track_count} tracks")
+            self._resolver = MusicResolver(self.index.tracks or [])
         except Exception as e:
             logger.error(f"[ARGO] Error loading music index: {e}")
             self.index = None
@@ -491,116 +496,20 @@ class MusicPlayer:
             return False
         
         # ===== JELLYFIN MODE =====
-        if self.jellyfin_provider:
-            # Try to extract structured parameters from keyword using hybrid approach
-            parsed = None
-            
-            # ARTIST SOVEREIGNTY: Check if keyword is a known artist (bypass LLM)
-            keyword_lower = keyword.lower().strip()
-            if keyword_lower in KNOWN_ARTISTS:
-                logger.info(f"[ARGO] Artist sovereignty matched: '{keyword}' → artist-only search")
-                parsed = {"artist": keyword, "song": None, "genre": None, "year": None}
-            else:
-                # Step 1: Try LLM-based extraction for natural language (might be slower but more flexible)
-                logger.info(f"[ARGO] Attempting LLM extraction for: '{keyword}'")
-                llm_extracted = self._extract_metadata_with_llm(keyword)
-                if llm_extracted and (llm_extracted.get("year") or llm_extracted.get("genre") or llm_extracted.get("artist") or llm_extracted.get("song")):
-                    logger.info(f"[ARGO] LLM extraction succeeded: {llm_extracted}")
-                    parsed = llm_extracted
-                
-                # Step 2: Fallback to regex-based extraction if LLM didn't provide useful data
-                if not parsed or not (parsed.get("year") or parsed.get("genre") or parsed.get("artist") or parsed.get("song")):
-                    logger.info(f"[ARGO] Using regex extraction (LLM didn't extract metadata)")
-                    parsed = self._parse_music_keyword(keyword)
-            
-            # Step 3: Apply corrections for common transcription errors
-            if parsed:
-                # Fix artist names
-                if parsed.get("artist"):
-                    artist_lower = parsed["artist"].lower()
-                    if artist_lower in MUSIC_FIXES:
-                        original = parsed["artist"]
-                        parsed["artist"] = MUSIC_FIXES[artist_lower]
-                        logger.info(f"[ARGO] Artist correction: '{original}' → '{parsed['artist']}'")
-                
-                # Fix genres that are actually artist names (ramen → Ramones)
-                if parsed.get("genre"):
-                    genre_lower = parsed["genre"].lower()
-                    if genre_lower in MUSIC_FIXES:
-                        # This genre might actually be an artist
-                        logger.info(f"[ARGO] Genre correction detected: '{parsed['genre']}' → artist '{MUSIC_FIXES[genre_lower]}'")
-                        if not parsed.get("artist"):
-                            parsed["artist"] = MUSIC_FIXES[genre_lower]
-                            parsed["genre"] = None  # Clear the bad genre
-                            logger.info(f"[ARGO] Applied artist correction (no artist found)")
-            
-            # CASCADING FALLBACK SEARCH: Optimistic but forgiving
-            # LLM might hallucinate year/genre/song, so try multiple strategies
-            
-            tracks = []
-            
-            # Attempt 1: Strict search with all extracted parameters
-            if parsed.get("artist") or parsed.get("genre") or parsed.get("year"):
-                logger.info(f"[ARGO] Search Attempt 1 (Strict): artist={parsed.get('artist')}, genre={parsed.get('genre')}, year={parsed.get('year')}")
-                tracks = self.jellyfin_provider.advanced_search(
-                    query_text=None,
-                    year=parsed.get("year"),
-                    genre=parsed.get("genre"),
-                    artist=parsed.get("artist")
-                )
-                if tracks:
-                    logger.info(f"[ARGO] Strict search succeeded: {len(tracks)} tracks found")
-            
-            # Attempt 2: Search by Song Name if extracted (song-specific search)
-            if not tracks and parsed.get("song"):
-                logger.info(f"[ARGO] Search Attempt 2 (Song): song='{parsed.get('song')}'")
-                tracks = self.jellyfin_provider.advanced_search(
-                    query_text=parsed.get("song"),
-                    year=None,
-                    genre=None,
-                    artist=None
-                )
-                if tracks:
-                    logger.info(f"[ARGO] Song search succeeded: {len(tracks)} tracks found")
-            
-            # Attempt 3: Drop Year/Genre (common LLM hallucinations) - keep Artist and Song
-            if not tracks and (parsed.get("year") or parsed.get("genre")):
-                logger.info(f"[ARGO] Search Attempt 3 (Relaxed): Dropping Year/Genre, keeping artist={parsed.get('artist')}")
-                tracks = self.jellyfin_provider.advanced_search(
-                    query_text=None,
-                    year=None,  # Drop unreliable year
-                    genre=None,  # Drop unreliable genre
-                    artist=parsed.get("artist")
-                )
-                if tracks:
-                    logger.info(f"[ARGO] Relaxed search succeeded: {len(tracks)} tracks found")
-            
-            # Attempt 4: Search by Artist ONLY (user's core intent if they mentioned an artist)
-            if not tracks and parsed.get("artist"):
-                logger.info(f"[ARGO] Search Attempt 4 (Artist Only): artist={parsed.get('artist')}")
-                tracks = self.jellyfin_provider.advanced_search(
-                    query_text=None,
-                    artist=parsed.get("artist")
-                )
-                if tracks:
-                    logger.info(f"[ARGO] Artist-only search succeeded: {len(tracks)} tracks found")
-            
-            # Attempt 5: Simple keyword search (fallback to keyword matching)
-            if not tracks:
-                logger.info(f"[ARGO] Search Attempt 5 (Keyword): keyword='{keyword}'")
-                tracks = self.jellyfin_provider.search_by_keyword(keyword)
-                if tracks:
-                    logger.info(f"[ARGO] Keyword search succeeded: {len(tracks)} tracks found")
-            
-            # Final fallback: No music found
-            if not tracks:
-                logger.info(f"[ARGO] All search attempts failed for '{keyword}'")
+        if self.jellyfin_provider and self._resolver:
+            resolution = self._resolver.resolve(keyword, self._interpret_music_intent)
+            if resolution.clarification:
                 if output_sink:
-                    output_sink.speak(f"No music found for '{keyword}' in Jellyfin.")
+                    output_sink.speak(resolution.clarification)
+                    time.sleep(5)
                 return False
-            
-            import random
-            track = random.choice(tracks)
+            if not resolution.tracks:
+                logger.info(f"music_unresolved_phrase = \"{keyword}\"")
+                if output_sink:
+                    output_sink.speak(f"No music found for '{keyword}'.")
+                return False
+
+            track = random.choice(resolution.tracks)
             announcement = self._build_announcement(track)
             return self._play_jellyfin_track(track, announcement, output_sink)
         
@@ -610,14 +519,22 @@ class MusicPlayer:
                 output_sink.speak("I couldn't find any music.")
             return False
 
-        # Generic keyword search (token-based)
-        tracks = self.index.filter_by_keyword(keyword)
-        if not tracks:
+        if not self._resolver:
+            self._resolver = MusicResolver(self.index.tracks or [])
+
+        resolution = self._resolver.resolve(keyword, self._interpret_music_intent)
+        if resolution.clarification:
+            if output_sink:
+                output_sink.speak(resolution.clarification)
+                time.sleep(5)
+            return False
+        if not resolution.tracks:
+            logger.info(f"music_unresolved_phrase = \"{keyword}\"")
             if output_sink:
                 output_sink.speak(f"No music found for '{keyword}'.")
             return False
 
-        track = random.choice(tracks)
+        track = random.choice(resolution.tracks)
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
@@ -627,6 +544,56 @@ class MusicPlayer:
             playback_state = get_playback_state()
             playback_state.set_random_mode(track)
         return result
+
+    def _interpret_music_intent(self, keyword: str) -> Optional[Dict]:
+        """
+        LLM metadata parser (interpret only). Returns artist/song/album/era.
+        """
+        try:
+            import requests
+
+            ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434")
+            prompt = (
+                "You are a music metadata parser. Convert the user's yell into a JSON search object.\n"
+                "User: 'play that heroes song by bowie'\n"
+                "Output: {\"artist\": \"David Bowie\", \"song\": \"Heroes\", \"album\": null, \"era\": null}\n"
+                "User: 'play old metallica'\n"
+                "Output: {\"artist\": \"Metallica\", \"song\": null, \"album\": null, \"era\": \"early\"}\n"
+                f"User: '{keyword}'\n"
+                "Output (JSON only):"
+            )
+
+            response = requests.post(
+                f"{ollama_endpoint}/api/generate",
+                json={
+                    "model": os.getenv("OLLAMA_MODEL", "argo:latest"),
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.1,
+                    "top_p": 0.5,
+                    "top_k": 40,
+                    "num_predict": 120,
+                },
+                timeout=LLM_EXTRACT_TIMEOUT_SECONDS,
+            )
+
+            if response.status_code != 200:
+                return None
+
+            result_json = response.json()
+            response_text = result_json.get("response", "").strip()
+            if not response_text:
+                return None
+
+            start = response_text.find('{')
+            end = response_text.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_str = response_text[start:end]
+                extracted = json.loads(json_str)
+                return extracted
+        except Exception as e:
+            logger.debug(f"[LLM] Intent extraction error: {e}")
+            return None
 
     def _extract_metadata_with_llm(self, keyword: str) -> Optional[Dict]:
         """

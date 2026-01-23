@@ -138,6 +138,7 @@ class JellyfinMusicProvider:
             name = item.get("Name")
             artist_name = item.get("Artists", [None])[0] if item.get("Artists") else None
             album = item.get("Album")
+            year = item.get("ProductionYear")
             
             if not (item_id and name):
                 return None
@@ -162,6 +163,7 @@ class JellyfinMusicProvider:
                 "artist": artist,
                 "song": song,
                 "album": album,
+                "year": year,
                 "tokens": tokens,
                 "genre": genre,
                 "ext": ".mp3"  # All assumed to be audio

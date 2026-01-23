@@ -183,6 +183,13 @@ class RuleBasedIntentParser(IntentParser):
             "surprise me",
             "play a song",
             "play",  # Force "play" alone to be treated as music
+            "put on",
+            "put on some",
+            "throw on",
+            "queue up",
+            "i want",
+            "give me",
+            "let me hear",
             "play rock",
             "play jazz",
             "play metal",
@@ -266,7 +273,7 @@ class RuleBasedIntentParser(IntentParser):
         # "play music", "play punk", "play something", "surprise me", etc.
         # Also matches variations like "playing", "played", "plays"
         # Extract keyword after "play" if present
-        if any(phrase in text_lower for phrase in self.music_phrases) or first_word in {"play", "playing", "played", "plays"}:
+        if any(phrase in text_lower for phrase in self.music_phrases) or first_word in {"play", "playing", "played", "plays", "put", "throw", "queue"}:
             keyword = self._extract_music_keyword(text_lower)
             return Intent(
                 intent_type=IntentType.MUSIC,
@@ -365,15 +372,33 @@ class RuleBasedIntentParser(IntentParser):
             if text_normalized == f"play {generic}" or text_normalized == f"play some {generic}":
                 return None
         
-        # Find "play" (or variations: playing, played, plays) anywhere in the sentence and extract everything after it
+        # Find command anchors and extract everything after them
         words = text_normalized.split()
         play_index = -1
-        
-        # Look for play or its variations
-        for i, word in enumerate(words):
-            if word in {"play", "playing", "played", "plays"}:
-                play_index = i
-                break
+
+        anchor_phrases = [
+            "play",
+            "playing",
+            "played",
+            "plays",
+            "put on",
+            "throw on",
+            "queue up",
+            "i want",
+            "give me",
+            "let me hear",
+        ]
+
+        joined = " ".join(words)
+        for phrase in anchor_phrases:
+            if phrase in joined:
+                phrase_words = phrase.split()
+                for i in range(len(words) - len(phrase_words) + 1):
+                    if words[i:i + len(phrase_words)] == phrase_words:
+                        play_index = i + len(phrase_words) - 1
+                        break
+                if play_index >= 0:
+                    break
         
         if play_index >= 0:
             # Get everything after the play word
