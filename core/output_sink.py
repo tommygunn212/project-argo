@@ -455,12 +455,16 @@ class PiperOutputSink(OutputSink):
                     print(f"[PIPER_PROFILING] normalizing audio (max was {max_abs:.4f})")
                 audio_data = audio_data / max_abs
             
-            # Play audio
+            # Play audio in small chunks (sequential)
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_start")
 
             sounddevice.default.latency = "high"
-            sounddevice.play(audio_data, samplerate=SAMPLE_RATE, blocksize=2048, blocking=True)
+            CHUNK_SIZE = 1024
+            for i in range(0, len(audio_data), CHUNK_SIZE):
+                chunk = audio_data[i:i + CHUNK_SIZE]
+                sounddevice.play(chunk, samplerate=SAMPLE_RATE, blocksize=2048, blocking=True)
+                sounddevice.wait()
             
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_complete")

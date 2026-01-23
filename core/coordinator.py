@@ -170,7 +170,7 @@ class Coordinator:
     SILENCE_DURATION = 2.2  # Seconds of silence to stop recording — Tuned for natural pauses
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
     SILENCE_TIMEOUT_SECONDS = 5.0  # Seconds of silence to stop recording — Increased for detailed explanations
-    SILENCE_THRESHOLD = 1800  # Audio level below this = silence (RMS absolute) — Tuned for room hum
+    SILENCE_THRESHOLD = 800  # Audio level below this = silence (RMS absolute) — Tuned for room hum
     RMS_SPEECH_THRESHOLD = 0.015  # RMS normalized level (0-1) to START silence timer — Reduced sensitivity
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back

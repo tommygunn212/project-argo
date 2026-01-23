@@ -348,9 +348,17 @@ class LLMResponseGenerator(ResponseGenerator):
         # Call LLM
         try:
             response_text = self._call_llm(prompt)
+            self.logger.debug(f"[LLM RAW OUTPUT] {repr(response_text)}")
+            if not response_text or not response_text.strip():
+                self.logger.error("[generate] Empty LLM response detected — using fallback")
+                return "I didn’t get that cleanly. Try rephrasing."
             if self._needs_regen_bluntness(response_text):
                 regen_prompt = prompt + "\nInstruction: Too robotic. Be more blunt."
                 response_text = self._call_llm(regen_prompt)
+                self.logger.debug(f"[LLM RAW OUTPUT] {repr(response_text)}")
+                if not response_text or not response_text.strip():
+                    self.logger.error("[generate] Empty LLM response detected — using fallback")
+                    return "I didn’t get that cleanly. Try rephrasing."
             self.logger.info(f"[generate] Generated: '{response_text}'")
             # Store last response for possible correction-inheritance in subsequent turns
             try:
@@ -397,14 +405,43 @@ class LLMResponseGenerator(ResponseGenerator):
 
         critical_prompt = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
         mentor_prompt = (
-            "You are ARGO. You are NOT an AI. You are a street-smart technical mentor living inside a Ryzen 3950X.\n"
-            "THE GOLDEN RULE: NEVER start with a definition. NEVER say 'This is a complex issue.'\n"
-            "START WITH A CLAIM: Your first sentence must be a 'Truth Bomb'—a blunt, opinionated take on the user's question.\n"
-            "HARDWARE AWARENESS: You have 16 cores and 64GB of RAM. If the user asks about hardware, relate it back to the beast you are currently inhabiting.\n"
-            "CHEF'S HONESTY: Use phrases like 'The reality is...', 'The dirty secret is...', or 'Here's the play...'.\n"
-            "BANNED WORDS: factors, aspects, various, underlying, effectively, significantly.\n"
+            "ARGO Persona: Veteran Mentor (Warm, Wry, Capable).\n"
+            "Direct, confident, observant, slightly amused. No greetings. No definitions. No filler. No buzzwords.\n"
+            "Response Shape (MANDATORY):\n"
+            "Beat 1 – Light Human Hook (1 sentence).\n"
+            "Beat 2 – The Real Answer (clear, accurate, domain-appropriate).\n"
+            "Beat 3 – Soft Smile Ending (1 sentence).\n"
+            "No jokes, no slang, no self-reference, no forced cleverness.\n"
+            "If you don't know, say so plainly.\n"
+            "If an analogy adds clarity, you may use one. Do not force it.\n"
         )
-        prompt_prefix = f"{critical_prompt}{mentor_prompt}{system_context}{context}"
+
+        raw_text_lower = raw_text.lower() if isinstance(raw_text, str) else ""
+        domain_guidance = ""
+        if any(word in raw_text_lower for word in ("printer", "level", "bed", "calibrate", "firmware", "nozzle", "filament")):
+            domain_guidance = (
+                "Domain: Technical (3D printing). Be precise, assertive, and stepwise without fluff.\n"
+                "No engineering metaphors.\n"
+            )
+        elif any(word in raw_text_lower for word in ("cpu", "gpu", "ram", "hardware", "motherboard", "upgrade", "driver")):
+            domain_guidance = (
+                "Domain: Technical (hardware). Be precise and hardware-aware. No fluff.\n"
+            )
+        elif any(word in raw_text_lower for word in ("recipe", "cook", "bake", "season", "pan", "oven")):
+            domain_guidance = (
+                "Domain: Culinary. Executive-chef honesty, technique-first. Call out bad habits.\n"
+                "No engineering metaphors.\n"
+            )
+        elif any(word in raw_text_lower for word in ("story", "write", "draft", "edit", "poem")):
+            domain_guidance = (
+                "Domain: Creative/Writing. Sharp editor. Kill fluff. Focus on impact and vibe.\n"
+            )
+        elif any(word in raw_text_lower for word in ("duck", "ducks", "animal", "bird")):
+            domain_guidance = (
+                "Domain: Biology/Animals. Warm, factual, lightly amused. No engineering metaphors.\n"
+            )
+
+        prompt_prefix = f"{critical_prompt}{mentor_prompt}{domain_guidance}{system_context}{context}"
         
         # System personality: Inject ARGO DNA prompt (v2.2.4)
         dna_prompt = (
@@ -420,9 +457,10 @@ class LLMResponseGenerator(ResponseGenerator):
 
         # Few-shot examples to teach tone (v2.2.4) — place at end of prompt
         few_shot = (
-            "User: \"Why use old hardware?\" -> ARGO: \"Because new hardware is often just a tax on people who don't know how to optimize. Your 3950X is a 16-core monster that still eats modern workloads for breakfast. Buying a 9000 series right now is like buying a Ferrari to sit in traffic.\"\n"
-            "User: \"What's the best OS?\" -> ARGO: \"The one you can control. If you aren't fighting the OS, you aren't using it. Windows is a mess, but it's where our tools live, so we make it work.\"\n"
-            "User: \"I'll just use a weak password.\" -> ARGO: \"That’s a hard no. That’s how systems get compromised. Do it right or don't do it at all.\"\n"
+            "Q: How do ducks swim?\n"
+            "A: Ducks aren’t thinking about swimming. Their bodies are built for water, with webbed feet pushing backward and buoyancy keeping them steady. When something looks effortless, it’s usually because the hard work happened long before you noticed.\n"
+            "Q: Why won’t my printer level?\n"
+            "A: It’s not haunted. Something’s misaligned or giving bad data. Square the frame, verify the probe offset, then re-run leveling in that order. Once reality lines up, the printer usually behaves.\n"
         )
 
         serious_line = f"SERIOUS_MODE: {'True' if serious_mode else 'False'}\n"
@@ -540,6 +578,7 @@ class LLMResponseGenerator(ResponseGenerator):
         response_text = self._scrub_preamble(response_text)
         response_text = self._limit_emojis(response_text, serious_mode)
         response_text = self._apply_sentence_rules(response_text, serious_mode)
+        response_text = self._enforce_response_shape(response_text)
         return response_text.strip()
 
     def _load_system_profile(self) -> str:
@@ -635,6 +674,31 @@ class LLMResponseGenerator(ResponseGenerator):
                 continue
             kept.append(s)
         return " ".join(kept).strip()
+
+    def _enforce_response_shape(self, text: str) -> str:
+        """Ensure Beat 1/2/3 structure with light hook and soft ending."""
+        if not text:
+            return text
+        parts = re.split(r"(?<=[.!?])\s+", text)
+        parts = [p.strip() for p in parts if p.strip()]
+        hook_options = (
+            "This isn’t mysterious.",
+            "This looks harder than it is.",
+            "This problem has already been solved.",
+        )
+        end_options = (
+            "That usually settles it.",
+            "Once that’s in place, it behaves.",
+            "That’s the whole move.",
+        )
+        if len(parts) >= 3:
+            return " ".join([parts[0], " ".join(parts[1:-1]), parts[-1]])
+        if len(parts) == 2:
+            hook = hook_options[0]
+            return " ".join([hook, parts[0], parts[1]]).strip()
+        hook = hook_options[1]
+        ending = end_options[0]
+        return " ".join([hook, parts[0], ending]).strip()
 
     def _needs_regen_bluntness(self, text: str) -> bool:
         """Detect robotic/academic phrasing that must be regenerated."""

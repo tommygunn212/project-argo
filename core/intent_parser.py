@@ -334,6 +334,7 @@ class RuleBasedIntentParser(IntentParser):
             "pocket point": "argo",
             "pocketpoint": "argo",
             "led like": "led light",
+            "ducts": "ducks",
         }
         for mistake, fix in phonetic_fixes.items():
             text_lower = text_lower.replace(mistake, fix)
