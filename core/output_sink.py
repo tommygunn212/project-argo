@@ -29,6 +29,10 @@ Hard stops:
 - Event loop must remain responsive during and after stop
 """
 
+# AUDIO PATH STABLE
+# Verified working with M-Audio interface.
+# Do not modify without a reproduced issue and logs.
+
 import os
 import asyncio
 import subprocess

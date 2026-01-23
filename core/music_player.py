@@ -38,6 +38,10 @@ Extraction Methods:
 No complex playlists, no metadata obsession.
 """
 
+# AUDIO PATH STABLE
+# Verified working with M-Audio interface.
+# Do not modify without a reproduced issue and logs.
+
 import os
 import logging
 import random
