@@ -180,6 +180,7 @@ class LLMResponseGenerator(ResponseGenerator):
         try:
             direct = self._get_canonical_answer(raw_text, intent_type)
             if direct:
+                self._personality_examples_applied = True
                 self.logger.debug("personality_examples_applied=true")
                 return direct
         except Exception as e:
@@ -576,8 +577,9 @@ class LLMResponseGenerator(ResponseGenerator):
             scored.append((score, ex))
 
         scored.sort(key=lambda item: item[0], reverse=True)
-        top = [ex for score, ex in scored if score >= 20][:2]
-        return top
+        # Always inject at least one example for normal inputs
+        top = [ex for _, ex in scored][:2]
+        return top[:2]
 
     def _get_canonical_answer(self, raw_text: str, intent_type: str) -> Optional[str]:
         if not self._should_inject_examples(raw_text):
@@ -788,5 +790,35 @@ class LLMResponseGenerator(ResponseGenerator):
         # This is a fallback (shouldn't happen with good prompts, but just in case)
         if len(response_text.split()) < 3 and not response_text.endswith(("?", "!")):
             self.logger.debug(f"[_enhance_response] Response too short, accepting as-is: '{response_text}'")
-        
+        # Anti-chatty filters (hard stops)
+        banned_phrases = (
+            "great question",
+            "i'd be happy to help",
+            "i would be happy to help",
+            "let me know if you'd like",
+            "let me know if you would like",
+            "in simple terms",
+            "basically",
+            "i'd be glad to",
+        )
+
+        def _strip_banned_lines(text: str) -> str:
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            kept = []
+            for line in lines:
+                low = line.lower()
+                if any(phrase in low for phrase in banned_phrases):
+                    continue
+                kept.append(line)
+            return "\n".join(kept).strip()
+
+        response_text = _strip_banned_lines(response_text)
+
+        # Conversational cadence rule: max 3 sentences
+        sentences = re.split(r'(?<=[.!?])\s+', response_text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if len(sentences) > 3:
+            sentences = sentences[:3]
+        response_text = " ".join(sentences).strip()
+
         return response_text
