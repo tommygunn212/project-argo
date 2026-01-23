@@ -28,6 +28,7 @@ class IntentType(Enum):
     MUSIC_STOP = "music_stop"
     MUSIC_NEXT = "music_next"
     MUSIC_STATUS = "music_status"
+    SLEEP = "sleep"
     UNKNOWN = "unknown"
 
 
@@ -46,11 +47,16 @@ class Intent:
     confidence: float
     raw_text: str
     keyword: Optional[str] = None
+    serious_mode: bool = False
 
     def __str__(self) -> str:
         """Human-readable representation."""
         keyword_str = f", keyword='{self.keyword}'" if self.keyword else ""
-        return f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}{keyword_str}, text='{self.raw_text[:50]}')"
+        serious_str = ", serious_mode=true" if self.serious_mode else ""
+        return (
+            f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}"
+            f"{keyword_str}{serious_str}, text='{self.raw_text[:50]}')"
+        )
 
 
 class IntentParser(ABC):
@@ -99,6 +105,31 @@ class RuleBasedIntentParser(IntentParser):
             "good evening",
             "howdy",
             "what's up",
+        }
+
+        # SERIOUS_MODE keywords (safety / high-stress signals)
+        # Presence of these keywords flips Intent.serious_mode = True
+        self.serious_mode_keywords = {
+            "death",
+            "dying",
+            "panic",
+            "panic attack",
+            "overdose",
+            "suicide",
+            "self harm",
+            "self-harm",
+            "i want to die",
+            "kill myself",
+            "chest pain",
+            "can't breathe",
+            "cant breathe",
+            "not breathing",
+            "heart attack",
+            "stroke",
+            "bleeding",
+            "emergency",
+            "help me",
+            "help",
         }
 
         # Question indicators
@@ -207,6 +238,18 @@ class RuleBasedIntentParser(IntentParser):
             "play zeppelin",
         }
 
+        # Sleep command phrases (high priority, no LLM)
+        self.sleep_phrases = {
+            "sleep",
+            "sleep now",
+            "go to sleep",
+            "go to sleep now",
+            "argo go to sleep",
+            "go to sleep argo",
+            "that's all",
+            "that is all",
+        }
+
     def parse(self, text: str) -> Intent:
         """
         Classify text using hardcoded rules.
@@ -242,6 +285,23 @@ class RuleBasedIntentParser(IntentParser):
         text_lower = text.lower()
         first_word = text_lower.split()[0] if text_lower.split() else ""
 
+        # SERIOUS_MODE signal (keyword presence)
+        serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
+
+        # Rule 0: SLEEP keywords (highest priority - short-circuit)
+        if (
+            text_lower in self.sleep_phrases
+            or text_lower.startswith("go to sleep")
+            or text_lower == "sleep"
+            or text_lower.startswith("sleep ")
+        ):
+            return Intent(
+                intent_type=IntentType.SLEEP,
+                confidence=1.0,
+                raw_text=text,
+                serious_mode=serious_mode,
+            )
+
         # Rule 1: MUSIC_STOP keywords (highest priority - short-circuit)
         # "stop", "stop music", "pause"
         if any(keyword == text_lower or text_lower.startswith(keyword + " ") for keyword in self.music_stop_keywords):
@@ -249,6 +309,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.MUSIC_STOP,
                 confidence=1.0,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 2: MUSIC_NEXT keywords (highest priority - short-circuit)
@@ -258,6 +319,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.MUSIC_NEXT,
                 confidence=1.0,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 3: MUSIC_STATUS keywords (high priority - read-only status query)
@@ -267,6 +329,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.MUSIC_STATUS,
                 confidence=1.0,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 4: Music phrases or "play" command (high priority - overrides everything)
@@ -280,6 +343,7 @@ class RuleBasedIntentParser(IntentParser):
                 confidence=0.95,
                 raw_text=text,
                 keyword=keyword,
+                serious_mode=serious_mode,
             )
 
         # Rule 2: Performance/action words (high priority - overrides questions)
@@ -290,6 +354,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.COMMAND,
                 confidence=0.9,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 3: Question mark at end (high confidence)
@@ -298,6 +363,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.QUESTION,
                 confidence=1.0,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 4: Starts with question word (medium-high confidence)
@@ -306,6 +372,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.QUESTION,
                 confidence=0.85,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 5: Starts with greeting keyword (high confidence)
@@ -314,6 +381,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.GREETING,
                 confidence=0.95,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 6: Starts with command word (medium confidence)
@@ -322,6 +390,7 @@ class RuleBasedIntentParser(IntentParser):
                 intent_type=IntentType.COMMAND,
                 confidence=0.75,
                 raw_text=text,
+                serious_mode=serious_mode,
             )
 
         # Rule 7: Fallback to unknown (low confidence)
@@ -329,6 +398,7 @@ class RuleBasedIntentParser(IntentParser):
             intent_type=IntentType.UNKNOWN,
             confidence=0.1,
             raw_text=text,
+            serious_mode=serious_mode,
         )
 
     def _extract_music_keyword(self, text_lower: str) -> Optional[str]:
