@@ -39,6 +39,9 @@ import queue
 import threading
 import re
 
+from core.policy import TTS_TIMEOUT_SECONDS, TTS_WATCHDOG_SECONDS
+from core.watchdog import Watchdog
+
 
 # ============================================================================
 # CONFIGURATION FLAGS
@@ -347,26 +350,30 @@ class PiperOutputSink(OutputSink):
         piper_process = None
         try:
             # Start Piper subprocess
-            piper_process = subprocess.Popen(
-                [self.piper_path, "--model", self.voice_path, "--output-raw"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
-            
-            # Send text to stdin
-            piper_process.stdin.write(text.encode("utf-8"))
-            piper_process.stdin.close()
-            
-            if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] piper process started, text sent")
-            
-            # Read audio and play
-            self._stream_and_play(piper_process)
-            
-            # Wait for process to finish
-            piper_process.wait(timeout=10)
+            with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as wd:
+                piper_process = subprocess.Popen(
+                    [self.piper_path, "--model", self.voice_path, "--output-raw"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
+                
+                # Send text to stdin
+                piper_process.stdin.write(text.encode("utf-8"))
+                piper_process.stdin.close()
+                
+                if self._profiling_enabled:
+                    print(f"[PIPER_PROFILING] piper process started, text sent")
+                
+                # Read audio and play
+                self._stream_and_play(piper_process)
+                
+                # Wait for process to finish
+                piper_process.wait(timeout=TTS_TIMEOUT_SECONDS)
+                
+                if wd.triggered:
+                    print(f"[WATCHDOG] TTS exceeded watchdog threshold", file=sys.stderr)
             
             if self._profiling_enabled:
                 import time

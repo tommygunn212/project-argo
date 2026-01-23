@@ -134,6 +134,7 @@ class MusicIndex:
         self.music_dir = music_dir
         self.index_file = index_file
         self.tracks: List[Dict] = []
+        self.no_music_available = False
         
         # Validate music directory exists if music is enabled
         music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
@@ -141,6 +142,10 @@ class MusicIndex:
             msg = f"[ARGO] MUSIC_ENABLED=true but MUSIC_DIR not found: {self.music_dir}"
             logger.error(msg)
             raise ValueError(msg)
+
+    def is_empty(self) -> bool:
+        """Return True if the index contains no tracks."""
+        return not bool(self.tracks)
         
     def load_or_create(self) -> Dict:
         """
@@ -156,6 +161,7 @@ class MusicIndex:
                     index = json.load(f)
                 logger.info(f"[ARGO] Music index loaded: {len(index.get('tracks', []))} tracks")
                 self.tracks = index.get("tracks", [])
+                self.no_music_available = not bool(self.tracks)
                 return index
             except Exception as e:
                 logger.warning(f"[ARGO] Failed to load index: {e}. Rescanning...")
@@ -163,6 +169,7 @@ class MusicIndex:
         # Create new index
         logger.info(f"[ARGO] Scanning music directory: {self.music_dir}")
         self.tracks = self._scan_directory()
+        self.no_music_available = not bool(self.tracks)
         
         # Build index document
         index = {

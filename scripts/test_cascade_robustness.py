@@ -11,7 +11,13 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
 
+
 player = MusicPlayer()
+
+# Skip test if Jellyfin is not available
+if not player.jellyfin_provider:
+    print("[SKIP] Jellyfin provider not available. Skipping cascading fallback robustness test.")
+    sys.exit(0)
 
 print("\n" + "="*80)
 print("CASCADING FALLBACK ROBUSTNESS TEST")

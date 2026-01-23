@@ -33,6 +33,8 @@ from abc import ABC, abstractmethod
 import logging
 import re
 from typing import Optional
+from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
+from core.watchdog import Watchdog
 
 # Minimal stop-word list for semantic overlap guard
 STOP_WORDS = {
@@ -433,7 +435,8 @@ class LLMResponseGenerator(ResponseGenerator):
             }
 
             self.logger.debug(f"[_call_llm] Calling {url}")
-            response = self.requests.post(url, json=payload, timeout=30)
+            with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as wd:
+                response = self.requests.post(url, json=payload, timeout=LLM_TIMEOUT_SECONDS)
             
             if response.status_code != 200:
                 raise RuntimeError(
@@ -443,6 +446,10 @@ class LLMResponseGenerator(ResponseGenerator):
             # Parse response
             result = response.json()
             response_text = result.get("response", "").strip()
+
+            if wd.triggered:
+                self.logger.warning("[WATCHDOG] LLM response exceeded watchdog; returning fallback response")
+                return WATCHDOG_FALLBACK_RESPONSE
 
             if not response_text:
                 raise RuntimeError("LLM returned empty response")

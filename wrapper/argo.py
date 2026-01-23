@@ -79,6 +79,7 @@ import json
 import uuid
 import asyncio
 import logging
+from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -2345,15 +2346,46 @@ def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> 
         else:
             print("Transcript rejected. Please try again.")
     """
+    def _failure_artifact(status: str, reason: str):
+        """Create a failure artifact for blocked/unavailable transcription paths."""
+        if "TranscriptionArtifact" in globals() and TranscriptionArtifact:
+            artifact = TranscriptionArtifact()
+            artifact.source_audio = audio_path
+            artifact.transcript_text = None
+            artifact.language_detected = None
+            artifact.confidence = 0.0
+            artifact.status = status
+            artifact.error_detail = reason
+            artifact.confirmation_status = "rejected"
+            return artifact
+        return SimpleNamespace(
+            id=None,
+            timestamp=None,
+            source_audio=audio_path,
+            transcript_text=None,
+            language_detected=None,
+            confidence=0.0,
+            status=status,
+            error_detail=reason,
+            confirmation_status="rejected",
+        )
+
+    # Short-circuit missing files before listening gate (explicit failure artifact)
+    if audio_path and not Path(audio_path).exists():
+        reason = f"Audio file not found: {audio_path}"
+        return False, "", _failure_artifact("failure", reason)
+
     # [Phase 7B] Gate: Check if listening is enabled
     if STATE_MACHINE_AVAILABLE and _state_machine:
         if not _state_machine.listening_enabled():
-            print("⚠ Microphone input blocked: not in LISTENING state", file=sys.stderr)
-            return False, "", None
+            reason = "Microphone input blocked: not in LISTENING state"
+            print(f"⚠ {reason}", file=sys.stderr)
+            return False, "", _failure_artifact("blocked", reason)
     
     if not WHISPER_AVAILABLE:
-        print("⚠ Whisper not installed. Run: pip install openai-whisper", file=sys.stderr)
-        return False, "", None
+        reason = "Whisper not installed. Run: pip install openai-whisper"
+        print(f"⚠ {reason}", file=sys.stderr)
+        return False, "", _failure_artifact("failure", reason)
     
     # Transcribe audio file
     print(f"\n🎤 Transcribing audio...", file=sys.stderr)

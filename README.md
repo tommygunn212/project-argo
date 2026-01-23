@@ -55,6 +55,16 @@ ARGO processes voice through a **complete 7-stage pipeline**:
 | No interrupt capability | ✅ FIXED | Added voice activity monitoring during playback |
 | Incomplete TTS playback | ✅ FIXED | Wait for complete audio from Piper before playback |
 
+## Recent Fixes (January 22, 2026)
+
+| Issue | Status | Fix |
+|-------|--------|-----|
+| Centralized timeout policy | ✅ FIXED | Added core/policy.py for LLM/TTS/audio timeout constants |
+| Silent-failure guardrails | ✅ FIXED | Added watchdogs + NO_OUTPUT detection with safe fallback |
+| Empty music index crash | ✅ FIXED | Defensive handling for empty music catalog |
+| Qwen 3 speed test timeout | ✅ FIXED | Model-specific timeout handling and reporting |
+| Transcription contract gaps | ✅ FIXED | transcribe_and_confirm always returns an artifact |
+
 ## Performance
 
 **Latency Breakdown (averaged over 3 interactions):**
@@ -113,8 +123,8 @@ ARGO processes voice through a **complete 7-stage pipeline**:
 - Temperature, token limits, and prompts hardcoded
 - Not for autonomous execution (just response generation)
 
-**6. Edge-TTS (Text-to-Speech)**
-- Microsoft TTS API, local synthesis
+**6. Piper (Text-to-Speech)**
+- Offline TTS, local synthesis
 - Consistent quality
 - Fast enough for real-time feedback
 
@@ -238,6 +248,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed layer responsibilities and d
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Detailed layer design, "What We Tried and Rejected" section
 - **[MILESTONES.md](MILESTONES.md)** — Project roadmap and future capabilities
+- **[docs/TODO.md](docs/TODO.md)** — Post-validation backlog (API readiness, test hygiene, policy alignment)
 - **[docs/coordinator_v3.md](docs/coordinator_v3.md)** — Bounded loop implementation
 - **[docs/response_generator.md](docs/response_generator.md)** — LLM response generation
 - **[docs/speech_to_text.md](docs/speech_to_text.md)** — Whisper integration

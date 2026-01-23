@@ -13,11 +13,17 @@ from collections import defaultdict
 
 # Test configuration (identical for all models)
 TEST_PROMPT = "Tell me something interesting about machine learning in 2-3 sentences."
+DEFAULT_TIMEOUT_SECONDS = 60
+MODEL_TIMEOUTS = {
+    "qwen3:latest": 120,
+}
+EXPECTED_TIMEOUT_MODELS = {"qwen3:latest"}
 
 # Models to test (from your current Ollama list)
 MODELS_TO_TEST = [
     # Current winner
     ("argo:latest", "Qwen (2.3GB) - CURRENT"),
+    ("qwen3:latest", "Qwen 3 - LATEST"),
     
     # Fast alternatives
     ("starling-lm:latest", "Starling LM (4.1GB)"),
@@ -50,11 +56,12 @@ class ComprehensiveTest:
         
         try:
             # Run with timeout
+            timeout_seconds = MODEL_TIMEOUTS.get(model_id, DEFAULT_TIMEOUT_SECONDS)
             result = subprocess.run(
                 ["ollama", "run", model_id, TEST_PROMPT],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=timeout_seconds,
                 encoding='utf-8',
                 errors='ignore'  # Ignore encoding errors
             )
@@ -76,13 +83,16 @@ class ComprehensiveTest:
             return record
             
         except subprocess.TimeoutExpired:
-            print(f"✗ Timeout (>60s)")
+            expected_timeout = model_id in EXPECTED_TIMEOUT_MODELS
+            timeout_note = "expected" if expected_timeout else "unexpected"
+            print(f"✗ Timeout (>{timeout_seconds}s, {timeout_note})")
             return {
                 "model_id": model_id,
                 "model_name": model_name,
-                "latency_ms": 60000,
+                "latency_ms": timeout_seconds * 1000,
                 "response_preview": "TIMEOUT",
                 "success": False,
+                "expected_timeout": expected_timeout,
             }
         except Exception as e:
             print(f"✗ Error: {type(e).__name__}")
@@ -157,11 +167,17 @@ class ComprehensiveTest:
             print(f"Range: {max_l - min_l:.0f}ms")
         
         # Failed tests
-        failed = [r for r in self.results if not r["success"]]
+        failed = [r for r in self.results if not r["success"] and not r.get("expected_timeout")]
+        expected_timeouts = [r for r in self.results if r.get("expected_timeout")]
         if failed:
             print(f"\n✗ Failed: {len(failed)}")
             for result in failed:
                 print(f"  - {result['model_name']}: {result['response_preview']}")
+
+        if expected_timeouts:
+            print(f"\n⚠ Expected timeouts: {len(expected_timeouts)}")
+            for result in expected_timeouts:
+                print(f"  - {result['model_name']}: TIMEOUT (expected)")
         
         # Save detailed results
         output_file = Path("latency_comparison_comprehensive.json")

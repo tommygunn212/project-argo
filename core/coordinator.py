@@ -69,6 +69,13 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 from core.intent_parser import IntentType
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
+from core.policy import (
+    LLM_WATCHDOG_SECONDS,
+    TTS_WATCHDOG_SECONDS,
+    RESPONSE_WATCHDOG_SECONDS,
+    WATCHDOG_FALLBACK_RESPONSE,
+)
+from core.watchdog import Watchdog
 
 # === Logging ===
 logger = logging.getLogger(__name__)
@@ -438,10 +445,36 @@ class Coordinator:
                                 f"(confidence={intent.confidence:.2f})"
                             )
                             
-                            # 4. Check procedural commands FIRST (before LLM generation)
-                            # Procedural commands must execute immediately without LLM latency
+                            # 4. Fast-path deterministic commands (before LLM generation)
+                            # Procedural and deterministic commands must execute immediately without LLM latency
                             
                             # Check if this is a procedural command (count to N, etc.)
+                            response_watchdog = Watchdog("RESPONSE", RESPONSE_WATCHDOG_SECONDS)
+                            response_watchdog.__enter__()
+                            output_produced = False
+                            response_watchdog_finalized = False
+
+                            def _finalize_response_watchdog():
+                                nonlocal output_produced, response_watchdog_finalized
+                                if response_watchdog_finalized:
+                                    return
+                                response_watchdog.__exit__(None, None, None)
+                                response_watchdog_finalized = True
+                                if response_watchdog.triggered and not output_produced:
+                                    self.logger.warning(
+                                        "[WATCHDOG] NO_OUTPUT_DETECTED: elapsed=%.2fs",
+                                        response_watchdog.elapsed_seconds,
+                                    )
+                                    if WATCHDOG_FALLBACK_RESPONSE:
+                                        try:
+                                            self.sink.speak(WATCHDOG_FALLBACK_RESPONSE)
+                                            output_produced = True
+                                        except Exception:
+                                            pass
+                                    # Reset to safe idle state
+                                    self.stop_requested = False
+                                    self._is_speaking.clear()
+
                             if self.executor.can_execute(text):
                                 self.logger.info(f"[Iteration {self.interaction_count}] Procedural command detected: '{text}'")
                                 # TASK 15: Mark LLM start (skip for procedural commands)
@@ -450,14 +483,17 @@ class Coordinator:
                                     # Execute command directly (bypasses LLM)
                                     self.executor.execute(text)
                                     response_text = ""  # No LLM response for procedural commands
+                                    output_produced = True
                                     self.current_probe.mark("llm_end")
                                     # Exit callback - procedural command complete, skip LLM
                                     self.logger.info(f"[Iteration {self.interaction_count}] Procedural command complete")
+                                    _finalize_response_watchdog()
                                     return
                                 except Exception as e:
                                     self.logger.error(f"[Iteration {self.interaction_count}] Procedural command failed: {e}")
                                     response_text = "Command failed."
                                     self.current_probe.mark("llm_end")
+                                    _finalize_response_watchdog()
                                     return
                             
                             # Generate response (LLM, with SessionMemory available)
@@ -468,6 +504,8 @@ class Coordinator:
                             # TASK 15: Mark LLM start
                             self.current_probe.mark("llm_start")
                             
+                            # Deterministic commands: STOP/PAUSE (music), NEXT, STATUS
+                            # These routes bypass LLM entirely and execute directly.
                             # Check if this is a STOP command (highest priority - short-circuit)
                             if intent.intent_type == IntentType.MUSIC_STOP:
                                 self.logger.info(f"[Iteration {self.interaction_count}] STOP command: Stopping music")
@@ -477,9 +515,11 @@ class Coordinator:
                                 
                                 # Optional brief response
                                 self.sink.speak("Stopped.")
+                                output_produced = True
                                 response_text = ""
                                 self.current_probe.mark("llm_end")
                                 # Exit callback - continue to next iteration (outer loop)
+                                _finalize_response_watchdog()
                                 return
                             
                             # Check if this is a NEXT command (highest priority - short-circuit)
@@ -492,14 +532,17 @@ class Coordinator:
                                 if not playback_started:
                                     self.sink.speak("No music playing.")
                                     self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
+                                    output_produced = True
                                 else:
                                     self.logger.info(f"[Iteration {self.interaction_count}] NEXT: Started playback")
                                     # Monitor for interrupt during music playback
                                     self._monitor_music_interrupt(music_player)
+                                    output_produced = True
                                 
                                 response_text = ""
                                 self.current_probe.mark("llm_end")
                                 # Exit callback - continue to next iteration (outer loop)
+                                _finalize_response_watchdog()
                                 return
                             
                             # Check if this is a STATUS query (read-only - no side effects)
@@ -510,10 +553,12 @@ class Coordinator:
                                 status = query_music_status()
                                 self.sink.speak(status)
                                 self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
+                                output_produced = True
                                 
                                 response_text = ""
                                 self.current_probe.mark("llm_end")
                                 # Exit callback - continue to next iteration (outer loop)
+                                _finalize_response_watchdog()
                                 return
                             
                             # Check if this is a music command (before LLM processing)
@@ -581,16 +626,22 @@ class Coordinator:
                                 # Speak error message only once (if no playback started)
                                 if error_message and not playback_started:
                                     self.sink.speak(error_message)
+                                    output_produced = True
                                 
                                 # Monitor for interrupt during music playback
                                 if playback_started:
                                     self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
                                     self._monitor_music_interrupt(music_player)
+                                    output_produced = True
                                 
                                 self.current_probe.mark("llm_end")
                             else:
-                                # Normal LLM response
-                                response_text = self.generator.generate(intent, self.memory)
+                                # Normal LLM response (watchdog-protected)
+                                with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as llm_wd:
+                                    response_text = self.generator.generate(intent, self.memory)
+                                if llm_wd.triggered:
+                                    self.logger.warning("[WATCHDOG] LLM exceeded watchdog; using fallback response")
+                                    response_text = WATCHDOG_FALLBACK_RESPONSE
                                 self.current_probe.mark("llm_end")
                             
                             # PHASE 16: Capture for observer snapshot
@@ -615,7 +666,11 @@ class Coordinator:
                                 self._is_speaking.set()
                                 try:
                                     # Speak and monitor for user interrupt (voice input during playback)
-                                    self._speak_with_interrupt_detection(response_text)
+                                    with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as tts_wd:
+                                        self._speak_with_interrupt_detection(response_text)
+                                    if tts_wd.triggered:
+                                        self.logger.warning("[WATCHDOG] TTS exceeded watchdog threshold")
+                                    output_produced = True
                                 finally:
                                     self._is_speaking.clear()
                             else:
@@ -659,6 +714,8 @@ class Coordinator:
                             # TASK 15: Log interaction latency and add to stats
                             self.current_probe.log_summary()
                             self.latency_stats.add_probe(self.current_probe)
+
+                            _finalize_response_watchdog()
                             
                         except Exception as e:
                             self.logger.error(

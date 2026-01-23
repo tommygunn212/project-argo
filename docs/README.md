@@ -55,6 +55,15 @@ STOP dominance guaranteed:
 
 ---
 
+## Recent Guardrails (January 22, 2026)
+
+Centralized safety policies and watchdogs were added to prevent hangs and silent failures:
+- Timeout policy constants consolidated in core/policy.py
+- Watchdogs for LLM, TTS, audio playback, and full response cycle
+- NO_OUTPUT detection with safe fallback response
+
+See also: [TODO / Next Steps](TODO.md)
+
 ## Voice System (Phase 7A)
 
 ### Phase 7A-2: Audio Streaming (COMPLETE)
