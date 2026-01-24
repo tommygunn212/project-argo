@@ -26,6 +26,8 @@ Configuration:
 
 from abc import ABC, abstractmethod
 import logging
+import threading
+import time
 from typing import Callable, Optional
 import warnings
 
@@ -156,6 +158,10 @@ class PorcupineWakeWordTrigger(InputTrigger):
         
         # Cached interrupt detector (reuse to avoid re-initialization)
         self._porcupine_interrupt_detector = None
+        self._paused = threading.Event()
+        self._hard_stop = threading.Event()
+        self._active_stream = None
+        self._is_listening = threading.Event()
         
         self.logger.info("[InputTrigger.Porcupine] Initialized")
         self.logger.debug(f"  Access key: {self.access_key[:10]}...")
@@ -189,6 +195,10 @@ class PorcupineWakeWordTrigger(InputTrigger):
                 "Install with: pip install porcupine sounddevice"
             )
         
+        if self._hard_stop.is_set():
+            self.logger.info("[on_trigger] Hard stop active; skipping wake-word listen")
+            return
+
         self.logger.info("[on_trigger] Initializing Porcupine...")
         self.preroll_buffer.clear()  # Clear pre-roll buffer on each trigger listen
         
@@ -215,11 +225,31 @@ class PorcupineWakeWordTrigger(InputTrigger):
                     blocksize=porcupine.frame_length,
                     dtype='int16'
                 )
+                self._active_stream = stream
                 stream.start()
                 self.logger.info("[Audio] Listening for wake word 'picovoice'...")
+                self._is_listening.set()
                 
                 # Listen until wake word detected
                 while True:
+                    if self._hard_stop.is_set():
+                        self.logger.info("[InputTrigger.Porcupine] Hard stop requested; exiting listen loop")
+                        break
+                    if self._paused.is_set():
+                        # Pause capture while TTS is speaking to avoid audio device contention
+                        if stream.active:
+                            try:
+                                stream.stop()
+                            except Exception:
+                                pass
+                        time.sleep(0.05)
+                        continue
+                    else:
+                        if not stream.active:
+                            try:
+                                stream.start()
+                            except Exception:
+                                pass
                     frame, _ = stream.read(porcupine.frame_length)
                     
                     # Maintain pre-roll buffer (circular buffer of recent frames)
@@ -251,10 +281,54 @@ class PorcupineWakeWordTrigger(InputTrigger):
                         self.logger.info("[Audio] Stream closed successfully")
                     except Exception as e:
                         self.logger.warning(f"[Audio] Error closing stream: {e}")
+                self._active_stream = None
+                self._is_listening.clear()
         
         except Exception as e:
             self.logger.error(f"[on_trigger] Failed: {e}")
             raise
+
+    def pause(self) -> None:
+        """Pause wake-word detection (hard half-duplex gate)."""
+        self._paused.set()
+        self.logger.debug("[InputTrigger.Porcupine] Paused")
+
+    def resume(self) -> None:
+        """Resume wake-word detection."""
+        self._paused.clear()
+        self.logger.debug("[InputTrigger.Porcupine] Resumed")
+
+    def hard_stop(self) -> None:
+        """Hard-stop wake-word detection and close input stream."""
+        self._hard_stop.set()
+        self._paused.set()
+        if self._active_stream is not None:
+            try:
+                if hasattr(self._active_stream, "abort"):
+                    self._active_stream.abort()
+                if self._active_stream.active:
+                    self._active_stream.stop()
+            except Exception:
+                pass
+            try:
+                self._active_stream.close()
+            except Exception:
+                pass
+        self.logger.info("[InputTrigger.Porcupine] Hard stop")
+
+    def hard_resume(self) -> None:
+        """Clear hard-stop and allow wake-word detection again."""
+        self._hard_stop.clear()
+        self._paused.clear()
+        self.logger.info("[InputTrigger.Porcupine] Hard resume")
+
+    def is_listening(self) -> bool:
+        """Return True if wake-word loop is active."""
+        return self._is_listening.is_set()
+
+    def is_stream_active(self) -> bool:
+        """Return True if the input stream is active."""
+        return self._active_stream is not None and self._active_stream.active
     
     def get_preroll_buffer(self):
         """
@@ -279,6 +353,8 @@ class PorcupineWakeWordTrigger(InputTrigger):
         Returns:
             True if voice activity detected (interrupt), False otherwise
         """
+        if self._hard_stop.is_set() or self._paused.is_set():
+            return False
         import os
         import sounddevice as sd
         import numpy as np

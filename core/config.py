@@ -18,7 +18,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # Feature flags
-ENABLE_LLM_TTS_STREAMING = False
+ENABLE_LLM_TTS_STREAMING = True
 
 
 class Config:

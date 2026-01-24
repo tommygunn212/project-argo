@@ -187,22 +187,12 @@ def _get_voice_model_path(profile: str = None) -> str:
 # ============================================================================
 
 _output_sink: Optional[OutputSink] = None
+_audio_disabled_warning_issued = False
 """Global output sink instance (lazy initialization)."""
 
-
 def get_output_sink() -> OutputSink:
-    """
-    Get or initialize the global OutputSink.
-    
-    If VOICE_ENABLED and PIPER_ENABLED: use PiperOutputSink
-    Otherwise: use SilentOutputSink
-    
-    Returns:
-        OutputSink: The global instance
-    """
-    global _output_sink
+    global _output_sink, _audio_disabled_warning_issued
     if _output_sink is None:
-        # Check if Piper should be enabled
         if VOICE_ENABLED and PIPER_ENABLED:
             try:
                 _output_sink = PiperOutputSink()
@@ -210,9 +200,11 @@ def get_output_sink() -> OutputSink:
                 print(f"⚠ Failed to initialize PiperOutputSink: {e}", file=sys.stderr)
                 _output_sink = SilentOutputSink()
         else:
+            if not _audio_disabled_warning_issued:
+                print("\n[WARNING] Audio output is disabled by environment flags. ARGO will respond silently.\nTo enable voice output, set VOICE_ENABLED=true and PIPER_ENABLED=true\n", file=sys.stderr)
+                _audio_disabled_warning_issued = True
             _output_sink = SilentOutputSink()
     return _output_sink
-
 
 def set_output_sink(sink: OutputSink) -> None:
     """
@@ -263,6 +255,8 @@ class PiperOutputSink(OutputSink):
         
         Raises ValueError if Piper or voice model not found.
         """
+        if not VOICE_ENABLED or not PIPER_ENABLED:
+            raise RuntimeError("PiperOutputSink cannot be initialized: VOICE_ENABLED and PIPER_ENABLED must both be true.")
         self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
         
         # Get voice model path based on VOICE_PROFILE
@@ -291,6 +285,13 @@ class PiperOutputSink(OutputSink):
         self.text_queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._piper_process: Optional[subprocess.Popen] = None
+        self._playback_lock = threading.Lock()
+        self._is_playing = False
+        self._on_sentence_dequeued: Optional[Callable[[], None]] = None
+        self._on_idle: Optional[Callable[[], None]] = None
+        self._on_playback_start: Optional[Callable[[], None]] = None
+        self._on_playback_complete: Optional[Callable[[], None]] = None
+        self._pending_text: str = ""
         
         # Start background worker thread (daemon so it stops when main thread exits)
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
@@ -311,6 +312,8 @@ class PiperOutputSink(OutputSink):
         while True:
             try:
                 # Get next item from queue (blocking)
+                import time
+                time.sleep(0.5)  # Wait 500ms between dequeuing sentences
                 item = self.text_queue.get(timeout=0.5)
                 
                 # Poison pill: stop signal
@@ -319,10 +322,32 @@ class PiperOutputSink(OutputSink):
                         print(f"[DEBUG] PiperOutputSink: Worker thread received poison pill, exiting", file=sys.stderr)
                     break
                 
+                # Notify dequeue (hard half-duplex gate)
+                if self._on_sentence_dequeued:
+                    try:
+                        self._on_sentence_dequeued()
+                    except Exception:
+                        pass
+
                 # Process sentence
-                self._play_sentence(item)
-                # Small buffer-clear delay to reduce stutter between sentences
-                time.sleep(0.1)
+                self._set_playing(True)
+                try:
+                    self._play_sentence(item)
+                finally:
+                    self._set_playing(False)
+
+                # Resume trigger only when queue empty and playback idle
+                if self.text_queue.empty() and self.is_idle():
+                    if self._on_playback_complete:
+                        try:
+                            self._on_playback_complete()
+                        except Exception:
+                            pass
+                    if self._on_idle:
+                        try:
+                            self._on_idle()
+                        except Exception:
+                            pass
                 
             except queue.Empty:
                 # Timeout on get() - check if we should stop
@@ -335,31 +360,32 @@ class PiperOutputSink(OutputSink):
                     import traceback
                     traceback.print_exc()
     
-    def _play_sentence(self, text: str):
-        """
-        Play a sentence via Piper subprocess.
+    def _play_sentence(self, sentence: str) -> None:
+        """Play a sentence via Piper subprocess with adaptive pacing."""
+        import time
         
-        Runs in worker thread (not event loop).
-        Uses subprocess.Popen directly (no asyncio).
-        Handles streaming audio with sounddevice.
-        
-        Args:
-            text: Text to synthesize and play
-        """
-        if not text or not text.strip():
+        if not sentence or not sentence.strip():
             return
         
-        if self._profiling_enabled:
-            import time
-            time_start = time.time()
-            print(f"[PIPER_PROFILING] play_sentence_start: {text[:50]}... @ {time_start:.3f}")
-        
+        time_start = time.time()
         piper_process = None
+        audio_duration = 0
+        
         try:
+            if self._profiling_enabled:
+                print(f"[PIPER_PROFILING] play_sentence_start: {sentence[:50]}...")
+            
             # Start Piper subprocess
             with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as wd:
                 piper_process = subprocess.Popen(
-                    [self.piper_path, "--model", self.voice_path, "--output-raw"],
+                    [
+                        self.piper_path,
+                        "--model",
+                        self.voice_path,
+                        "--output-raw",
+                        "--length_scale",
+                        "0.85",
+                    ],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -367,25 +393,20 @@ class PiperOutputSink(OutputSink):
                 )
                 
                 # Send text to stdin
-                piper_process.stdin.write(text.encode("utf-8"))
+                piper_process.stdin.write(sentence.encode("utf-8"))
                 piper_process.stdin.close()
                 
                 if self._profiling_enabled:
                     print(f"[PIPER_PROFILING] piper process started, text sent")
                 
-                # Read audio and play
-                self._stream_and_play(piper_process)
+                # Read audio and play (BLOCKING)
+                audio_duration = self._stream_and_play(piper_process)
                 
                 # Wait for process to finish
                 piper_process.wait(timeout=TTS_TIMEOUT_SECONDS)
                 
                 if wd.triggered:
                     print(f"[WATCHDOG] TTS exceeded watchdog threshold", file=sys.stderr)
-            
-            if self._profiling_enabled:
-                import time
-                time_end = time.time()
-                print(f"[PIPER_PROFILING] play_sentence_complete: {(time_end-time_start)*1000:.1f}ms total")
         
         except subprocess.TimeoutExpired:
             print(f"[AUDIO_ERROR] Piper subprocess timeout", file=sys.stderr)
@@ -405,6 +426,17 @@ class PiperOutputSink(OutputSink):
                 except Exception:
                     pass
             self._piper_process = None
+            
+            # Log total duration
+            if self._profiling_enabled:
+                time_end = time.time()
+                duration_ms = (time_end - time_start) * 1000
+                print(f"[PIPER_PROFILING] play_sentence_complete: {duration_ms:.1f}ms")
+            
+            # Adaptive pacing: wait ~5% of audio duration (min 0.1s, max 0.5s)
+            if audio_duration:
+                delay = min(max(audio_duration * 0.05, 0.1), 0.5)
+                time.sleep(delay)
     
     def _stream_and_play(self, process: subprocess.Popen):
         """
@@ -419,65 +451,118 @@ class PiperOutputSink(OutputSink):
         try:
             import sounddevice
             import numpy as np
+            import time
+            import threading
+            import queue
         except ImportError:
             if self._profiling_enabled:
                 print("[DEBUG] sounddevice/numpy not installed; audio playback disabled", file=sys.stderr)
-            return
+            return 0
         
         try:
             SAMPLE_RATE = 22050
             SAMPLE_WIDTH = 2  # int16 = 2 bytes
-            CHUNK_SIZE = 4410  # 200ms @ 22050Hz
-            
-            # Read all audio data from Piper
-            audio_bytes = b''
-            while True:
-                chunk = process.stdout.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                audio_bytes += chunk
-            
-            if not audio_bytes:
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] no_audio_received from Piper", file=sys.stderr)
-                return
-            
-            # Convert to numpy array (int16 -> float32)
-            audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            
-            if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] audio_total: {len(audio_bytes)} bytes ({len(audio_data)} samples, {len(audio_data)/SAMPLE_RATE:.2f}s)")
-            
-            # Normalize if clipping
-            max_abs = np.abs(audio_data).max()
-            if max_abs > 1.0:
-                if self._profiling_enabled:
-                    print(f"[PIPER_PROFILING] normalizing audio (max was {max_abs:.4f})")
-                audio_data = audio_data / max_abs
-            
-            # Play audio in small chunks (sequential)
-            if self._profiling_enabled:
-                print(f"[PIPER_PROFILING] playback_start")
+            BLOCK_FRAMES = 2048
+            CHUNK_BYTES = BLOCK_FRAMES * SAMPLE_WIDTH
+            MIN_PREROLL_FRAMES = int(SAMPLE_RATE * 0.1)  # 100ms
 
-            sounddevice.default.latency = "high"
-            CHUNK_SIZE = 1024
-            for i in range(0, len(audio_data), CHUNK_SIZE):
-                chunk = audio_data[i:i + CHUNK_SIZE]
-                sounddevice.play(chunk, samplerate=SAMPLE_RATE, blocksize=2048, blocking=True)
-                sounddevice.wait()
-            
+            audio_queue = queue.Queue(maxsize=50)
+            eof = object()
+            producer_done = threading.Event()
+            queued_frames = 0
+            queued_lock = threading.Lock()
+            total_frames = 0
+
+            def producer():
+                nonlocal queued_frames, total_frames
+                while True:
+                    data = process.stdout.read(CHUNK_BYTES)
+                    if not data:
+                        break
+                    audio_queue.put(data)
+                    frames = len(data) // SAMPLE_WIDTH
+                    total_frames += frames
+                    with queued_lock:
+                        queued_frames += frames
+                producer_done.set()
+                audio_queue.put(eof)
+
+            def callback(outdata, frames, time_info, status):
+                nonlocal queued_frames
+                if status and self._profiling_enabled:
+                    print(f"[AUDIO_STATUS] {status}", file=sys.stderr)
+                out = np.zeros(frames, dtype=np.float32)
+                filled = 0
+                while filled < frames:
+                    try:
+                        item = audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if item is eof:
+                        raise sounddevice.CallbackStop()
+                    data = np.frombuffer(item, dtype=np.int16).astype(np.float32) / 32768.0
+                    take = min(frames - filled, len(data))
+                    out[filled:filled+take] = data[:take]
+                    filled += take
+                    remaining = data[take:]
+                    if remaining.size > 0:
+                        # Put remainder back to front by re-queueing
+                        audio_queue.queue.appendleft(remaining.tobytes())
+                    with queued_lock:
+                        queued_frames -= take
+                outdata[:] = out.reshape(-1, 1)
+
+            # Explicit device handshake before playback
+            sounddevice.stop()
+            time.sleep(0.05)
+
+            producer_thread = threading.Thread(target=producer, daemon=True)
+            producer_thread.start()
+
+            # Pre-roll: wait until buffered frames reach threshold or producer finishes
+            while True:
+                with queued_lock:
+                    if queued_frames >= MIN_PREROLL_FRAMES:
+                        break
+                if producer_done.is_set():
+                    break
+                time.sleep(0.01)
+
+            if self._profiling_enabled and total_frames > 0:
+                duration_seconds = total_frames / SAMPLE_RATE
+                print(f"[PIPER_PROFILING] playback_start: {duration_seconds:.2f}s")
+
+            if self._on_playback_start:
+                try:
+                    self._on_playback_start()
+                except Exception:
+                    pass
+
+            with sounddevice.OutputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype='float32',
+                blocksize=BLOCK_FRAMES,
+                callback=callback,
+            ):
+                while not producer_done.is_set() or not audio_queue.empty():
+                    time.sleep(0.01)
+
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_complete")
-            
-            # Drain: brief sleep for hardware buffer
-            import time
-            time.sleep(0.2)
+
+            # Hardware drain
+            sounddevice.wait()
+            time.sleep(0.5)
+
+            return total_frames / SAMPLE_RATE if total_frames else 0
         
         except Exception as e:
             print(f"[AUDIO_ERROR] Stream and play error: {type(e).__name__}: {e}", file=sys.stderr)
             if self._profiling_enabled:
                 import traceback
                 traceback.print_exc()
+            return 0
     
     def send(self, text: str) -> None:
         """
@@ -492,6 +577,11 @@ class PiperOutputSink(OutputSink):
         if not text or not text.strip():
             return
         
+        # CRITICAL: Remove newlines before splitting
+        text = text.replace('\n', ' ')
+        text = text.replace('\r', ' ')
+        text = text.replace('  ', ' ')  # Remove double spaces
+        
         # Split text into sentences using regex
         # Split on . ! ? followed by space or end-of-string
         sentences = re.split(r'(?<=[.!?])\s+', text.strip())
@@ -503,6 +593,28 @@ class PiperOutputSink(OutputSink):
                 self.text_queue.put(sentence)
                 if self._profiling_enabled:
                     print(f"[DEBUG] Queued sentence: {sentence[:50]}...", file=sys.stderr)
+
+    def set_playback_hooks(
+        self,
+        on_sentence_dequeued: Optional[Callable[[], None]] = None,
+        on_idle: Optional[Callable[[], None]] = None,
+        on_playback_start: Optional[Callable[[], None]] = None,
+        on_playback_complete: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Set playback hooks for strict half-duplex gating."""
+        self._on_sentence_dequeued = on_sentence_dequeued
+        self._on_idle = on_idle
+        self._on_playback_start = on_playback_start
+        self._on_playback_complete = on_playback_complete
+
+    def _set_playing(self, is_playing: bool) -> None:
+        with self._playback_lock:
+            self._is_playing = is_playing
+
+    def is_idle(self) -> bool:
+        """Return True if playback thread is idle (no active Piper/sounddevice work)."""
+        with self._playback_lock:
+            return not self._is_playing
     
     def speak(self, text: str) -> None:
         """

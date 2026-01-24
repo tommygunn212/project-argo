@@ -162,21 +162,25 @@ class Coordinator:
     coordinator.run()  # Loops until stop condition or max interactions
     ```
     """
+
+    AUDIO_STATE_IDLE = "IDLE"
+    AUDIO_STATE_LISTENING = "LISTENING"
+    AUDIO_STATE_SPEAKING = "SPEAKING"
     
     # Audio recording parameters
     AUDIO_SAMPLE_RATE = 16000  # Hz
     MAX_RECORDING_DURATION = 15.0  # seconds max (safety net) — Extended for longer LED explanation
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
-    SILENCE_DURATION = 2.2  # Seconds of silence to stop recording — Tuned for natural pauses
+    SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — LOWERED from 2.2s (was too aggressive)
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
-    SILENCE_TIMEOUT_SECONDS = 5.0  # Seconds of silence to stop recording — Increased for detailed explanations
-    SILENCE_THRESHOLD = 800  # Audio level below this = silence (RMS absolute) — Tuned for room hum
-    RMS_SPEECH_THRESHOLD = 0.015  # RMS normalized level (0-1) to START silence timer — Reduced sensitivity
+    SILENCE_TIMEOUT_SECONDS = 1.2  # Seconds of silence to stop recording — LOWERED from 5.0s
+    SILENCE_THRESHOLD = 250  # Audio level below this = silence (RMS absolute) — LOWERED ~30% from 800
+    RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — LOWERED from 0.015
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
     # Debug/profiling flags
-    RECORD_DEBUG = False  # Set to True for detailed recording metrics (or via env var)
+    RECORD_DEBUG = True  # Set to True for detailed recording metrics (or via env var)
     
     # Loop control (hardcoded)
     MAX_INTERACTIONS = 10  # Max interactions per session — Increased for longer testing
@@ -207,6 +211,13 @@ class Coordinator:
         self.generator = response_generator
         self.sink = output_sink
         self.logger = logger
+
+        # Ensure global output sink uses this instance (streaming uses get_output_sink)
+        try:
+            from core.output_sink import set_output_sink
+            set_output_sink(self.sink)
+        except Exception:
+            pass
         
         # CommandExecutor for procedural commands (count to N, etc.)
         self.executor = CommandExecutor(audio_sink=output_sink)
@@ -236,6 +247,8 @@ class Coordinator:
         self._is_speaking.clear()  # Initially not speaking
         self._is_processing = threading.Event()
         self._is_processing.clear()
+        self._tts_gate_active = threading.Event()
+        self._tts_gate_active.clear()
         
         # Debug/profiling flag from environment (can override class default)
         self.record_debug = os.getenv("RECORD_DEBUG", "").lower() == "true" or self.RECORD_DEBUG
@@ -275,6 +288,25 @@ class Coordinator:
         self.logger.debug(f"  SessionMemory: capacity={self.memory.capacity}")
         self.logger.debug(f"  Max interactions: {self.MAX_INTERACTIONS}")
         self.logger.debug(f"  Stop keywords: {self.STOP_KEYWORDS}")
+
+        # Audio state machine (strict half-duplex)
+        self._audio_state = self.AUDIO_STATE_LISTENING
+        self._audio_state_lock = threading.Lock()
+        self._input_stream = None
+        self._input_stream_active = False
+        self._input_stop_event = threading.Event()
+
+        # Hard half-duplex gate via output sink (pause/resume wake word)
+        if hasattr(self.sink, "set_playback_hooks"):
+            try:
+                self.sink.set_playback_hooks(
+                    on_playback_start=self._pause_trigger_for_tts,
+                    on_playback_complete=self._resume_trigger_after_tts,
+                )
+            except Exception as e:
+                self.logger.debug(f"[Coordinator] Failed to set playback hooks: {e}")
+
+        self._set_audio_state(self.AUDIO_STATE_LISTENING)
     
     def get_dynamic_timeout(self, transcribed_text: str) -> float:
         """
@@ -311,6 +343,85 @@ class Coordinator:
             except Exception as e:
                 self.logger.debug(f"[Coordinator] on_status_update error: {e}")
 
+    def _pause_trigger_for_tts(self) -> None:
+        """Pause wake-word detection when audio playback starts."""
+        self._set_audio_state(self.AUDIO_STATE_SPEAKING)
+        self._stop_input_audio("tts_playback_start")
+        self._is_speaking.set()
+        self._tts_gate_active.set()
+
+    def _resume_trigger_after_tts(self) -> None:
+        """Resume wake-word detection when audio queue drains and playback is idle."""
+        if self.stop_requested:
+            return
+        self._resume_input_audio("tts_playback_complete")
+        self._set_audio_state(self.AUDIO_STATE_LISTENING)
+        self._is_speaking.clear()
+        self._tts_gate_active.clear()
+
+    def _set_audio_state(self, new_state: str) -> None:
+        with self._audio_state_lock:
+            old_state = self._audio_state
+            if old_state == new_state:
+                return
+            self._audio_state = new_state
+        self.logger.info(f"[AudioState] {old_state} -> {new_state}")
+        if new_state == self.AUDIO_STATE_SPEAKING and self._is_input_active():
+            self.logger.error("[AudioState] Full-duplex detected: input active during SPEAKING")
+
+    def _is_input_active(self) -> bool:
+        if self._input_stream_active:
+            return True
+        if hasattr(self.trigger, "is_listening") and self.trigger.is_listening():
+            return True
+        if hasattr(self.trigger, "is_stream_active") and self.trigger.is_stream_active():
+            return True
+        return False
+
+    def _stop_input_audio(self, reason: str) -> None:
+        self._input_stop_event.set()
+        if self._input_stream is not None:
+            try:
+                if hasattr(self._input_stream, "abort"):
+                    self._input_stream.abort()
+                if self._input_stream.active:
+                    self._input_stream.stop()
+            except Exception:
+                pass
+            try:
+                self._input_stream.close()
+            except Exception:
+                pass
+            self._input_stream = None
+            self._input_stream_active = False
+        try:
+            from voice_input import stop_continuous_audio_stream
+            stop_continuous_audio_stream()
+        except Exception:
+            pass
+        if hasattr(self.trigger, "hard_stop"):
+            try:
+                self.trigger.hard_stop()
+            except Exception:
+                pass
+        self.logger.info(f"[AudioState] Input stopped ({reason})")
+        if self._is_input_active():
+            self.logger.error("[AudioState] Full-duplex detected: input still active after stop")
+
+    def _resume_input_audio(self, reason: str) -> None:
+        self._input_stop_event.clear()
+        if hasattr(self.trigger, "hard_resume"):
+            try:
+                self.trigger.hard_resume()
+            except Exception:
+                pass
+        try:
+            from voice_input import start_continuous_audio_stream
+            start_continuous_audio_stream()
+        except Exception:
+            pass
+        self.logger.info(f"[AudioState] Input resumed ({reason})")
+
     def _play_wake_ack(self) -> None:
         """Play a short wake acknowledgment (non-blocking fallback)."""
         if not self.WAKE_ACK_ENABLED:
@@ -338,14 +449,20 @@ class Coordinator:
         start_time = time.time()
         stream = None
         try:
+            if self._audio_state == self.AUDIO_STATE_SPEAKING:
+                return None
             stream = sd.InputStream(
                 channels=1,
                 samplerate=self.AUDIO_SAMPLE_RATE,
                 dtype=np.int16,
             )
+            self._input_stream = stream
+            self._input_stream_active = True
             stream.start()
 
             while True:
+                if self._input_stop_event.is_set() or self._audio_state == self.AUDIO_STATE_SPEAKING:
+                    return None
                 if max_wait_seconds is not None and (time.time() - start_time) >= max_wait_seconds:
                     return None
 
@@ -370,6 +487,8 @@ class Coordinator:
                     stream.close()
                 except Exception as e:
                     self.logger.debug(f"[Listen] Error closing stream: {e}")
+            self._input_stream = None
+            self._input_stream_active = False
 
     def _handle_interaction(self, initial_frames: Optional[list] = None, mark_wake: bool = False) -> bool:
         """
@@ -1027,6 +1146,8 @@ class Coordinator:
     def stop(self) -> None:
         """Stop the coordinator loop gracefully."""
         self.logger.info("[stop] Stop requested via stop() method")
+        self._set_audio_state(self.AUDIO_STATE_IDLE)
+        self._stop_input_audio("stop_requested")
         self.stop_requested = True
     
     def _record_with_silence_detection(self, initial_frames: Optional[list] = None) -> np.ndarray:
@@ -1083,17 +1204,32 @@ class Coordinator:
         recording_start_time = time.time()
         stream = None
         try:
+            # DEBUG: Print available devices so we can see what's connected
+            import sounddevice as sd_enum
+            if self.record_debug:
+                self.logger.info("[Record] Available audio devices:")
+                devices = sd_enum.query_devices()
+                for i, dev in enumerate(devices):
+                    self.logger.info(f"  [{i}] {dev['name']} (in={dev['max_input_channels']}, out={dev['max_output_channels']})")
+            
+            # Select microphone by index (prevent Windows "virtual nothing mic")
+            # For now use default; if you know your mic index, set: sd.default.device = (MIC_INDEX, None)
+            # MIC_INDEX should be from the device list above
+            
             stream = sd.InputStream(
                 channels=1,
                 samplerate=self.AUDIO_SAMPLE_RATE,
                 dtype=np.int16,
             )
+            self._input_stream = stream
+            self._input_stream_active = True
             stream.start()
             
             rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
+            chunk_count = 0  # For RMS logging every 20 chunks
             
             while total_samples < max_samples:
-                if self._is_speaking.is_set():
+                if self._is_speaking.is_set() or self._input_stop_event.is_set() or self._audio_state == self.AUDIO_STATE_SPEAKING:
                     stop_reason = "speaking_gate"
                     if self.record_debug:
                         self.logger.info("[Record] Aborting: speaking gate active")
@@ -1110,6 +1246,17 @@ class Coordinator:
                 # Calculate RMS for this chunk (normalized 0-1)
                 rms = np.sqrt(np.mean(chunk.astype(float) ** 2)) / 32768.0  # Normalize int16 range
                 rms_samples.append(rms)
+                chunk_count += 1
+                
+                # Log RMS every 20 chunks (~2 seconds) to see if mic is capturing
+                if chunk_count % 20 == 0:
+                    self.logger.debug(f"[AudioDebug] RMS={rms:.4f} (elapsed={elapsed_time:.2f}s)")
+                
+                # CRITICAL: Abort early if no voice detected after 2.5s
+                if elapsed_time > 2.5 and np.mean(rms_samples[-25:] if len(rms_samples) >= 25 else rms_samples) < 0.002:
+                    stop_reason = "no_voice_detected"
+                    self.logger.warning("[Record] No voice detected (avg RMS < 0.002 after 2.5s), aborting early")
+                    break
                 
                 # Detect speech (RMS > threshold) — only start silence timer after speech detected
                 if not speech_detected and rms > self.RMS_SPEECH_THRESHOLD:
@@ -1168,6 +1315,8 @@ class Coordinator:
                     stream.close()
                 except Exception as e:
                     self.logger.warning(f"[Record] Error closing stream: {e}")
+            self._input_stream = None
+            self._input_stream_active = False
         
         # Emit debug metrics (gated by RECORD_DEBUG flag)
         if self.record_debug and rms_samples:

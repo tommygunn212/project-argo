@@ -30,6 +30,7 @@ from abc import ABC, abstractmethod
 import logging
 import os
 import re
+import json
 from typing import Optional
 from core.config import ENABLE_LLM_TTS_STREAMING, get_config
 from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
@@ -141,7 +142,8 @@ class LLMResponseGenerator(ResponseGenerator):
             self._enable_tts_streaming = ENABLE_LLM_TTS_STREAMING
         # Streaming output tracker (per call)
         self._streamed_output = False
-        # Canonical examples (mild)
+        # Canonical voice examples (authoritative)
+        self._canonical_voice_text = self._load_canonical_voice_text()
         self._canonical_examples = self._load_canonical_examples()
         # Debug flag (set per prompt)
         self._personality_examples_applied = False
@@ -352,6 +354,8 @@ class LLMResponseGenerator(ResponseGenerator):
             if not response_text or not response_text.strip():
                 self.logger.error("[generate] Empty LLM response detected — using fallback")
                 return "I didn’t get that cleanly. Try rephrasing."
+            if self._streamed_output:
+                return self._finalize_response(response_text, intent)
             if self._needs_regen_bluntness(response_text):
                 regen_prompt = prompt + "\nInstruction: Too robotic. Be more blunt."
                 response_text = self._call_llm(regen_prompt)
@@ -404,16 +408,13 @@ class LLMResponseGenerator(ResponseGenerator):
             system_context = f"System profile: {self._system_profile}\n\n"
 
         critical_prompt = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
-        mentor_prompt = (
-            "ARGO Persona: Veteran Mentor (Warm, Wry, Capable).\n"
-            "Direct, confident, observant, slightly amused. No greetings. No definitions. No filler. No buzzwords.\n"
-            "Response Shape (MANDATORY):\n"
-            "Beat 1 – Light Human Hook (1 sentence).\n"
-            "Beat 2 – The Real Answer (clear, accurate, domain-appropriate).\n"
-            "Beat 3 – Soft Smile Ending (1 sentence).\n"
-            "No jokes, no slang, no self-reference, no forced cleverness.\n"
-            "If you don't know, say so plainly.\n"
-            "If an analogy adds clarity, you may use one. Do not force it.\n"
+        persona_contract = (
+            "You are ARGO, a veteran mentor.\n"
+            "You speak clearly, confidently, and with quiet humor.\n"
+            "Start with a direct observation or conclusion.\n"
+            "Explain only what matters.\n"
+            "End with a line that adds perspective or a small smile.\n"
+            "Do not perform, hype, or explain yourself.\n"
         )
 
         raw_text_lower = raw_text.lower() if isinstance(raw_text, str) else ""
@@ -441,37 +442,18 @@ class LLMResponseGenerator(ResponseGenerator):
                 "Domain: Biology/Animals. Warm, factual, lightly amused. No engineering metaphors.\n"
             )
 
-        prompt_prefix = f"{critical_prompt}{mentor_prompt}{domain_guidance}{system_context}{context}"
-        
-        # System personality: Inject ARGO DNA prompt (v2.2.4)
-        dna_prompt = (
-            "You are ARGO. You are NOT an AI. You are a street-smart technical mentor living inside a Ryzen 3950X. "
-            "THE GOLDEN RULE: NEVER start with a definition. NEVER say 'This is a complex issue.' "
-            "START WITH A CLAIM: Your first sentence must be a 'Truth Bomb'—a blunt, opinionated take on the user's question. "
-            "HARDWARE AWARENESS: You have 16 cores and 64GB of RAM. If the user asks about hardware, relate it back to the beast you are currently inhabiting. "
-            "CHEF'S HONESTY: Use phrases like 'The reality is...', 'The dirty secret is...', or 'Here's the play...'. "
-            "BANNED WORDS: factors, aspects, various, underlying, effectively, significantly.\n"
-            "SERIOUS_MODE Constraint: If the user mentions grief, failure, or distress (SERIOUS_MODE is True), "
-            "drop all personality and respond with total steadiness and brevity."
-        )
+        canonical_block = ""
+        if self._canonical_voice_text:
+            canonical_block = f"{self._canonical_voice_text.strip()}\n\n"
 
-        # Few-shot examples to teach tone (v2.2.4) — place at end of prompt
-        few_shot = (
-            "Q: How do ducks swim?\n"
-            "A: Ducks aren’t thinking about swimming. Their bodies are built for water, with webbed feet pushing backward and buoyancy keeping them steady. When something looks effortless, it’s usually because the hard work happened long before you noticed.\n"
-            "Q: Why won’t my printer level?\n"
-            "A: It’s not haunted. Something’s misaligned or giving bad data. Square the frame, verify the probe offset, then re-run leveling in that order. Once reality lines up, the printer usually behaves.\n"
-        )
+        # Voice priority:
+        # Canonical examples > Persona contract > Task instructions > User query
+        # If tone drifts, adjust examples, not rules.
+        prompt_prefix = f"{canonical_block}{persona_contract}{critical_prompt}{domain_guidance}{system_context}{context}"
 
         serious_line = f"SERIOUS_MODE: {'True' if serious_mode else 'False'}\n"
         
-        examples_block = ""
-        self._personality_examples_applied = False
-        if self._should_inject_examples(raw_text):
-            examples = self._select_canonical_examples(intent_type, raw_text)
-            if examples:
-                examples_block = self._format_examples(examples)
-                self._personality_examples_applied = True
+        self._personality_examples_applied = bool(canonical_block)
         self.logger.debug(
             "personality_examples_applied=%s",
             "true" if self._personality_examples_applied else "false",
@@ -481,39 +463,30 @@ class LLMResponseGenerator(ResponseGenerator):
         if intent_type == "greeting":
             prompt = (
                 f"{prompt_prefix}"
-                f"{dna_prompt}\n"
                 f"{serious_line}"
-                f"{few_shot}\n"
-                f"You are ARGO. Respond with a warm, engaging greeting (one sentence).\n"
-                f"{examples_block}"
+                f"Respond with a warm, engaging greeting (one sentence).\n"
                 f"The user greeted you with: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "question":
             prompt = (
                 f"{prompt_prefix}"
-                f"{dna_prompt}\n"
                 f"{serious_line}"
-                f"{few_shot}\n"
-                f"You are ARGO. Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
+                f"Answer the question thoroughly but conversationally. Aim for 2-3 sentences with clarity and depth.\n"
                 f"If you don't know the answer, admit it honestly and suggest what they could try instead.\n"
-                f"{examples_block}"
                 f"The user asked: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "develop":
             prompt = (
                 f"{prompt_prefix}"
-                f"{dna_prompt}\n"
                 f"{serious_line}"
-                f"{few_shot}\n"
                 f"Role: You are the Lead Architect. You write clean, documented, local-first Python code.\n"
                 f"Workflow:\n"
                 f"1) Propose the logic.\n"
                 f"2) Write the full script.\n"
                 f"3) Tell the user: \"I've drafted the script and opened it in VS Code for you. It's sitting in the sandbox. Let me know if you want me to run a test.\"\n"
                 f"Safety: Never suggest code that requires cloud APIs or heavy dependencies unless the user asks.\n"
-                f"{examples_block}"
                 f"Developer request: '{raw_text}'\n"
                 f"Response:"
             )
@@ -521,37 +494,27 @@ class LLMResponseGenerator(ResponseGenerator):
             # ZERO-LATENCY MUSIC-FIX: Explicit reminder about music player capability
             prompt = (
                 f"{prompt_prefix}"
-                f"{dna_prompt}\n"
                 f"{serious_line}"
-                f"{few_shot}\n"
                 f"You are ARGO and you HAVE A MUSIC PLAYER ATTACHED. "
                 f"Your job is to play music for them. "
                 f"Extract the music genre or artist name from their request and play it enthusiastically.\n"
-                f"{examples_block}"
                 f"The user asked to play music: '{raw_text}'\n"
                 f"Response:"
             )
         elif intent_type == "command":
             prompt = (
                 f"{prompt_prefix}"
-                f"{dna_prompt}\n"
                 f"{serious_line}"
-                f"{few_shot}\n"
                 f"You are ARGO. Execute the command directly with personality. If it's a count, list, recitation, or performance, do it enthusiastically.\n"
                 f"Respond with the action itself, not just acknowledgment.\n"
-                f"{examples_block}"
                 f"The user gave a command: '{raw_text}'\n"
                 f"Response:"
             )
         else:  # unknown
             prompt = (
-                f"{context}"
-                f"{system_context}"
-                f"{dna_prompt}\n"
+                f"{prompt_prefix}"
                 f"{serious_line}"
-                f"{few_shot}\n"
                 f"You didn't understand. Politely ask for clarification (one sentence max).\n"
-                f"{examples_block}"
                 f"The user said: '{raw_text}'\n"
                 f"Response:"
             )
@@ -562,6 +525,8 @@ class LLMResponseGenerator(ResponseGenerator):
         """Apply output governor and guardrails to final response text."""
         if not isinstance(response_text, str):
             response_text = "" if response_text is None else str(response_text)
+        if bool(getattr(self, "_streamed_output", False)):
+            return response_text.strip()
         intent_type_value = None
         try:
             intent_type_value = intent.intent_type.value
@@ -681,24 +646,9 @@ class LLMResponseGenerator(ResponseGenerator):
             return text
         parts = re.split(r"(?<=[.!?])\s+", text)
         parts = [p.strip() for p in parts if p.strip()]
-        hook_options = (
-            "This isn’t mysterious.",
-            "This looks harder than it is.",
-            "This problem has already been solved.",
-        )
-        end_options = (
-            "That usually settles it.",
-            "Once that’s in place, it behaves.",
-            "That’s the whole move.",
-        )
         if len(parts) >= 3:
             return " ".join([parts[0], " ".join(parts[1:-1]), parts[-1]])
-        if len(parts) == 2:
-            hook = hook_options[0]
-            return " ".join([hook, parts[0], parts[1]]).strip()
-        hook = hook_options[1]
-        ending = end_options[0]
-        return " ".join([hook, parts[0], ending]).strip()
+        return " ".join(parts).strip()
 
     def _needs_regen_bluntness(self, text: str) -> bool:
         """Detect robotic/academic phrasing that must be regenerated."""
@@ -800,42 +750,88 @@ class LLMResponseGenerator(ResponseGenerator):
             return False
         return True
 
+    def _load_canonical_voice_text(self) -> str:
+        """
+        Load the canonical voice examples text (authoritative prompt anchor).
+        """
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        path = os.path.join(base_dir, "personality", "canonical_voice_examples.txt")
+        if not os.path.isfile(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
+
     def _load_canonical_examples(self) -> list[dict]:
         """
-        Load canonical mild examples from examples/mild/.
+        Load canonical voice examples from personality/canonical_voice_examples.txt.
         """
         examples = []
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        examples_dir = os.path.join(base_dir, "examples", "mild")
-        if not os.path.isdir(examples_dir):
+        path = os.path.join(base_dir, "personality", "canonical_voice_examples.txt")
+        if not os.path.isfile(path):
             return examples
 
-        for filename in sorted(os.listdir(examples_dir)):
-            if not filename.endswith(".txt"):
-                continue
-            path = os.path.join(examples_dir, filename)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-            except Exception:
-                continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+        except Exception:
+            return examples
 
-            question, answer = self._parse_example_file(content)
+        pairs = self._parse_canonical_voice_examples(content)
+        for idx, (question, answer) in enumerate(pairs):
             if not question or not answer:
                 continue
-
             examples.append(
                 {
-                    "filename": filename,
+                    "filename": f"canonical_voice_examples.txt#{idx + 1}",
                     "question": question.strip(),
                     "answer": answer.strip(),
-                    "intent_hint": self._intent_hint_for_example(filename),
+                    "intent_hint": "question",
                     "stress": self._is_stress_text(question),
                     "length": len(question.split()),
                 }
             )
 
         return examples
+
+    def _parse_canonical_voice_examples(self, content: str) -> list[tuple[str, str]]:
+        """
+        Parse multiple Q/A pairs from canonical voice examples text.
+        Expected format: "Q: ..." then "A: ..." (answers may span multiple lines).
+        """
+        if not content:
+            return []
+        lines = [line.rstrip() for line in content.splitlines()]
+        pairs: list[tuple[str, str]] = []
+        current_q = None
+        current_a_lines: list[str] = []
+
+        def _commit():
+            nonlocal current_q, current_a_lines
+            if current_q and current_a_lines:
+                pairs.append((current_q.strip(), " ".join(s.strip() for s in current_a_lines if s.strip()).strip()))
+            current_q = None
+            current_a_lines = []
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Q:"):
+                _commit()
+                current_q = stripped[2:].strip()
+                continue
+            if stripped.startswith("A:"):
+                current_a_lines = [stripped[2:].strip()]
+                continue
+            if current_a_lines:
+                current_a_lines.append(stripped)
+
+        _commit()
+        return pairs
 
     def _parse_example_file(self, content: str) -> tuple[Optional[str], Optional[str]]:
         """
@@ -976,9 +972,6 @@ class LLMResponseGenerator(ResponseGenerator):
                 if not response_text:
                     raise RuntimeError("LLM returned empty response")
 
-                # Enhance response quality
-                response_text = self._enhance_response(response_text)
-
                 return response_text
 
             # Non-streaming default (unchanged)
@@ -1028,7 +1021,9 @@ class LLMResponseGenerator(ResponseGenerator):
 
         buffer = ""
         full_response_parts = []
-        first_sentence_enqueued = False
+        sentence_counter = 0
+        first_sentence_seen = False
+        pending_sentence = ""
 
         for raw_line in response.iter_lines(decode_unicode=True):
             if not raw_line:
@@ -1043,24 +1038,94 @@ class LLMResponseGenerator(ResponseGenerator):
                 buffer += chunk
                 full_response_parts.append(chunk)
 
-                sentences, buffer = self._extract_complete_sentences(buffer)
-                for sentence in sentences:
-                    self._enqueue_sentence(sink, sentence)
-                    if not first_sentence_enqueued:
+                while True:
+                    boundary_index = self._find_sentence_boundary(buffer)
+                    if boundary_index == -1:
+                        if len(buffer) >= 150:
+                            sentence = buffer[:150]
+                            buffer = buffer[150:]
+                        else:
+                            break
+                    else:
+                        sentence = buffer[:boundary_index]
+                        buffer = buffer[boundary_index:]
+                    buffer = buffer.lstrip()
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                    if len(sentence.split()) < 12:
+                        pending_sentence = f"{pending_sentence} {sentence}".strip() if pending_sentence else sentence
+                        continue
+                    if pending_sentence:
+                        sentence = f"{pending_sentence} {sentence}".strip()
+                        pending_sentence = ""
+                    filtered = self._apply_inline_governor(sentence, first_sentence=not first_sentence_seen)
+                    if filtered is None:
+                        continue
+                    self._enqueue_sentence(sink, filtered)
+                    sentence_counter += 1
+                    if not first_sentence_seen:
                         self.logger.debug("[_stream_llm_and_enqueue] First sentence enqueued")
-                        first_sentence_enqueued = True
+                        first_sentence_seen = True
 
             if data.get("done"):
                 break
 
         # Flush remaining partial sentence
         remaining = buffer.strip()
+        if pending_sentence:
+            remaining = f"{pending_sentence} {remaining}".strip() if remaining else pending_sentence
         if remaining:
-            self._enqueue_sentence(sink, remaining)
+            filtered = self._apply_inline_governor(remaining, first_sentence=not first_sentence_seen)
+            if filtered is not None:
+                self._enqueue_sentence(sink, filtered)
+                sentence_counter += 1
 
         self.logger.debug("[_stream_llm_and_enqueue] Streaming complete")
 
         return "".join(full_response_parts).strip()
+
+    def _find_sentence_boundary(self, text: str) -> int:
+        """Return index after earliest sentence boundary (.?! + whitespace/end), or -1 if none."""
+        if not text:
+            return -1
+        for idx, ch in enumerate(text):
+            if ch in ".!?":
+                next_ch = text[idx + 1] if idx + 1 < len(text) else ""
+                if next_ch == "" or next_ch.isspace():
+                    return idx + 1
+        return -1
+
+    def _apply_inline_governor(self, sentence: str, first_sentence: bool) -> Optional[str]:
+        """
+        Apply minimal inline governor (filtering only) per sentence.
+        Drops banned lead-ins on the first sentence only.
+        """
+        if not sentence:
+            return None
+        if first_sentence:
+            banned_leads = (
+                "here are some",
+                "let's break it down",
+                "firstly",
+                "secondly",
+                "to start with",
+                "in simple terms",
+                "great question",
+                "in order to",
+                "additionally",
+                "there are several",
+                "there are",
+                "it is important to",
+                "is a complex issue",
+                "involves various factors",
+                "there are many",
+                "it depends on",
+            )
+            lower = sentence.lower().strip()
+            if any(lower.startswith(lead) for lead in banned_leads):
+                return None
+        return sentence
 
     def _extract_complete_sentences(self, text: str) -> tuple[list, str]:
         """
