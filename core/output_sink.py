@@ -627,41 +627,89 @@ class PiperOutputSink(OutputSink):
         """
         self.send(text)
     
-    async def stop(self) -> None:
+    def stop_interrupt(self) -> None:
         """
-        Stop audio playback immediately (graceful shutdown).
+        Stop TTS immediately (synchronous barge-in interrupt).
         
-        Signals worker thread to exit and waits for it.
-        No poison pill in queue to avoid blocking on wait.
+        Used by Coordinator when user says wake word during TTS.
+        This is the SYNCHRONOUS version for coordinator thread.
+        
+        Strategy (brutal but effective):
+        - Clear all pending sentences from queue
+        - Kill Piper subprocess immediately
+        - Return instantly (no waiting)
         """
         self._stop_event.set()
         
-        # Send poison pill to worker thread
-        self.text_queue.put(None)
+        # Clear queue (discard pending sentences)
+        try:
+            while True:
+                self.text_queue.get_nowait()
+        except:
+            pass
         
-        # Wait for worker thread to finish (timeout to avoid hanging)
-        self.worker_thread.join(timeout=1.0)
-        
-        # Kill any running Piper process
+        # Kill Piper immediately
         if self._piper_process:
             try:
-                self._piper_process.terminate()
-                self._piper_process.wait(timeout=0.5)
+                self._piper_process.kill()
             except:
-                try:
-                    self._piper_process.kill()
-                except:
-                    pass
+                pass
             finally:
                 self._piper_process = None
         
-        # Also stop music playback if active
+        # Signal not playing
+        self._is_playing = False
+    
+    async def stop(self) -> None:
+        """
+        Stop audio playback IMMEDIATELY (hard interrupt, no grace period).
+        
+        Used for barge-in interrupt: user says wake word while Argo is speaking.
+        
+        Strategy:
+        1. Signal stop event to worker thread
+        2. Clear text queue (discard pending sentences)
+        3. Kill Piper process immediately (brutal but effective)
+        4. Wait briefly for worker to notice
+        
+        This is NOT a graceful shutdown - it's an interrupt.
+        """
+        self._stop_event.set()
+        
+        # CRITICAL: Clear all pending sentences from queue
+        # This prevents worker from queuing more playback
+        try:
+            while True:
+                self.text_queue.get_nowait()
+        except:
+            pass  # Queue is empty
+        
+        # BRUTAL: Kill Piper process immediately (no timeout, no mercy)
+        if self._piper_process:
+            try:
+                # First try terminate
+                self._piper_process.terminate()
+                try:
+                    self._piper_process.wait(timeout=0.1)  # Very short grace period
+                except:
+                    # Force kill if terminate didn't work
+                    self._piper_process.kill()
+                    self._piper_process.wait(timeout=0.1)
+            except:
+                pass  # Already dead
+            finally:
+                self._piper_process = None
+        
+        # Stop music if playing
         try:
             from core.music_player import get_music_player
             music_player = get_music_player()
             music_player.stop()
         except Exception:
-            pass  # Music not playing or not enabled
+            pass
+        
+        # Signal coordinator that we're no longer speaking
+        self._is_playing = False
 
 
 # ============================================================================

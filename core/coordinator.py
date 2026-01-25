@@ -344,9 +344,21 @@ class Coordinator:
                 self.logger.debug(f"[Coordinator] on_status_update error: {e}")
 
     def _pause_trigger_for_tts(self) -> None:
-        """Pause wake-word detection when audio playback starts."""
+        """
+        Pause recording during TTS (but keep wake word detector active for barge-in).
+        
+        IMPORTANT: Wake word detector remains running so user can interrupt with wake word.
+        Only the recorder/microphone input is gated off.
+        This enables hard barge-in interrupt.
+        """
         self._set_audio_state(self.AUDIO_STATE_SPEAKING)
-        self._stop_input_audio("tts_playback_start")
+        # DO NOT call _stop_input_audio() - keep trigger listening for barge-in!
+        # Only pause/gate the recorder, not the wake-word detector
+        if hasattr(self.trigger, 'pause'):
+            try:
+                self.trigger.pause()
+            except Exception:
+                pass
         self._is_speaking.set()
         self._tts_gate_active.set()
 
@@ -1037,6 +1049,21 @@ class Coordinator:
 
                     def on_trigger_detected():
                         try:
+                            # HARD BARGE-IN INTERRUPT: Wake word can interrupt TTS
+                            if self._is_speaking.is_set():
+                                self.logger.info("[Wake] BARGE-IN INTERRUPT: Wake word detected while speaking!")
+                                # Immediately stop TTS playback
+                                try:
+                                    self.sink.stop_interrupt()
+                                    self.logger.info("[Wake] TTS stopped for barge-in")
+                                except Exception as e:
+                                    self.logger.warning(f"[Wake] Error stopping TTS: {e}")
+                                self._is_speaking.clear()
+                                # Re-enter LISTENING state
+                                self.state_machine.listening()
+                                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
+                            
+                            # Normal case: wake word detected while not speaking
                             if self._is_processing.is_set():
                                 self.logger.info("[Iteration] Trigger ignored: already processing")
                                 return
