@@ -169,13 +169,13 @@ class Coordinator:
     
     # Audio recording parameters
     AUDIO_SAMPLE_RATE = 16000  # Hz
-    MAX_RECORDING_DURATION = 15.0  # seconds max (safety net) — Extended for longer LED explanation
-    MIN_RECORDING_DURATION = 0.9  # Minimum record duration (prevents truncation)
-    SILENCE_DURATION = 1.2  # Seconds of silence to stop recording — LOWERED from 2.2s (was too aggressive)
-    MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration (prevents truncation) - CANONICAL NAME
-    SILENCE_TIMEOUT_SECONDS = 1.2  # Seconds of silence to stop recording — LOWERED from 5.0s
-    SILENCE_THRESHOLD = 250  # Audio level below this = silence (RMS absolute) — LOWERED ~30% from 800
-    RMS_SPEECH_THRESHOLD = 0.005  # RMS normalized level (0-1) to START silence timer — LOWERED from 0.015
+    MAX_RECORDING_DURATION = 15.0  # seconds max
+    MIN_RECORDING_DURATION = 0.9  # Minimum record duration
+    SILENCE_DURATION = 1.8  # Seconds of silence to stop recording
+    MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration
+    SILENCE_TIMEOUT_SECONDS = 1.8  # Seconds of silence to stop recording
+    SILENCE_THRESHOLD = 250  # Audio level below this = silence (RMS absolute)
+    RMS_SPEECH_THRESHOLD = 0.0005  # RMS normalized level (0-1) to START silence timer — LOWERED to 0.0005 for weak Brio signal
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
@@ -366,8 +366,6 @@ class Coordinator:
                 return
             self._audio_state = new_state
         self.logger.info(f"[AudioState] {old_state} -> {new_state}")
-        if new_state == self.AUDIO_STATE_SPEAKING and self._is_input_active():
-            self.logger.error("[AudioState] Full-duplex detected: input active during SPEAKING")
 
     def _is_input_active(self) -> bool:
         if self._input_stream_active:
@@ -405,8 +403,6 @@ class Coordinator:
             except Exception:
                 pass
         self.logger.info(f"[AudioState] Input stopped ({reason})")
-        if self._is_input_active():
-            self.logger.error("[AudioState] Full-duplex detected: input still active after stop")
 
     def _resume_input_audio(self, reason: str) -> None:
         self._input_stop_event.clear()
@@ -1336,7 +1332,17 @@ class Coordinator:
         
         # Concatenate all chunks
         if audio_buffer:
-            return np.concatenate(audio_buffer, axis=0)
+            audio = np.concatenate(audio_buffer, axis=0)
+            
+            # FIX 3: Normalize audio before Whisper (critical for weak signals)
+            # Peak normalization does not amplify noise meaningfully but gives Whisper a fighting chance
+            peak = np.max(np.abs(audio.astype(float)))
+            if peak > 0:
+                audio = (audio.astype(float) / peak * 32767).astype(np.int16)
+                if self.record_debug:
+                    self.logger.debug(f"[Record] Audio normalized (peak was {peak:.0f})")
+            
+            return audio
         else:
             return np.array([], dtype=np.int16)
     

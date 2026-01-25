@@ -263,6 +263,15 @@ class ArgoGUI:
     def _initialize_and_run(self):
         """Initialize all ARGO components and run the coordinator."""
         try:
+            # CRITICAL: Lock input device BEFORE any component initialization
+            # This must happen before PorcupineWakeWordTrigger is created
+            import sounddevice as sd
+            try:
+                sd.default.device = (1, None)  # Brio microphone at index 1
+                logging.info("[GUI] Input device locked to index 1 (Brio microphone)")
+            except Exception as e:
+                logging.warning(f"[GUI] Could not lock device: {e}")
+            
             logging.info("[GUI] Initializing ARGO components...")
             
             # Import all required components
