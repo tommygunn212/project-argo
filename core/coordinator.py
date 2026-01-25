@@ -327,11 +327,11 @@ class Coordinator:
         
         # If it's a simple, short query, be snappy
         if any(trigger in text_lower for trigger in quick_triggers):
-            self.logger.info(f"[SmartTiming] Quick query detected: '{transcribed_text[:50]}' → 1.0s timeout")
+            self.logger.info(f"[SmartTiming] Quick query detected: '{transcribed_text[:50]}' -> 1.0s timeout")
             return 1.0
         
         # If it's a story or explanation, be patient
-        self.logger.info(f"[SmartTiming] Detailed query detected: '{transcribed_text[:50]}' → 5.0s timeout")
+        self.logger.info(f"[SmartTiming] Detailed query detected: '{transcribed_text[:50]}' -> 5.0s timeout")
         return 5.0
 
     def _on_state_change(self, old_state: State, new_state: State) -> None:
@@ -1464,12 +1464,20 @@ class Coordinator:
         try:
             self.logger.info("[TTS] Speaking response (interrupts disabled during playback)...")
             
-            # Speak in main thread (blocking, event loop-safe)
-            # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
-            # This prevents Argo from interrupting itself with its own audio
-            self.sink.speak(response_text)
+            # CRITICAL: Pause input BEFORE starting TTS to prevent feedback loop
+            # where speaker output is picked up by microphone
+            self._pause_trigger_for_tts()
             
-            self.logger.info("[TTS] Response finished")
+            try:
+                # Speak in main thread (blocking, event loop-safe)
+                # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
+                # This prevents Argo from interrupting itself with its own audio
+                self.sink.speak(response_text)
+                
+                self.logger.info("[TTS] Response finished")
+            finally:
+                # Resume input immediately after TTS completes
+                self._resume_trigger_after_tts()
         
         except Exception as e:
             self.logger.error(f"[TTS] Error during speech: {e}")
