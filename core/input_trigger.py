@@ -283,6 +283,14 @@ class PorcupineWakeWordTrigger(InputTrigger):
                         self.logger.warning(f"[Audio] Error closing stream: {e}")
                 self._active_stream = None
                 self._is_listening.clear()
+                
+                # CRITICAL: Delete Porcupine instance to release audio device
+                # Without this, the audio device remains locked for subsequent on_trigger() calls
+                try:
+                    porcupine.delete()
+                    self.logger.debug("[Porcupine] Deleted successfully")
+                except Exception as e:
+                    self.logger.warning(f"[Porcupine] Error deleting: {e}")
         
         except Exception as e:
             self.logger.error(f"[on_trigger] Failed: {e}")
