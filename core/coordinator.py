@@ -580,6 +580,11 @@ class Coordinator:
 
             text = self.stt.transcribe(audio_bytes, self.AUDIO_SAMPLE_RATE)
 
+            # PHASE 2A: TRANSCRIPT TRUTH - Log EXACT raw Whisper output
+            # No lowercasing, no cleanup, no token filtering
+            # This is the unmodified truth from Whisper
+            self.logger.info(f"[STT RAW] '{text}'")
+
             # TASK 15: Mark STT end
             self.current_probe.mark("stt_end")
 
