@@ -1036,15 +1036,19 @@ class Coordinator:
                         continue
 
                     def on_trigger_detected():
-                        if self._is_processing.is_set():
-                            self.logger.info("[Iteration] Trigger ignored: already processing")
-                            return
-                        self.logger.info("[Wake] Wake word detected")
-                        self.state_machine.wake()
-                        self._last_utterance_time = time.time()
-                        self._play_wake_ack()
-                        # Process first interaction immediately using wake pre-roll
-                        self._handle_interaction(mark_wake=True)
+                        try:
+                            if self._is_processing.is_set():
+                                self.logger.info("[Iteration] Trigger ignored: already processing")
+                                return
+                            self.logger.info("[Wake] Wake word detected")
+                            self.state_machine.wake()
+                            self._last_utterance_time = time.time()
+                            self._play_wake_ack()
+                            # Process first interaction immediately using wake pre-roll
+                            self._handle_interaction(mark_wake=True)
+                        except Exception as e:
+                            self.logger.error(f"[Iteration] Fatal error in on_trigger_detected: {e}", exc_info=True)
+                            self.stop_requested = True
 
                     self.logger.info("[Loop] Sleeping - listening for wake word...")
                     self.trigger.on_trigger(on_trigger_detected)
@@ -1461,12 +1465,17 @@ class Coordinator:
         Args:
             response_text: Text to speak
         """
+        tts_paused = False
         try:
             self.logger.info("[TTS] Speaking response (interrupts disabled during playback)...")
             
             # CRITICAL: Pause input BEFORE starting TTS to prevent feedback loop
             # where speaker output is picked up by microphone
-            self._pause_trigger_for_tts()
+            try:
+                self._pause_trigger_for_tts()
+                tts_paused = True
+            except Exception as e:
+                self.logger.warning(f"[TTS] Failed to pause input: {e}")
             
             try:
                 # Speak in main thread (blocking, event loop-safe)
@@ -1475,13 +1484,23 @@ class Coordinator:
                 self.sink.speak(response_text)
                 
                 self.logger.info("[TTS] Response finished")
+            except Exception as e:
+                self.logger.error(f"[TTS] Error during sink.speak(): {e}")
+                raise
             finally:
                 # Resume input immediately after TTS completes
-                self._resume_trigger_after_tts()
+                if tts_paused:
+                    try:
+                        self._resume_trigger_after_tts()
+                    except Exception as e:
+                        self.logger.warning(f"[TTS] Failed to resume input: {e}")
         
         except Exception as e:
-            self.logger.error(f"[TTS] Error during speech: {e}")
+            self.logger.error(f"[TTS] Fatal error during speech: {e}", exc_info=True)
         
         finally:
             # Ensure speaking flag is cleared even if exception occurred
-            self._is_speaking.clear()
+            try:
+                self._is_speaking.clear()
+            except Exception:
+                pass
