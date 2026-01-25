@@ -313,7 +313,6 @@ class PiperOutputSink(OutputSink):
             try:
                 # Get next item from queue (blocking)
                 import time
-                time.sleep(0.5)  # Wait 500ms between dequeuing sentences
                 item = self.text_queue.get(timeout=0.5)
                 
                 # Poison pill: stop signal
@@ -433,9 +432,9 @@ class PiperOutputSink(OutputSink):
                 duration_ms = (time_end - time_start) * 1000
                 print(f"[PIPER_PROFILING] play_sentence_complete: {duration_ms:.1f}ms")
             
-            # Adaptive pacing: wait ~5% of audio duration (min 0.1s, max 0.5s)
+            # Adaptive pacing: minimal gap between sentences (max 50ms)
             if audio_duration:
-                delay = min(max(audio_duration * 0.05, 0.1), 0.5)
+                delay = min(audio_duration * 0.01, 0.05)
                 time.sleep(delay)
     
     def _stream_and_play(self, process: subprocess.Popen):
@@ -887,9 +886,9 @@ class EdgeTTSOutputSink(OutputSink):
             # Use actual sample rate from WAV header, not hard-coded constant
             print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
             
-            # Pre-buffer audio to prevent underrun (1500ms buffer for M-Audio)
+            # Pre-buffer audio to prevent underrun (minimal buffer)
             import time
-            time.sleep(1.5)  # TEMP: audio drain buffer for Windows / M-Audio hardware
+            time.sleep(0.05)  # Minimal buffer for audio device
             
             # Step 4: Force correct playback parameters
             # Try using simpleaudio instead of sounddevice to avoid driver issues
@@ -927,7 +926,7 @@ class EdgeTTSOutputSink(OutputSink):
             
             # Step 5: Ensure playback clock finishes before returning
             import time
-            time.sleep(1.5)  # 1.5 second drainage buffer for M-Audio device handoff
+            time.sleep(0.05)  # Minimal buffer for device
             print(f"[Audio] Playback complete", file=sys.stderr)
             
         except ImportError as e:
@@ -938,9 +937,9 @@ class EdgeTTSOutputSink(OutputSink):
             import traceback
             traceback.print_exc()
         
-        # Drainage buffer: ensure M-Audio hardware finishes playback before process swaps to listening
+        # Minimal buffer: ensure playback finishes before process swaps to listening
         import time
-        time.sleep(1.5)
+        time.sleep(0.05)
     
     async def send(self, text: str) -> None:
         """
