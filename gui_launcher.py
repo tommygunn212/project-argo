@@ -16,6 +16,7 @@ import queue
 import logging
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -205,6 +206,22 @@ class ArgoGUI:
         ))
         logger.addHandler(console_handler)
     
+    def _log_crash(self, exc_type: str, exc_value: str, exc_tb: str) -> None:
+        """Log crash to both file and GUI."""
+        crash_log_path = Path("logs") / "gui_crash.log"
+        Path("logs").mkdir(exist_ok=True)
+        with open(crash_log_path, 'a') as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"CRASH AT: {datetime.now().isoformat()}\n")
+            f.write(f"{'='*80}\n")
+            f.write(f"Exception Type: {exc_type}\n")
+            f.write(f"Exception Value: {exc_value}\n")
+            f.write(f"Traceback:\n{exc_tb}\n")
+        
+        # Log to GUI
+        logging.error(f"[CRASH] {exc_type}: {exc_value}")
+        logging.error(f"[CRASH] Full traceback written to logs/gui_crash.log")
+    
     def _update_logs(self):
         """Update log display from queue."""
         try:
@@ -261,7 +278,7 @@ class ArgoGUI:
             self.coordinator.stop()
     
     def _initialize_and_run(self):
-        """Initialize all ARGO components and run the coordinator."""
+        """Initialize all ARGO components and run the coordinator (UNKILLABLE)."""
         try:
             # CRITICAL: Lock input device BEFORE any component initialization
             # This must happen before PorcupineWakeWordTrigger is created
@@ -312,17 +329,27 @@ class ArgoGUI:
             
             # Run coordinator with callbacks
             self._run_coordinator()
-            
+        
+        except SystemExit as e:
+            logging.error(f"[SYSTEM_EXIT] SystemExit intercepted: {e}")
+            self._log_crash("SystemExit", str(e), traceback.format_exc())
+            self.running = False
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+        except KeyboardInterrupt as e:
+            logging.warning(f"[KEYBOARD_INTERRUPT] User interrupted")
+            self.running = False
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
         except Exception as e:
-            logging.error(f"[GUI] Initialization error: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"[GUI] Initialization FATAL: {type(e).__name__}: {e}")
+            self._log_crash(type(e).__name__, str(e), traceback.format_exc())
             self.running = False
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
     
     def _run_coordinator(self):
-        """Run coordinator in background thread."""
+        """Run coordinator in background thread (UNKILLABLE)."""
         try:
             logging.info("[GUI] Coordinator thread started")
             
@@ -334,17 +361,21 @@ class ArgoGUI:
             
             # Run main loop
             self.coordinator.run()
-            
+        
+        except SystemExit as e:
+            logging.error(f"[COORDINATOR] SystemExit intercepted: {e}")
+            self._log_crash("SystemExit (Coordinator)", str(e), traceback.format_exc())
+        except KeyboardInterrupt as e:
+            logging.warning(f"[COORDINATOR] KeyboardInterrupt detected")
         except Exception as e:
-            logging.error(f"[GUI] Coordinator error: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"[COORDINATOR] FATAL: {type(e).__name__}: {e}")
+            self._log_crash(f"Coordinator-{type(e).__name__}", str(e), traceback.format_exc())
         finally:
             self.running = False
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
             self.light.set_ready()
-            self.status_label.config(text="Stopped", fg="#666")
+            self.status_label.config(text="Stopped (check logs)", fg="#f44336")
             logging.info("[GUI] Coordinator thread ended")
     
     def _on_recording_start(self):
