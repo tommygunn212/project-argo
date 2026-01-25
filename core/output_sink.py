@@ -41,9 +41,20 @@ from typing import Optional, Callable
 import queue
 import threading
 import re
+from datetime import datetime
 
 from core.policy import TTS_TIMEOUT_SECONDS, TTS_WATCHDOG_SECONDS
 from core.watchdog import Watchdog
+
+
+# ============================================================================
+# INSTRUMENTATION: Millisecond-precision event logging
+# ============================================================================
+
+def log_event(message: str) -> None:
+    """Log event with millisecond-precision timestamp (same as coordinator)."""
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{ts}] {message}")  # Use print for immediate stderr output
 
 
 # ============================================================================
@@ -636,6 +647,8 @@ class PiperOutputSink(OutputSink):
         """
         # HARDENING STEP 2: Store interaction ID (validates before playback)
         self._interaction_id = interaction_id
+        # INSTRUMENTATION: Log TTS start
+        log_event(f"TTS START (interaction_id={interaction_id})")
         self.send(text)
     
     def stop_interrupt(self) -> None:
@@ -650,6 +663,9 @@ class PiperOutputSink(OutputSink):
         - Kill Piper subprocess immediately
         - Return instantly (no waiting)
         """
+        # INSTRUMENTATION: Log TTS stop
+        log_event(f"TTS STOP (interaction_id={self._interaction_id})")
+        
         # HARDENING STEP 2: Invalidate interaction ID (prevents zombie callbacks)
         self._interaction_id = None
         

@@ -86,6 +86,19 @@ from core.audio_authority import get_audio_authority
 logger = logging.getLogger(__name__)
 
 
+# === INSTRUMENTATION: Millisecond-precision event logging ===
+def log_event(message: str) -> None:
+    """
+    Log event with millisecond-precision timestamp.
+    
+    Format: [HH:MM:SS.mmm] MESSAGE (key=value)
+    
+    Used for atomicity verification: interrupt latency, ordering, overlap detection.
+    """
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    logger.info(f"[{ts}] {message}")
+
+
 class Coordinator:
     """
     End-to-end orchestration with bounded interaction loop + session memory.
@@ -322,6 +335,8 @@ class Coordinator:
         Prevents zombie callbacks from speaking after interrupt.
         """
         self._interaction_id += 1
+        # INSTRUMENTATION: Log interaction ID increment
+        log_event(f"INTERACTION_ID incremented (id={self._interaction_id})")
         return self._interaction_id
     
     def get_dynamic_timeout(self, transcribed_text: str) -> float:
@@ -353,6 +368,9 @@ class Coordinator:
     def _on_state_change(self, old_state: State, new_state: State) -> None:
         """Handle state changes (optional GUI updates)."""
         self.logger.info(f"[State] {old_state.value} -> {new_state.value}")
+        
+        # INSTRUMENTATION: Log state transition
+        log_event(f"STATE_CHANGE {old_state.value} -> {new_state.value}")
         
         # HARDENING STEP 6: Assert trigger state matches state machine
         try:
@@ -518,6 +536,9 @@ class Coordinator:
         CRITICAL: This must be atomic. No callbacks, no races, no silent failures.
         No interaction processing until this completes.
         """
+        # INSTRUMENTATION: Log barge-in entry
+        log_event("BARGE_IN start")
+        
         # HARDENING STEP 2: Generate new interaction ID (invalidates old zombie callbacks)
         self._current_interaction_id = self._next_interaction_id()
         self.logger.info(f"[Barge] Generated new interaction_id: {self._current_interaction_id}")
@@ -529,6 +550,8 @@ class Coordinator:
             # HARDENING STEP 3: Hard-kill audio output immediately
             try:
                 self.audio_authority.hard_kill_output()
+                # INSTRUMENTATION: Log audio kill
+                log_event("AUDIO KILLED")
                 self.logger.info("[Barge] Audio authority hard-killed output")
             except Exception as e:
                 self.logger.warning(f"[Barge] Error hard-killing output: {e}")
@@ -546,6 +569,8 @@ class Coordinator:
             # Force state to LISTENING (atomic, no callbacks)
             try:
                 self.state_machine.listening()
+                # INSTRUMENTATION: Log state change
+                log_event("STATE_CHANGE SPEAKING -> LISTENING (barge-in)")
                 self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
             except RuntimeError as e:
                 # HARDENING STEP 5: Fatal on invalid state transition (no silent failures)
@@ -560,6 +585,8 @@ class Coordinator:
             time.sleep(BARGE_IN_RESET_MS / 1000.0)
             self.logger.info(f"[Barge] Physics gap: {BARGE_IN_RESET_MS}ms")
             
+            # INSTRUMENTATION: Log barge-in complete
+            log_event("BARGE_IN complete")
             self.logger.info("[Barge] Barge-in complete, ready for new interaction")
         else:
             # Normal wake word detected while not speaking
@@ -1210,6 +1237,8 @@ class Coordinator:
 
                     def on_trigger_detected():
                         try:
+                            # INSTRUMENTATION: Log wake word detection
+                            log_event(f"WAKE_WORD detected (state={self.state_machine.current_state.value})")
                             # HARDENING STEP 4: Atomic barge-in operation
                             self._barge_in()
                         except Exception as e:
@@ -1391,6 +1420,9 @@ class Coordinator:
             self._input_stream_active = True
             stream.start()
             
+            # INSTRUMENTATION: Log mic open
+            log_event("MIC OPEN")
+            
             rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
             chunk_count = 0  # For RMS logging every 20 chunks
             
@@ -1481,6 +1513,10 @@ class Coordinator:
                     stream.close()
                 except Exception as e:
                     self.logger.warning(f"[Record] Error closing stream: {e}")
+            
+            # INSTRUMENTATION: Log mic close
+            log_event("MIC CLOSE")
+            
             self._input_stream = None
             self._input_stream_active = False
         
