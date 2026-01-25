@@ -80,6 +80,7 @@ from core.policy import (
 from core.watchdog import Watchdog
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
+from core.audio_authority import get_audio_authority
 
 # === Logging ===
 logger = logging.getLogger(__name__)
@@ -211,6 +212,9 @@ class Coordinator:
         self.generator = response_generator
         self.sink = output_sink
         self.logger = logger
+        
+        # HARDENING STEP 3: Audio authority for explicit resource ownership
+        self.audio_authority = get_audio_authority()
 
         # Ensure global output sink uses this instance (streaming uses get_output_sink)
         try:
@@ -262,6 +266,10 @@ class Coordinator:
         self.interaction_count = 0
         self.stop_requested = False
 
+        # HARDENING STEP 1: Monotonic interaction ID (prevents zombie callbacks)
+        self._interaction_id = 0
+        self._current_interaction_id = 0
+
         # Python builder actuator (sandbox tools)
         self.builder = PythonBuilder()
         self._last_built_script: Optional[str] = None
@@ -308,6 +316,14 @@ class Coordinator:
 
         self._set_audio_state(self.AUDIO_STATE_LISTENING)
     
+    def _next_interaction_id(self) -> int:
+        """
+        HARDENING STEP 1: Generate monotonic interaction ID.
+        Prevents zombie callbacks from speaking after interrupt.
+        """
+        self._interaction_id += 1
+        return self._interaction_id
+    
     def get_dynamic_timeout(self, transcribed_text: str) -> float:
         """
         Smart Timing Logic: Adjust silence timeout based on query type.
@@ -337,11 +353,57 @@ class Coordinator:
     def _on_state_change(self, old_state: State, new_state: State) -> None:
         """Handle state changes (optional GUI updates)."""
         self.logger.info(f"[State] {old_state.value} -> {new_state.value}")
+        
+        # HARDENING STEP 6: Assert trigger state matches state machine
+        try:
+            self._assert_trigger_state(new_state)
+        except AssertionError as e:
+            self.logger.error(f"[State] ASSERTION FAILED: {e}")
+            self.stop_requested = True
+        except Exception as e:
+            self.logger.warning(f"[State] Error validating trigger state: {e}")
+        
         if self.on_status_update:
             try:
                 self.on_status_update(new_state.value)
             except Exception as e:
                 self.logger.debug(f"[Coordinator] on_status_update error: {e}")
+
+    def _assert_trigger_state(self, state: State) -> None:
+        """
+        HARDENING STEP 6: Assert that InputTrigger state matches StateMachine state.
+        
+        Contract enforcement:
+        - When LISTENING: Trigger must be ACTIVE (listening for wake word)
+        - When not LISTENING: Trigger must be PAUSED (not consuming CPU/audio)
+        
+        If assertion fails, raises AssertionError (fatal).
+        
+        Args:
+            state: Current state from state machine
+            
+        Raises:
+            AssertionError: If trigger state doesn't match expected state
+        """
+        try:
+            # Check if trigger has state methods
+            if not hasattr(self.trigger, 'is_active') or not hasattr(self.trigger, 'is_paused'):
+                self.logger.debug("[Assert] Trigger doesn't support state checks, skipping")
+                return
+            
+            if state == State.LISTENING:
+                # In LISTENING state: trigger should be ACTIVE
+                assert self.trigger.is_active(), \
+                    f"LISTENING but trigger.is_active()={self.trigger.is_active()} (expected True)"
+                self.logger.debug("[Assert] LISTENING: trigger is ACTIVE ✓")
+            else:
+                # In other states: trigger should be PAUSED
+                assert self.trigger.is_paused(), \
+                    f"{state.value} but trigger.is_paused()={self.trigger.is_paused()} (expected True)"
+                self.logger.debug(f"[Assert] {state.value}: trigger is PAUSED ✓")
+        except AssertionError as e:
+            self.logger.error(f"[Assert] FATAL: Trigger state contract violated: {e}")
+            raise
 
     def _pause_trigger_for_tts(self) -> None:
         """
@@ -440,6 +502,90 @@ class Coordinator:
         except Exception:
             # Best-effort; fail silently to avoid blocking wake flow
             pass
+
+    def _barge_in(self) -> None:
+        """
+        HARDENING STEP 4: Atomic barge-in operation.
+        
+        When wake word detected (either while speaking or listening):
+        1. Generate new monotonic interaction ID
+        2. Hard-kill all audio output
+        3. Stop TTS playback synchronously
+        4. Force state to LISTENING
+        5. Sleep for audio physics (gap between interrupt and next recording)
+        6. Log ready for next interaction
+        
+        CRITICAL: This must be atomic. No callbacks, no races, no silent failures.
+        No interaction processing until this completes.
+        """
+        # HARDENING STEP 2: Generate new interaction ID (invalidates old zombie callbacks)
+        self._current_interaction_id = self._next_interaction_id()
+        self.logger.info(f"[Barge] Generated new interaction_id: {self._current_interaction_id}")
+        
+        # HARDENING STEP 4: Check if currently speaking (needs interrupt)
+        if self._is_speaking.is_set():
+            self.logger.info("[Barge] BARGE-IN: Wake word detected while speaking")
+            
+            # HARDENING STEP 3: Hard-kill audio output immediately
+            try:
+                self.audio_authority.hard_kill_output()
+                self.logger.info("[Barge] Audio authority hard-killed output")
+            except Exception as e:
+                self.logger.warning(f"[Barge] Error hard-killing output: {e}")
+            
+            # Stop TTS playback (synchronous, no timeout)
+            try:
+                self.sink.stop_interrupt()
+                self.logger.info("[Barge] TTS stopped synchronously")
+            except Exception as e:
+                self.logger.warning(f"[Barge] Error stopping TTS: {e}")
+            
+            # Clear speaking flag
+            self._is_speaking.clear()
+            
+            # Force state to LISTENING (atomic, no callbacks)
+            try:
+                self.state_machine.listening()
+                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
+            except RuntimeError as e:
+                # HARDENING STEP 5: Fatal on invalid state transition (no silent failures)
+                self.logger.error(f"[Barge] FATAL: Invalid state transition: {e}")
+                self.stop_requested = True
+                return
+            except Exception as e:
+                self.logger.warning(f"[Barge] Error setting LISTENING state: {e}")
+            
+            # Physics gap: brief sleep to let Piper process die and audio settle
+            BARGE_IN_RESET_MS = 100
+            time.sleep(BARGE_IN_RESET_MS / 1000.0)
+            self.logger.info(f"[Barge] Physics gap: {BARGE_IN_RESET_MS}ms")
+            
+            self.logger.info("[Barge] Barge-in complete, ready for new interaction")
+        else:
+            # Normal wake word detected while not speaking
+            self.logger.info("[Barge] Normal wake: Not speaking, proceeding normally")
+        
+        # Continue with normal wake processing
+        if self._is_processing.is_set():
+            self.logger.info("[Barge] Already processing, ignoring trigger")
+            return
+        
+        self.logger.info("[Barge] Processing wake word")
+        try:
+            self.state_machine.wake()
+        except RuntimeError as e:
+            # HARDENING STEP 5: Fatal on invalid state transition (no silent failures)
+            self.logger.error(f"[Barge] FATAL: Invalid state transition: {e}")
+            self.stop_requested = True
+            return
+        except Exception as e:
+            self.logger.warning(f"[Barge] Error waking from sleep: {e}")
+            return
+        
+        self._last_utterance_time = time.time()
+        self._play_wake_ack()
+        # Process first interaction immediately using wake pre-roll
+        self._handle_interaction(mark_wake=True)
 
     def _wait_for_speech_start(self, max_wait_seconds: float) -> Optional[list]:
         """
@@ -630,7 +776,8 @@ class Coordinator:
                 response_text = self.generator.generate(analysis_intent, self.memory)
                 self._last_response = response_text
                 self.last_response_text = response_text
-                self.sink.speak(response_text)
+                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                self.sink.speak(response_text, interaction_id=self._current_interaction_id)
                 self.memory.append(
                     user_utterance=text,
                     parsed_intent=analysis_intent.intent_type.value,
@@ -766,7 +913,8 @@ class Coordinator:
                 music_player.stop()
 
                 # Optional brief response
-                self.sink.speak("Stopped.")
+                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                self.sink.speak("Stopped.", interaction_id=self._current_interaction_id)
                 output_produced = True
                 response_text = ""
                 self.current_probe.mark("llm_end")
@@ -783,7 +931,8 @@ class Coordinator:
 
                 playback_started = music_player.play_next(self.sink)
                 if not playback_started:
-                    self.sink.speak("No music playing.")
+                    # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                    self.sink.speak("No music playing.", interaction_id=self._current_interaction_id)
                     self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
                     output_produced = True
                 else:
@@ -805,7 +954,8 @@ class Coordinator:
                 from core.music_status import query_music_status
 
                 status = query_music_status()
-                self.sink.speak(status)
+                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                self.sink.speak(status, interaction_id=self._current_interaction_id)
                 self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
                 output_produced = True
 
@@ -874,7 +1024,8 @@ class Coordinator:
 
                 # Speak error message only once (if no playback started)
                 if error_message and not playback_started:
-                    self.sink.speak(error_message)
+                    # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                    self.sink.speak(error_message, interaction_id=self._current_interaction_id)
                     output_produced = True
 
                 # Monitor for interrupt during music playback
@@ -997,6 +1148,11 @@ class Coordinator:
             )
             raise
         finally:
+            # HARDENING STEP 3: Reset audio authority after each interaction
+            try:
+                self.audio_authority.reset()
+            except Exception as e:
+                self.logger.warning(f"[Iteration] Error resetting audio authority: {e}")
             self._is_processing.clear()
     
     def run(self) -> None:
@@ -1054,30 +1210,8 @@ class Coordinator:
 
                     def on_trigger_detected():
                         try:
-                            # HARD BARGE-IN INTERRUPT: Wake word can interrupt TTS
-                            if self._is_speaking.is_set():
-                                self.logger.info("[Wake] BARGE-IN INTERRUPT: Wake word detected while speaking!")
-                                # Immediately stop TTS playback
-                                try:
-                                    self.sink.stop_interrupt()
-                                    self.logger.info("[Wake] TTS stopped for barge-in")
-                                except Exception as e:
-                                    self.logger.warning(f"[Wake] Error stopping TTS: {e}")
-                                self._is_speaking.clear()
-                                # Re-enter LISTENING state
-                                self.state_machine.listening()
-                                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
-                            
-                            # Normal case: wake word detected while not speaking
-                            if self._is_processing.is_set():
-                                self.logger.info("[Iteration] Trigger ignored: already processing")
-                                return
-                            self.logger.info("[Wake] Wake word detected")
-                            self.state_machine.wake()
-                            self._last_utterance_time = time.time()
-                            self._play_wake_ack()
-                            # Process first interaction immediately using wake pre-roll
-                            self._handle_interaction(mark_wake=True)
+                            # HARDENING STEP 4: Atomic barge-in operation
+                            self._barge_in()
                         except Exception as e:
                             self.logger.error(f"[Iteration] Fatal error in on_trigger_detected: {e}", exc_info=True)
                             self.stop_requested = True
@@ -1513,7 +1647,8 @@ class Coordinator:
                 # Speak in main thread (blocking, event loop-safe)
                 # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
                 # This prevents Argo from interrupting itself with its own audio
-                self.sink.speak(response_text)
+                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
+                self.sink.speak(response_text, interaction_id=self._current_interaction_id)
                 
                 self.logger.info("[TTS] Response finished")
             except Exception as e:

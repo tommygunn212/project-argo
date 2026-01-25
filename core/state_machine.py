@@ -111,14 +111,16 @@ class StateMachine:
             new_state: Target state
             
         Returns:
-            True if transition succeeded, False if rejected
+            True if transition succeeded
+            
+        Raises:
+            RuntimeError: HARDENING STEP 5 - Fatal on invalid transitions (no silent failures)
         """
-        # Validate transition is allowed
+        # HARDENING STEP 5: Validate transition is allowed, raise on error (fatal)
         if not self._is_valid_transition(self._current_state, new_state):
-            logger.warning(
-                f"Invalid transition rejected: {self._current_state.value} → {new_state.value}"
-            )
-            return False
+            error_msg = f"Invalid transition: {self._current_state.value} → {new_state.value}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         # Perform transition
         old_state = self._current_state
@@ -235,6 +237,19 @@ class StateMachine:
             logger.debug("Stop audio ignored: not in SPEAKING state")
             return False
         
+        return self._transition(State.LISTENING)
+    
+    def listening(self) -> bool:
+        """
+        Force transition to LISTENING state.
+        
+        Used by barge-in to reset state after interrupt.
+        Will raise RuntimeError if not in SPEAKING state (fatal on invalid transitions).
+        
+        Returns:
+            True if transition succeeded
+        """
+        # HARDENING STEP 5: Use fatal transitions
         return self._transition(State.LISTENING)
     
     def sleep(self) -> bool:

@@ -293,6 +293,9 @@ class PiperOutputSink(OutputSink):
         self._on_playback_complete: Optional[Callable[[], None]] = None
         self._pending_text: str = ""
         
+        # HARDENING STEP 2: Interaction ID for zombie callback filtering
+        self._interaction_id: Optional[int] = None
+        
         # Start background worker thread (daemon so it stops when main thread exits)
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
@@ -327,6 +330,11 @@ class PiperOutputSink(OutputSink):
                         self._on_sentence_dequeued()
                     except Exception:
                         pass
+
+                # HARDENING STEP 2: Validate interaction ID (prevent zombie callbacks)
+                # If interaction_id was cleared by stop_interrupt(), skip playback
+                if self._interaction_id is None:
+                    continue
 
                 # Process sentence
                 self._set_playing(True)
@@ -615,7 +623,7 @@ class PiperOutputSink(OutputSink):
         with self._playback_lock:
             return not self._is_playing
     
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, interaction_id: Optional[int] = None) -> None:
         """
         Speak text synchronously (wrapper around send).
         
@@ -624,7 +632,10 @@ class PiperOutputSink(OutputSink):
         
         Args:
             text: Text to synthesize and play
+            interaction_id: HARDENING STEP 2: Monotonic ID to prevent zombie callbacks
         """
+        # HARDENING STEP 2: Store interaction ID (validates before playback)
+        self._interaction_id = interaction_id
         self.send(text)
     
     def stop_interrupt(self) -> None:
@@ -639,6 +650,9 @@ class PiperOutputSink(OutputSink):
         - Kill Piper subprocess immediately
         - Return instantly (no waiting)
         """
+        # HARDENING STEP 2: Invalidate interaction ID (prevents zombie callbacks)
+        self._interaction_id = None
+        
         self._stop_event.set()
         
         # Clear queue (discard pending sentences)
