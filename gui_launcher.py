@@ -296,7 +296,7 @@ class ArgoGUI:
             from core.speech_to_text import WhisperSTT
             from core.intent_parser import RuleBasedIntentParser
             from core.response_generator import LLMResponseGenerator
-            from core.output_sink import PiperOutputSink
+            from core.output_sink import get_output_sink
             from core.coordinator import Coordinator
             
             # Initialize components
@@ -313,7 +313,8 @@ class ArgoGUI:
             response_generator = LLMResponseGenerator()
             
             logging.info("[GUI] Creating OutputSink (TTS)...")
-            output_sink = PiperOutputSink()
+            # Use get_output_sink() factory to enable graceful fallback if Piper fails
+            output_sink = get_output_sink()
             
             # Create coordinator
             logging.info("[GUI] Creating Coordinator...")
