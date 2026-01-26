@@ -574,7 +574,7 @@ class PiperOutputSink(OutputSink):
 
             # Hardware drain
             sounddevice.wait()
-            time.sleep(0.5)
+            time.sleep(0.05)
 
             return total_frames / SAMPLE_RATE if total_frames else 0
         
