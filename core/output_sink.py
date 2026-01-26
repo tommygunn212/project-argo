@@ -73,6 +73,9 @@ VOICE_PROFILE = os.getenv("VOICE_PROFILE", "lessac").lower()
 PIPER_PROFILING = os.getenv("PIPER_PROFILING", "false").lower() == "true"
 """Enable timing probes for Piper audio operations (gated, non-blocking)."""
 
+FORCE_BLOCKING_TTS = os.getenv("FORCE_BLOCKING_TTS", "false").lower() == "true"
+"""Force blocking TTS (wait for all audio to play before returning). For testing only."""
+
 
 # ============================================================================
 # OUTPUT SINK INTERFACE (PART 1)
@@ -641,15 +644,48 @@ class PiperOutputSink(OutputSink):
         Used by Coordinator which uses sync interface.
         Queues text for background playback.
         
+        When FORCE_BLOCKING_TTS=true (testing mode):
+        - Waits for all sentences to be queued
+        - Waits for worker thread to play all sentences
+        - Returns only after audio is fully played
+        
+        When FORCE_BLOCKING_TTS=false (normal mode):
+        - Queues sentences and returns immediately
+        - Audio plays in background
+        
         Args:
             text: Text to synthesize and play
             interaction_id: HARDENING STEP 2: Monotonic ID to prevent zombie callbacks
         """
+        import time
+        
         # HARDENING STEP 2: Store interaction ID (validates before playback)
         self._interaction_id = interaction_id
         # INSTRUMENTATION: Log TTS start
         log_event(f"TTS START (interaction_id={interaction_id})")
         self.send(text)
+        
+        # FORCE_BLOCKING_TTS: Wait for all audio to be played (testing mode)
+        if FORCE_BLOCKING_TTS:
+            # Wait for queue to drain and worker thread to go idle
+            timeout_seconds = 30.0  # Safety timeout
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout_seconds:
+                # Check if queue is empty and worker is idle
+                if self.text_queue.empty() and self.is_idle():
+                    # Small sleep to ensure truly complete
+                    time.sleep(0.1)
+                    if self.text_queue.empty() and self.is_idle():
+                        break
+                
+                # Yield to allow worker thread to run
+                time.sleep(0.05)
+            
+            # If we hit timeout, log warning but don't fail
+            if time.time() - start_time >= timeout_seconds:
+                self.logger.warning(f"[TTS] FORCE_BLOCKING_TTS: Timeout waiting for playback to complete")
+
     
     def stop_interrupt(self) -> None:
         """
