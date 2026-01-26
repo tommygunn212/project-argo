@@ -176,7 +176,7 @@ class PorcupineWakeWordTrigger(InputTrigger):
         2. Start audio capture (default microphone)
         3. Feed frames to Porcupine continuously
         4. When wake word detected: invoke callback()
-        5. Exit (blocking call returns)
+        5. Continue listening (runs indefinitely)
         
         Args:
             callback: Function to call when wake word detected.
@@ -195,10 +195,6 @@ class PorcupineWakeWordTrigger(InputTrigger):
                 "Install with: pip install porcupine sounddevice"
             )
         
-        if self._hard_stop.is_set():
-            self.logger.info("[on_trigger] Hard stop active; skipping wake-word listen")
-            return
-
         self.logger.info("[on_trigger] Initializing Porcupine...")
         self.preroll_buffer.clear()  # Clear pre-roll buffer on each trigger listen
         
@@ -239,34 +235,17 @@ class PorcupineWakeWordTrigger(InputTrigger):
                 self._is_listening.set()
                 
                 import struct
-                # Listen until wake word detected
+                # Listen indefinitely for wake word
                 while True:
-                    if self._hard_stop.is_set():
-                        self.logger.info("[InputTrigger.Porcupine] Hard stop requested; exiting listen loop")
-                        break
-                    if self._paused.is_set():
-                        # Pause capture while TTS is speaking to avoid audio device contention
-                        if stream.active:
-                            try:
-                                stream.stop()
-                            except Exception:
-                                pass
-                        time.sleep(0.05)
-                        continue
-                    else:
-                        if not stream.active:
-                            try:
-                                stream.start()
-                            except Exception:
-                                pass
+                    if not stream.active:
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
                     self.logger.debug("[WakeLoop] frame tick")
                     frame, _ = stream.read(porcupine.frame_length)
                     audio_bytes = frame.tobytes()
                     self.logger.debug(f"[WakeLoop] audio bytes len={len(audio_bytes)}")
-
-                    if len(audio_bytes) != porcupine.frame_length * 2:
-                        continue
-
                     pcm = struct.unpack_from(
                         "h" * porcupine.frame_length,
                         audio_bytes
@@ -283,15 +262,13 @@ class PorcupineWakeWordTrigger(InputTrigger):
                     
                     # Check if wake word detected
                     if keyword_index >= 0:
+                        self.logger.info("[Porcupine] wake detected")
                         self.logger.info(f"[Wake Word] Detected! (keyword_index={keyword_index})")
                         
                         # Fire callback
                         self.logger.info("[Event] Invoking callback...")
                         callback()
                         self.logger.info("[Event] Callback complete")
-                        
-                        # Exit (blocking call returns)
-                        break
             finally:
                 # Ensure stream is properly closed
                 if stream is not None:

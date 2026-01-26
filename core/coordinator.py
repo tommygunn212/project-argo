@@ -57,6 +57,7 @@ This is controlled, bounded orchestration with short-term scratchpad memory.
 
 import logging
 import threading
+import queue
 import time
 import re
 from typing import Optional
@@ -81,22 +82,31 @@ from core.watchdog import Watchdog
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_authority import get_audio_authority
+from core.config import get_config
+
+# === INSTRUMENTATION: Defensive import wrapper ===
+try:
+    from core.instrumentation import log_event as log_event_impl, log_latency
+except Exception as e:
+    # Telemetry can NEVER crash ARGO. Graceful degradation to stdout.
+    logger_fallback = logging.getLogger(__name__)
+    logger_fallback.warning(f"[Instrumentation] Failed to import: {e}. Degrading to stdout.")
+    
+    def log_event_impl(message: str) -> None:
+        """Fallback: print to stdout instead of telemetry."""
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        print(f"[{ts}] {message}")
+    
+    def log_latency(stage: str, duration: Optional[float] = None) -> None:
+        """Fallback: no-op for latency logging."""
+        pass
 
 # === Logging ===
 logger = logging.getLogger(__name__)
 
 
-# === INSTRUMENTATION: Millisecond-precision event logging ===
-def log_event(message: str) -> None:
-    """
-    Log event with millisecond-precision timestamp.
-    
-    Format: [HH:MM:SS.mmm] MESSAGE (key=value)
-    
-    Used for atomicity verification: interrupt latency, ordering, overlap detection.
-    """
-    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    logger.info(f"[{ts}] {message}")
+# === INSTRUMENTATION: Use imported or fallback log_event ===
+log_event = log_event_impl
 
 
 class Coordinator:
@@ -228,7 +238,11 @@ class Coordinator:
         
         # HARDENING STEP 3: Audio authority for explicit resource ownership
         self.audio_authority = get_audio_authority()
-
+        
+        # Load config and lock microphone device
+        config = get_config()
+        self.input_device_index = config.get("audio.input_device_index", None)
+        self.logger.info(f"[Init] Audio input device locked to index: {self.input_device_index} (M-Track)")
         # Ensure global output sink uses this instance (streaming uses get_output_sink)
         try:
             from core.output_sink import set_output_sink
@@ -279,10 +293,13 @@ class Coordinator:
         self.interaction_count = 0
         self.stop_requested = False
 
+        # Wake event queue (Porcupine callback enqueues, main loop handles)
+        self._wake_event_queue = queue.SimpleQueue()
+        self._wake_listener_thread = None
+
         # HARDENING STEP 1: Monotonic interaction ID (prevents zombie callbacks)
-        self._interaction_id = 0
-        self._current_interaction_id = 0
-        self._last_mic_open_id = -1  # FIX 1: Track last MIC OPEN ID for reuse assertion
+        self.interaction_id = 0
+        self._last_mic_open_interaction_id = None
 
         # Python builder actuator (sandbox tools)
         self.builder = PythonBuilder()
@@ -332,13 +349,18 @@ class Coordinator:
     
     def _next_interaction_id(self) -> int:
         """
-        HARDENING STEP 1: Generate monotonic interaction ID.
-        Prevents zombie callbacks from speaking after interrupt.
+        DEPRECATED: This method violates the contract.
+        
+        CONTRACT: interaction_id increments ONLY in wake handler.
+        Any other increment is a fatal violation.
+        
+        Calling this method is forbidden. Use self.interaction_id directly.
         """
-        self._interaction_id += 1
-        # INSTRUMENTATION: Log interaction ID increment
-        log_event(f"INTERACTION_ID incremented (id={self._interaction_id})")
-        return self._interaction_id
+        raise RuntimeError(
+            "FATAL: _next_interaction_id() called. Contract violation: "
+            "interaction_id increments ONLY in wake handler (_handle_wake_event). "
+            "Any other increment is fatal."
+        )
     
     def _assert_no_id_reuse(self, new_id: int) -> None:
         """
@@ -360,6 +382,20 @@ class Coordinator:
         self._last_mic_open_id = new_id
         self.logger.debug(f"[Assert] Interaction ID verified: {new_id} > {self._last_mic_open_id - 1}")
 
+    def _assert_no_interaction_id_reuse(self):
+        if not hasattr(self, "_last_mic_open_interaction_id"):
+            self._last_mic_open_interaction_id = None
+
+        current_id = self.interaction_id
+
+        if self._last_mic_open_interaction_id is not None:
+            if current_id <= self._last_mic_open_interaction_id:
+                raise RuntimeError(
+                    f"FATAL: interaction_id reuse detected "
+                    f"(current={current_id}, last={self._last_mic_open_interaction_id})"
+                )
+
+        self._last_mic_open_interaction_id = current_id
     
     def get_dynamic_timeout(self, transcribed_text: str) -> float:
         """
@@ -481,6 +517,93 @@ class Coordinator:
             self._audio_state = new_state
         self.logger.info(f"[AudioState] {old_state} -> {new_state}")
 
+    def enqueue_wake_event(self) -> None:
+        """Enqueue a wake event from the Porcupine callback (thread-safe)."""
+        self._wake_event_queue.put(time.time())
+
+    def _start_wake_listener(self) -> None:
+        """Start the Porcupine listener thread (runs continuously)."""
+        if self._wake_listener_thread and self._wake_listener_thread.is_alive():
+            return
+
+        def on_trigger_detected() -> None:
+            try:
+                self.enqueue_wake_event()
+            except Exception as e:
+                self.logger.error(f"[Wake] Failed to enqueue wake event: {e}")
+
+        listener_thread = threading.Thread(
+            target=self.trigger.on_trigger,
+            args=(on_trigger_detected,),
+            daemon=True,
+            name="PorcupineWakeListener",
+        )
+        listener_thread.start()
+        self._wake_listener_thread = listener_thread
+
+    def _handle_wake_event(self) -> None:
+        """
+        Handle a queued wake event on the main coordinator thread.
+        Owns state transitions, interaction ID increment, and recording start.
+        """
+        # INSTRUMENTATION: Log wake word detection
+        log_event(f"WAKE_WORD detected (state={self.state_machine.current_state.value})")
+
+        if self._is_processing.is_set():
+            self.logger.info("[Wake] Already processing, ignoring wake event")
+            return
+
+        if self._is_speaking.is_set():
+            self.logger.info("[Wake] BARGE-IN: Wake word detected while speaking")
+            log_event("BARGE_IN start")
+
+            try:
+                self.audio_authority.hard_kill_output()
+                log_event("AUDIO KILLED")
+                self.logger.info("[Wake] Audio authority hard-killed output")
+            except Exception as e:
+                self.logger.warning(f"[Wake] Error hard-killing output: {e}")
+
+            try:
+                self.sink.stop_interrupt()
+                self.logger.info("[Wake] TTS stopped synchronously")
+            except Exception as e:
+                self.logger.warning(f"[Wake] Error stopping TTS: {e}")
+
+            self._is_speaking.clear()
+
+            try:
+                self.state_machine.listening()
+                log_event("STATE_CHANGE SPEAKING -> LISTENING (barge-in)")
+                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
+            except RuntimeError as e:
+                self.logger.error(f"[Wake] FATAL: Invalid state transition: {e}")
+                self.stop_requested = True
+                return
+            except Exception as e:
+                self.logger.warning(f"[Wake] Error setting LISTENING state: {e}")
+        else:
+            # Normal wake when not speaking
+            try:
+                if self.state_machine.is_asleep:
+                    self.state_machine.wake()
+            except RuntimeError as e:
+                self.logger.error(f"[Wake] FATAL: Invalid state transition: {e}")
+                self.stop_requested = True
+                return
+            except Exception as e:
+                self.logger.warning(f"[Wake] Error waking from sleep: {e}")
+                return
+
+        # LISTENING entry: increment interaction ID and validate
+        self.interaction_id += 1
+        self._assert_no_interaction_id_reuse()
+
+        self._last_utterance_time = time.time()
+        self._play_wake_ack()
+        # Process first interaction immediately using wake pre-roll
+        self._handle_interaction(mark_wake=True)
+
     def _is_input_active(self) -> bool:
         if self._input_stream_active:
             return True
@@ -545,104 +668,9 @@ class Coordinator:
 
     def _barge_in(self) -> None:
         """
-        HARDENING STEP 4: Atomic barge-in operation.
-        
-        When wake word detected (either while speaking or listening):
-        1. Generate new monotonic interaction ID
-        2. Hard-kill all audio output
-        3. Stop TTS playback synchronously
-        4. Force state to LISTENING
-        5. Sleep for audio physics (gap between interrupt and next recording)
-        6. Log ready for next interaction
-        
-        CRITICAL: This must be atomic. No callbacks, no races, no silent failures.
-        No interaction processing until this completes.
+        DEPRECATED: Use _handle_wake_event() on the main coordinator thread.
         """
-        # INSTRUMENTATION: Log barge-in entry
-        log_event("BARGE_IN start")
-        
-        # HARDENING STEP 2: Generate new interaction ID (invalidates old zombie callbacks)
-        self._current_interaction_id = self._next_interaction_id()
-        self.logger.info(f"[Barge] Generated new interaction_id: {self._current_interaction_id}")
-        
-        # HARDENING STEP 4: Check if currently speaking (needs interrupt)
-        if self._is_speaking.is_set():
-            self.logger.info("[Barge] BARGE-IN: Wake word detected while speaking")
-            
-            # INSTRUMENTATION: Log barge-in only when actually interrupting
-            log_event("BARGE_IN start")
-            
-            # FIX 1: Increment interaction_id on LISTENING entry (barge-in path)
-            self._current_interaction_id = self._next_interaction_id()
-            
-            # HARDENING STEP 3: Hard-kill audio output immediately
-            try:
-                self.audio_authority.hard_kill_output()
-                # INSTRUMENTATION: Log audio kill
-                log_event("AUDIO KILLED")
-                self.logger.info("[Barge] Audio authority hard-killed output")
-            except Exception as e:
-                self.logger.warning(f"[Barge] Error hard-killing output: {e}")
-            
-            # Stop TTS playback (synchronous, no timeout)
-            try:
-                self.sink.stop_interrupt()
-                self.logger.info("[Barge] TTS stopped synchronously")
-            except Exception as e:
-                self.logger.warning(f"[Barge] Error stopping TTS: {e}")
-            
-            # Clear speaking flag
-            self._is_speaking.clear()
-            
-            # Force state to LISTENING (atomic, no callbacks)
-            try:
-                self.state_machine.listening()
-                # INSTRUMENTATION: Log state change
-                log_event("STATE_CHANGE SPEAKING -> LISTENING (barge-in)")
-                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
-            except RuntimeError as e:
-                # HARDENING STEP 5: Fatal on invalid state transition (no silent failures)
-                self.logger.error(f"[Barge] FATAL: Invalid state transition: {e}")
-                self.stop_requested = True
-                return
-            except Exception as e:
-                self.logger.warning(f"[Barge] Error setting LISTENING state: {e}")
-            
-            # Physics gap: brief sleep to let Piper process die and audio settle
-            BARGE_IN_RESET_MS = 100
-            time.sleep(BARGE_IN_RESET_MS / 1000.0)
-            self.logger.info(f"[Barge] Physics gap: {BARGE_IN_RESET_MS}ms")
-            
-            # INSTRUMENTATION: Log barge-in complete
-            log_event("BARGE_IN complete")
-            self.logger.info("[Barge] Barge-in complete, ready for new interaction")
-        else:
-            # FIX 2: Normal wake word while not speaking - do NOT log BARGE_IN
-            self.logger.info("[Barge] WAKE_START: Not speaking, normal wake")
-            
-            # FIX 1: Increment interaction_id on LISTENING entry (wake path)
-            self._current_interaction_id = self._next_interaction_id()
-        # Continue with normal wake processing
-        if self._is_processing.is_set():
-            self.logger.info("[Barge] Already processing, ignoring trigger")
-            return
-        
-        self.logger.info("[Barge] Processing wake word")
-        try:
-            self.state_machine.wake()
-        except RuntimeError as e:
-            # HARDENING STEP 5: Fatal on invalid state transition (no silent failures)
-            self.logger.error(f"[Barge] FATAL: Invalid state transition: {e}")
-            self.stop_requested = True
-            return
-        except Exception as e:
-            self.logger.warning(f"[Barge] Error waking from sleep: {e}")
-            return
-        
-        self._last_utterance_time = time.time()
-        self._play_wake_ack()
-        # Process first interaction immediately using wake pre-roll
-        self._handle_interaction(mark_wake=True)
+        self._handle_wake_event()
 
     def _wait_for_speech_start(self, max_wait_seconds: float) -> Optional[list]:
         """
@@ -666,6 +694,7 @@ class Coordinator:
                 channels=1,
                 samplerate=self.AUDIO_SAMPLE_RATE,
                 dtype=np.int16,
+                device=self.input_device_index,
             )
             self._input_stream = stream
             self._input_stream_active = True
@@ -834,7 +863,7 @@ class Coordinator:
                 self._last_response = response_text
                 self.last_response_text = response_text
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(response_text, interaction_id=self._current_interaction_id)
+                self.sink.speak(response_text, interaction_id=self.interaction_id)
                 self.memory.append(
                     user_utterance=text,
                     parsed_intent=analysis_intent.intent_type.value,
@@ -971,7 +1000,7 @@ class Coordinator:
 
                 # Optional brief response
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak("Stopped.", interaction_id=self._current_interaction_id)
+                self.sink.speak("Stopped.", interaction_id=self.interaction_id)
                 output_produced = True
                 response_text = ""
                 self.current_probe.mark("llm_end")
@@ -989,7 +1018,7 @@ class Coordinator:
                 playback_started = music_player.play_next(self.sink)
                 if not playback_started:
                     # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self.sink.speak("No music playing.", interaction_id=self._current_interaction_id)
+                    self.sink.speak("No music playing.", interaction_id=self.interaction_id)
                     self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
                     output_produced = True
                 else:
@@ -1012,7 +1041,7 @@ class Coordinator:
 
                 status = query_music_status()
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(status, interaction_id=self._current_interaction_id)
+                self.sink.speak(status, interaction_id=self.interaction_id)
                 self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
                 output_produced = True
 
@@ -1082,7 +1111,7 @@ class Coordinator:
                 # Speak error message only once (if no playback started)
                 if error_message and not playback_started:
                     # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self.sink.speak(error_message, interaction_id=self._current_interaction_id)
+                    self.sink.speak(error_message, interaction_id=self.interaction_id)
                     output_produced = True
 
                 # Monitor for interrupt during music playback
@@ -1254,31 +1283,27 @@ class Coordinator:
         self.logger.info(f"[run] Max interactions: {self.MAX_INTERACTIONS}")
         self.logger.info(f"[run] Stop keywords: {self.STOP_KEYWORDS}")
         self.logger.info(f"[run] SessionMemory capacity: {self.memory.capacity}")
+
+        # Start Porcupine wake listener thread (runs continuously)
+        self._start_wake_listener()
         
         try:
             # Loop until stop condition
             while not self.stop_requested:
-                if self.state_machine.is_asleep:
-                    # TASK 17: Skip listening if currently speaking (half-duplex audio gate)
-                    if self._is_speaking.is_set():
-                        self.logger.info("[Loop] Sleeping but currently speaking; waiting...")
-                        time.sleep(0.1)
-                        continue
-
-                    def on_trigger_detected():
-                        try:
-                            # INSTRUMENTATION: Log wake word detection
-                            log_event(f"WAKE_WORD detected (state={self.state_machine.current_state.value})")
-                            # HARDENING STEP 4: Atomic barge-in operation
-                            self._barge_in()
-                        except Exception as e:
-                            self.logger.error(f"[Iteration] Fatal error in on_trigger_detected: {e}", exc_info=True)
-                            self.stop_requested = True
-
-                    self.logger.info("[Loop] Sleeping - listening for wake word...")
-                    self.trigger.on_trigger(on_trigger_detected)
+                # Handle queued wake events on main thread
+                try:
+                    self._wake_event_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    self._handle_wake_event()
                     if self.stop_requested:
                         break
+                    continue
+
+                if self.state_machine.is_asleep:
+                    self.logger.info("[Loop] Sleeping - waiting for wake event...")
+                    time.sleep(0.05)
                     continue
 
                 # Awake state: continuous listening
@@ -1445,13 +1470,13 @@ class Coordinator:
                 channels=1,
                 samplerate=self.AUDIO_SAMPLE_RATE,
                 dtype=np.int16,
+                device=self.input_device_index,
             )
             self._input_stream = stream
             self._input_stream_active = True
             stream.start()
             
             # INSTRUMENTATION: Log mic open
-            self._assert_no_interaction_id_reuse()  # FIX 1: Validate ID before MIC OPEN
             log_event("MIC OPEN")
             
             rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
@@ -1715,7 +1740,7 @@ class Coordinator:
                 # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
                 # This prevents Argo from interrupting itself with its own audio
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(response_text, interaction_id=self._current_interaction_id)
+                self.sink.speak(response_text, interaction_id=self.interaction_id)
                 
                 self.logger.info("[TTS] Response finished")
             except Exception as e:
