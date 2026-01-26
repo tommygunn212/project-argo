@@ -119,7 +119,7 @@ class PorcupineWakeWordTrigger(InputTrigger):
     
     Configuration (hardcoded for predictability):
     - Access Key: Obtained from PORCUPINE_ACCESS_KEY env var
-    - Wake Word: "picovoice" (default Porcupine wake word)
+    - Wake Word: Custom Porcupine model (keyword_paths)
     - Audio device: Default system microphone
     - Frame rate: 16kHz mono (Porcupine standard)
     
@@ -206,7 +206,6 @@ class PorcupineWakeWordTrigger(InputTrigger):
             # Initialize Porcupine (wake word detection) with custom model
             porcupine = pvporcupine.create(
                 access_key=self.access_key,
-                keywords=["porcupine"],  # Using built-in keyword as fallback
                 keyword_paths=["porcupine_key/hey-argo_en_windows_v4_0_0.ppn"]  # Custom "argo" model
             )
             
@@ -215,7 +214,15 @@ class PorcupineWakeWordTrigger(InputTrigger):
             self.logger.info(f"[Porcupine] Sample rate: {porcupine.sample_rate} Hz")
             
             # Start audio capture
-            self.logger.info("[Audio] Starting capture from default microphone...")
+            from core.config import get_config
+            config = get_config()
+            input_device_index = config.get("audio.input_device_index", None)
+            if input_device_index is not None:
+                self.logger.info(
+                    f"[Audio] Starting capture from input device index {input_device_index}..."
+                )
+            else:
+                self.logger.info("[Audio] Starting capture from default microphone...")
             
             stream = None
             try:
@@ -223,13 +230,15 @@ class PorcupineWakeWordTrigger(InputTrigger):
                     samplerate=porcupine.sample_rate,
                     channels=1,
                     blocksize=porcupine.frame_length,
-                    dtype='int16'
+                    dtype='int16',
+                    device=input_device_index
                 )
                 self._active_stream = stream
                 stream.start()
-                self.logger.info("[Audio] Listening for wake word 'picovoice'...")
+                self.logger.info("[Audio] Listening for wake word (custom Porcupine model)...")
                 self._is_listening.set()
                 
+                import struct
                 # Listen until wake word detected
                 while True:
                     if self._hard_stop.is_set():
@@ -250,7 +259,18 @@ class PorcupineWakeWordTrigger(InputTrigger):
                                 stream.start()
                             except Exception:
                                 pass
+                    self.logger.debug("[WakeLoop] frame tick")
                     frame, _ = stream.read(porcupine.frame_length)
+                    audio_bytes = frame.tobytes()
+                    self.logger.debug(f"[WakeLoop] audio bytes len={len(audio_bytes)}")
+
+                    if len(audio_bytes) != porcupine.frame_length * 2:
+                        continue
+
+                    pcm = struct.unpack_from(
+                        "h" * porcupine.frame_length,
+                        audio_bytes
+                    )
                     
                     # Maintain pre-roll buffer (circular buffer of recent frames)
                     if self.preroll_enabled:
@@ -259,7 +279,7 @@ class PorcupineWakeWordTrigger(InputTrigger):
                             self.preroll_buffer.pop(0)  # Remove oldest frame
                     
                     # Process frame
-                    keyword_index = porcupine.process(frame.squeeze())
+                    keyword_index = porcupine.process(pcm)
                     
                     # Check if wake word detected
                     if keyword_index >= 0:
@@ -379,7 +399,7 @@ class PorcupineWakeWordTrigger(InputTrigger):
             if self._porcupine_interrupt_detector is None:
                 self._porcupine_interrupt_detector = pvporcupine.create(
                     access_key=access_key,
-                    keywords=['picovoice']
+                    keyword_paths=["porcupine_key/hey-argo_en_windows_v4_0_0.ppn"]
                 )
             
             porcupine = self._porcupine_interrupt_detector
