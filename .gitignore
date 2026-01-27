@@ -21,11 +21,15 @@ config.json
 runtime/
 orchestrator/
 memory/
+.hf_cache/
+gem_test/
 
 # Temporary files
 temp/
 *.wav
 audio/debug/
+*.mp4
+*.jpg
 
 # IDE / OS
 .vscode/
