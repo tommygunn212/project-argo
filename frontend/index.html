@@ -1,0 +1,299 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARGO Deep Debugger v2.6</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.js"></script>
+    <script crossorigin src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+    <style>
+        body { background-color: #020617; color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+        .scrollbar-default::-webkit-scrollbar { width: 8px; }
+        .scrollbar-default::-webkit-scrollbar-track { background: #0f172a; }
+        .scrollbar-default::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        
+        /* Pipeline Animations */
+        @keyframes pulse-blue { 0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
+        .status-active { animation: pulse-blue 2s infinite; border-color: #3b82f6; color: #60a5fa; }
+        .status-idle { border-color: #1e293b; color: #475569; }
+        
+        /* Module Cards */
+        .module-card { background: linear-gradient(145deg, #0f172a, #1e293b); border: 1px solid #334155; }
+        .module-ready { border-color: #10b981; color: #34d399; }
+        .module-init { border-color: #f59e0b; color: #fbbf24; animation: pulse 2s infinite; }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.4",
+    "recharts": "https://esm.sh/recharts@^3.7.0",
+    "react/": "https://esm.sh/react@^19.2.4/"
+  }
+}
+</script>
+</head>
+<body>
+    <div id="root" class="h-screen w-screen flex flex-col"></div>
+    <script type="text/babel" data-presets="env,react,typescript">
+        const { useState, useEffect, useRef } = React;
+        const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } = window.Recharts || {};
+        
+        const SOLUTIONS = {
+            PIPER_MISSING: {
+                id: 'PIPER_MISSING',
+                level: 'CRITICAL',
+                title: "Piper TTS Not Found",
+                description: "The AI cannot speak because 'piper.exe' is missing from PATH.",
+                steps: ["Download Piper for Windows.", "Extract to C:\\piper.", "Add C:\\piper to System PATH."]
+            },
+            ALAN_VOICE_SETUP: {
+                id: 'ALAN_VOICE_SETUP',
+                level: 'INFO',
+                title: "Alan Voice Model Missing",
+                description: "The 'Alan' voice files are not in audio/piper/voices/.",
+                steps: ["Download 'en_GB-alan-low.onnx' & '.json'", "Place in audio/piper/voices/"]
+            }
+        };
+
+        const App = () => {
+            const [logs, setLogs] = useState([]);
+            const [pipelineStage, setPipelineStage] = useState('IDLE');
+            const [vadStats, setVadStats] = useState(Array(30).fill({ value: 0 }));
+            const [userText, setUserText] = useState('Waiting for speech...');
+            const [aiText, setAiText] = useState('Waiting for generation...');
+            const [currentVoice, setCurrentVoice] = useState('lessac');
+            const [activeSolutions, setActiveSolutions] = useState([]);
+            
+            // New State for Modules & Metrics
+            const [health, setHealth] = useState({ stt: 'Initializing...', llm: 'Initializing...', tts: 'Initializing...' });
+            const [modelInfo, setModelInfo] = useState({
+                stt: { name: 'Whisper', detail: 'Unknown' },
+                llm: { name: 'Ollama', detail: 'Unknown' },
+                tts: { name: 'Piper', detail: 'Unknown' }
+            });
+            const [latency, setLatency] = useState({ stt: null, llm: null, tts: null, total: null });
+            const [metrics, setMetrics] = useState({ attempts: 0, failures: 0 });
+            
+            const ws = useRef(null);
+
+            const connect = () => {
+                if (ws.current?.readyState === WebSocket.OPEN) return;
+                ws.current = new WebSocket('ws://localhost:8001/ws');
+                ws.current.onopen = () => console.log("Connected");
+                ws.current.onclose = () => setTimeout(connect, 3000);
+                ws.current.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    
+                    if (data.type === 'log') {
+                        const msg = data.payload;
+                        setLogs(p => [...p.slice(-200), { time: new Date().toLocaleTimeString().split(' ')[0], msg }]);
+
+                        // Parsing Logic
+                        if (msg.includes('User:')) setUserText(msg.split('User:')[1]);
+                        if (msg.includes('Argo:')) setAiText(msg.split('Argo:')[1]);
+                        
+                        // Health + Model Updates
+                        if (msg.includes('Loading Whisper Model:')) {
+                            const match = msg.match(/Loading Whisper Model:\s*([^\.]+\.[^\.]+)/);
+                            setModelInfo(m => ({...m, stt: { name: 'Whisper', detail: match?.[1] || 'Unknown' }}));
+                        }
+                        if (msg.includes('STT model warmed up') || msg.includes('[STT]')) {
+                            setHealth(h => ({...h, stt: 'Ready'}));
+                        }
+                        if (msg.includes('LLM model warmed up') || msg.includes('[LLM]') || msg.includes('Connecting to Ollama')) {
+                            setHealth(h => ({...h, llm: 'Ready'}));
+                            setModelInfo(m => ({...m, llm: { name: 'Ollama', detail: 'qwen2:latest' }}));
+                        }
+                        if (msg.includes('Voice switched to')) {
+                            const match = msg.match(/Voice switched to\s+(\w+)/i);
+                            setModelInfo(m => ({...m, tts: { name: 'Piper', detail: match?.[1] || 'voice' }}));
+                        }
+                        if (msg.includes('Piper not in PATH') || msg.includes('[TTS]') || msg.includes('Voice switched') || msg.includes('Voice profile')) {
+                            setHealth(h => ({...h, tts: 'Ready'}));
+                            if (msg.includes('[TTS] Speaking with')) {
+                                const match = msg.match(/Speaking with\s+(\w+)/i);
+                                setModelInfo(m => ({...m, tts: { name: 'Piper', detail: match?.[1] || 'voice' }}));
+                            }
+                        }
+                        
+                        // Metrics
+                        if (msg.includes('Starting Interaction')) setMetrics(m => ({...m, attempts: m.attempts + 1}));
+                        if (msg.includes('Pipeline Error') || msg.includes('Error connecting')) setMetrics(m => ({...m, failures: m.failures + 1}));
+
+                        // VAD Chart Data
+                        if (msg.includes('[VAD] Speech detected')) {
+                            const match = msg.match(/volume: ([\d\.]+)/);
+                            if (match) {
+                                setVadStats(prev => [...prev.slice(1), { value: parseFloat(match[1]) }]);
+                            }
+                        }
+                        
+                        // Error/Solution Triggers
+                        if (msg.includes('not found')) setActiveSolutions(p => [...new Set([...p, 'ALAN_VOICE_SETUP'])]);
+                        if (msg.includes('Piper not in PATH')) setActiveSolutions(p => [...new Set([...p, 'PIPER_MISSING'])]);
+                        if (msg.includes('Voice switched to')) setActiveSolutions(p => p.filter(s => s !== 'ALAN_VOICE_SETUP'));
+                    } 
+                    else if (data.type === 'metric') {
+                        const payload = data.payload || {};
+                        setLatency(prev => ({
+                            stt: payload.stt ?? prev.stt,
+                            llm: payload.llm ?? prev.llm,
+                            tts: payload.tts ?? prev.tts,
+                            total: payload.total ?? prev.total
+                        }));
+                    }
+                    else if (data.type === 'status') {
+                        setPipelineStage(data.payload);
+                        // If system reports READY, force all health to Ready (backup)
+                        if (data.payload === 'READY' || data.payload === 'LISTENING') {
+                            setHealth({ stt: 'Ready', llm: 'Ready', tts: 'Ready' });
+                        }
+                    }
+                };
+            };
+
+            const changeVoice = (v) => {
+                setCurrentVoice(v);
+                ws.current?.send(JSON.stringify({ type: 'set_voice', payload: v }));
+            };
+
+            useEffect(() => { connect(); return () => ws.current?.close(); }, []);
+
+            const getStepClass = (step) => {
+                const map = {
+                    'LISTENING': ['LISTENING', 'RECORDING'],
+                    'TRANSCRIBING': ['PROCESSING'],
+                    'THINKING': ['PROCESSING'],
+                    'SPEAKING': ['SPEAKING']
+                };
+                if (map[step].includes(pipelineStage)) return "status-active border-blue-500 text-blue-400 bg-blue-950/30";
+                return "status-idle border-slate-800 bg-slate-900";
+            };
+
+            return (
+                <div className="h-full flex flex-col bg-slate-950 p-6 gap-4 overflow-hidden">
+                    {/* Header with Metrics */}
+                    <div className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xl">
+                        <div>
+                            <h1 className="text-2xl font-black text-blue-400 tracking-tight">ARGO <span className="text-slate-600 font-mono text-sm">TROUBLESHOOTER v2.6</span></h1>
+                            <div className="flex items-center gap-2 mt-1">
+                                <div className={`w-2 h-2 rounded-full ${ws.current?.readyState === 1 ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                                <span className="text-xs text-slate-500 font-mono uppercase">{ws.current?.readyState === 1 ? 'Online' : 'Offline'}</span>
+                            </div>
+                        </div>
+                        
+                        {/* Metrics Counter */}
+                        <div className="flex gap-4 items-center">
+                            <div className="bg-slate-950 px-4 py-2 rounded border border-slate-800 text-center">
+                                <div className="text-[10px] text-slate-500 uppercase font-bold">Attempts</div>
+                                <div className="text-xl font-mono text-slate-200">{metrics.attempts}</div>
+                            </div>
+                            <div className="bg-slate-950 px-4 py-2 rounded border border-slate-800 text-center">
+                                <div className="text-[10px] text-slate-500 uppercase font-bold">Failures</div>
+                                <div className="text-xl font-mono text-red-400">{metrics.failures}</div>
+                            </div>
+                        </div>
+
+                        {/* Voice Controls */}
+                        <div className="flex gap-3">
+                            <button onClick={() => changeVoice('lessac')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'lessac' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>LESSAC (US)</button>
+                            <button onClick={() => changeVoice('alan')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alan' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALAN (GB)</button>
+                        </div>
+                    </div>
+
+                    {/* System Health Modules */}
+                    <div className="grid grid-cols-3 gap-4">
+                        {Object.entries(health).map(([key, status]) => (
+                            <div key={key} className={`p-4 rounded-xl flex flex-col items-center justify-center border transition-all ${status === 'Ready' ? 'bg-emerald-950/20 border-emerald-900' : 'bg-slate-900 border-slate-800'}`}>
+                                <div className="text-2xl mb-1">{key === 'stt' ? '⏳' : key === 'llm' ? '🧠' : '🗣️'}</div>
+                                <div className="text-xs font-black text-slate-500 uppercase tracking-widest">{key.toUpperCase()}</div>
+                                <div className={`text-xs font-mono mt-1 ${status === 'Ready' ? 'text-emerald-400' : 'text-amber-400 animate-pulse'}`}>{status}</div>
+                                <div className="text-[10px] font-mono mt-1 text-slate-400">
+                                    {modelInfo[key]?.name} {modelInfo[key]?.detail ? `(${modelInfo[key].detail})` : ''}
+                                </div>
+                                {latency[key] !== null && (
+                                    <div className="text-[10px] font-mono text-blue-300">Latency: {Math.round(latency[key])} ms</div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Solutions Alert */}
+                    {activeSolutions.map(key => (
+                        <div key={key} className="bg-amber-950/30 border-l-4 border-amber-500 p-4 rounded-r-xl flex justify-between items-center">
+                            <div>
+                                <h2 className="font-bold text-amber-100">{SOLUTIONS[key].title}</h2>
+                                <p className="text-xs text-amber-200/70">{SOLUTIONS[key].description}</p>
+                            </div>
+                            <div className="text-xs text-amber-400 font-mono bg-amber-900/50 p-2 rounded">
+                                {SOLUTIONS[key].steps.map((s,i) => <div key={i}>{i+1}. {s}</div>)}
+                            </div>
+                        </div>
+                    ))}
+
+                    {/* Pipeline Steps */}
+                    <div className="grid grid-cols-4 gap-4">
+                        {['LISTENING', 'TRANSCRIBING', 'THINKING', 'SPEAKING'].map(step => (
+                            <div key={step} className={`p-4 rounded-lg border-b-2 flex flex-col items-center justify-center transition-all duration-300 ${getStepClass(step)}`}>
+                                <div className="text-2xl mb-2">
+                                    {step === 'LISTENING' ? '👂' : step === 'TRANSCRIBING' ? '📝' : step === 'THINKING' ? '🧠' : '🔊'}
+                                </div>
+                                <div className="text-[10px] font-bold tracking-widest">{step}</div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Main Interaction Area */}
+                    <div className="flex gap-4 min-h-[150px]">
+                        <div className="flex-1 bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col">
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">Microphone Input (STT)</div>
+                            <div className="flex-1 font-mono text-lg text-blue-200 leading-relaxed overflow-y-auto">
+                                {pipelineStage === 'RECORDING' ? <span className="animate-pulse">...Processing Audio...</span> : userText}
+                            </div>
+                        </div>
+                        <div className="flex-[1.5] bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col">
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">AI Response (LLM)</div>
+                            <div className="flex-1 font-mono text-lg text-emerald-200 leading-relaxed overflow-y-auto">
+                                {pipelineStage === 'PROCESSING' ? <span className="animate-pulse">...Generating Response...</span> : aiText}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* VAD Chart */}
+                    <div className="h-24 bg-slate-900 rounded-xl border border-slate-800 p-4 relative overflow-hidden">
+                        <div className="absolute top-2 left-4 text-xs font-bold text-slate-500 uppercase z-10">Audio Input Levels (VAD)</div>
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={vadStats}>
+                                <defs>
+                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <ReferenceLine y={1.5} stroke="#ef4444" strokeDasharray="3 3" />
+                                <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" isAnimationActive={false} />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Logs */}
+                    <div className="flex-1 bg-black p-4 font-mono text-[10px] overflow-y-auto border border-slate-800 rounded-lg text-gray-500 shadow-inner">
+                         {logs.map((l, i) => (
+                             <div key={i} className="hover:bg-slate-900/50 px-1">
+                                 <span className="text-slate-600">[{l.time}]</span> 
+                                 <span className={l.msg.includes('ERROR') ? 'text-red-400' : l.msg.includes('[VAD]') ? 'text-slate-600' : 'text-slate-300'}> {l.msg}</span>
+                             </div>
+                         ))}
+                    </div>
+                </div>
+            );
+        };
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

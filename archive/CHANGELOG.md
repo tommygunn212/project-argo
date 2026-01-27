@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [Unreleased] — VAD-only pipeline + UI debugger
+
+### Added
+- Always-listening VAD pipeline (wake word removed)
+- UI debugger WebSocket stream with status + latency cards
+- Piper voice integration (local TTS)
+
+### Changed
+- Pipeline serialized with interaction lock to prevent overlap
+- WebSocket server hardened against handshake errors
+- Frontend served from local `/frontend/index.html`
+
+### Fixed
+- Whisper input shape handling for single-channel audio
+- TTS playback cut-offs from partial audio writes
+
 ## [v1.0.0-voice-core] — 2026-01-18
 
 ### Foundation Release: Voice System Complete

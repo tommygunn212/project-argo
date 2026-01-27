@@ -69,6 +69,7 @@ _DEFAULT_CONFIG = {
     "audio": {
         "sample_rate": 16000,
         "device_name": None,
+        "input_device_index": 2,  # M-Track: Locked microphone (no autodetect)
         "max_recording_duration": 10.0,
         "silence_timeout_seconds": 2.5,
         "silence_threshold": 30

@@ -99,6 +99,10 @@ class WhisperSTT(SpeechToText):
         except Exception as e:
             raise ValueError(f"Failed to parse audio: {e}")
 
+        # Boost quiet speech slightly before Whisper
+        audio_array = audio_array * 1.8
+        audio_array = np.clip(audio_array, -1.0, 1.0)
+
         # Transcribe
         result = self.model.transcribe(
             audio_array,

@@ -36,6 +36,7 @@ from core.config import ENABLE_LLM_TTS_STREAMING, get_config
 from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
 from core.watchdog import Watchdog
 from core.output_sink import get_output_sink
+from core.instrumentation import log_event
 
 # Minimal stop-word list for semantic overlap guard
 STOP_WORDS = {
@@ -282,7 +283,12 @@ class LLMResponseGenerator(ResponseGenerator):
 
                             self.logger.info("[generate] Correction inheritance: adapting previous response (mode=%s)", mode)
                             # Call LLM directly to adapt previous response
-                            response_text = self._call_llm(prompt)
+                            try:
+                                response_text = self._call_llm(prompt)
+                            except Exception as llm_error:
+                                self.logger.error(f"[generate] LLM call failed in correction inheritance: {llm_error}")
+                                log_event("LLM_UNAVAILABLE")
+                                raise  # Re-raise to outer handler which will skip correction inheritance
                             response_text = self._enhance_response(response_text)
                             return self._finalize_response(response_text, intent)
         except Exception as e:
@@ -373,8 +379,12 @@ class LLMResponseGenerator(ResponseGenerator):
 
         except Exception as e:
             self.logger.error(f"[generate] LLM call failed: {e}")
-            raise
-
+            log_event("LLM_UNAVAILABLE")
+            # Return fallback response without raising
+            return (
+                "My internal brain is offline right now, "
+                "but I'm still listening. Give me a second to reconnect."
+            )
     def _build_prompt(
         self,
         intent_type: str,

@@ -283,9 +283,17 @@ class ArgoGUI:
             # CRITICAL: Lock input device BEFORE any component initialization
             # This must happen before PorcupineWakeWordTrigger is created
             import sounddevice as sd
+            from core.config import get_config
             try:
-                sd.default.device = (1, None)  # Brio microphone at index 1
-                logging.info("[GUI] Input device locked to index 1 (Brio microphone)")
+                config = get_config()
+                input_device_index = config.get("audio.input_device_index", None)
+                if input_device_index is not None:
+                    sd.default.device = (input_device_index, None)
+                    logging.info(
+                        f"[GUI] Input device locked to index {input_device_index}"
+                    )
+                else:
+                    logging.warning("[GUI] Input device not set in config")
             except Exception as e:
                 logging.warning(f"[GUI] Could not lock device: {e}")
             
