@@ -22,7 +22,10 @@ import os
 from pathlib import Path
 
 from core.instrumentation import log_event
-from core.config import get_runtime_overrides
+from core.config import get_runtime_overrides, get_config
+from core.intent_parser import RuleBasedIntentParser, IntentType
+from core.music_player import get_music_player
+from core.music_status import query_music_status
 
 class ArgoPipeline:
     def __init__(self, audio_manager, websocket_broadcast):
@@ -35,6 +38,18 @@ class ArgoPipeline:
         self.illegal_transition_details = None
         self.timeline_events = []
         self.runtime_overrides = get_runtime_overrides()
+        try:
+            self._config = get_config()
+        except Exception:
+            self._config = None
+        self._intent_parser = RuleBasedIntentParser()
+        self._last_stt_metrics = None
+        self._serious_mode_keywords = {
+            "help", "urgent", "emergency", "panic", "stuck", "broken", "crash",
+            "error", "fail", "failure", "frustrated", "angry", "upset",
+            "deadline", "production", "incident", "outage",
+        }
+        self.llm_enabled = True
 
         # State machine
         self._state_lock = threading.Lock()
@@ -58,7 +73,7 @@ class ArgoPipeline:
         # Default voice
         self.voices = {
             "lessac": "audio/piper/voices/en_US-lessac-medium.onnx",
-            "alan": "audio/piper/voices/en_GB-alan-low.onnx"
+            "alan": "audio/piper/voices/en_GB-alan-medium.onnx"
         }
         self.current_voice_key = "lessac"
         self.piper_model_path = self.voices["lessac"]
@@ -86,6 +101,9 @@ class ArgoPipeline:
         if not text or not text.strip():
             return ""
         cleaned = text
+        # Remove system diagnostics from spoken output
+        cleaned = re.sub(r"\b(VAD|STT|LLM|TTS|AUDIO|THREAD|DEBUG)\b", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(interaction_id|rms|peak|silence|threshold)\b", "", cleaned, flags=re.IGNORECASE)
         # Strip markdown emphasis and inline code markers
         cleaned = re.sub(r"[`*_#]+", "", cleaned)
         # Convert markdown links: [text](url) -> text
@@ -117,12 +135,16 @@ class ArgoPipeline:
         except Exception as e:
             self.logger.error(f"STT Warmup Error: {e}")
         
-        try:
-            client = ollama.Client(host='http://127.0.0.1:11434')
-            client.generate(model='qwen2:latest', prompt='hi', stream=False)
-            self.logger.info("LLM model warmed up")
-        except Exception as e:
-            self.logger.warning(f"LLM Warmup Warning: {e}")
+        if self.llm_enabled:
+            try:
+                model_name = "qwen:latest"
+                if self._config is not None:
+                    model_name = self._config.get("llm.model", model_name)
+                client = ollama.Client(host='http://127.0.0.1:11434')
+                client.generate(model=model_name, prompt='hi', stream=False)
+                self.logger.info("LLM model warmed up")
+            except Exception as e:
+                self.logger.warning(f"LLM Warmup Warning: {e}")
         
         self.broadcast("status", "READY")
 
@@ -241,6 +263,14 @@ class ArgoPipeline:
                 "silence_ratio": silence_ratio,
                 "confidence": confidence_proxy,
             })
+            self._last_stt_metrics = {
+                "text_len": len(text),
+                "duration_s": duration_s,
+                "rms": rms,
+                "peak": peak,
+                "silence_ratio": silence_ratio,
+                "confidence": confidence_proxy,
+            }
             return text
         except Exception as e:
             self.logger.error(f"[STT] Failed: {e}", exc_info=True)
@@ -248,14 +278,23 @@ class ArgoPipeline:
             return ""
 
     def generate_response(self, text, interaction_id: str = ""):
+        if not self.llm_enabled:
+            self.logger.info("LLM offline: skipping generation")
+            return ""
+        mode = self._resolve_personality_mode()
+        serious_mode = self._is_serious(text)
+        prompt = self._build_llm_prompt(text, mode, serious_mode)
         self.logger.info(f"[LLM] Prompt: '{text}'")
         full_response = ""
         try:
+            model_name = "qwen:latest"
+            if self._config is not None:
+                model_name = self._config.get("llm.model", model_name)
             client = ollama.Client(host='http://127.0.0.1:11434')
             self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
             start = time.perf_counter()
             first_token_ms = None
-            stream = client.generate(model='qwen2:latest', prompt=text, stream=True)
+            stream = client.generate(model=model_name, prompt=prompt, stream=True)
             
             for chunk in stream:
                 if self.stop_signal.is_set():
@@ -280,6 +319,7 @@ class ArgoPipeline:
                 "first_token_ms": first_token_ms,
                 "total_ms": total_ms,
             })
+            full_response = self._strip_prompt_artifacts(full_response)
             self.logger.info(f"[LLM] Response: '{full_response[:60]}...'")
             return full_response
         except Exception as e:
@@ -287,11 +327,125 @@ class ArgoPipeline:
             self._record_timeline("LLM_ERROR", stage="llm", interaction_id=interaction_id)
             return "[Error connecting to LLM]"
 
+    def set_llm_enabled(self, enabled: bool) -> None:
+        self.llm_enabled = bool(enabled)
+
+    def _resolve_personality_mode(self) -> str:
+        try:
+            mode = self.runtime_overrides.get("personality_mode")
+            if not mode and self._config is not None:
+                mode = self._config.get("personality.mode", "mild")
+        except Exception:
+            mode = "mild"
+        return mode or "mild"
+
+    def _is_serious(self, text: str) -> bool:
+        if not text:
+            return False
+        lower = text.lower()
+        return any(kw in lower for kw in self._serious_mode_keywords)
+
+    def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool) -> str:
+        critical = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
+        if serious_mode:
+            persona = (
+                "You are ARGO in SERIOUS_MODE.\n"
+                "Tone: clean, calm, surgical. No jokes. No sarcasm.\n"
+                "Give a direct answer, then a brief explanation.\n"
+                "No fluff. No theatrics. No filler.\n"
+            )
+        elif mode == "tommy_gunn":
+            persona = (
+                "You are ARGO in TOMMY GUNN MODE (Dry, Smart, Amused).\n"
+                "Tone: sharp, well-read adult. Dry and observational. Calm confidence.\n"
+                "Required flow: Dry hook (1 sentence) → Direct factual correction → Plain explanation → Wry observation on myth origin → Authority close.\n"
+                "No greetings. No questions at the end unless user explicitly asked for follow-ups.\n"
+                "Humor: one dry jab max, must not add new info. If in doubt, remove it.\n"
+                "Metaphors optional, brief, grounded. No stacked metaphors.\n"
+                "SERIOUS_MODE: drop humor entirely, skip dry hook, deliver facts cleanly and directly.\n"
+                "Do NOT output section labels (e.g., 'Dry hook:', 'Direct factual correction:', 'Plain explanation:', 'Wry observation:', 'Authority close:').\n"
+                "Do NOT repeat system instructions or flags like SERIOUS_MODE or CRITICAL.\n"
+                "No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
+                "Never include system diagnostics in responses.\n"
+            )
+        else:
+            persona = (
+                "You are ARGO, a veteran mentor.\n"
+                "You speak clearly, confidently, and with quiet humor.\n"
+                "Start with a direct observation or conclusion.\n"
+                "Explain only what matters.\n"
+                "End with a line that adds perspective or a small smile.\n"
+                "Do not perform, hype, or explain yourself.\n"
+            )
+        return f"{persona}{critical}User: {user_text}\nResponse:"
+
+    def _strip_prompt_artifacts(self, text: str) -> str:
+        if not text:
+            return text
+        text = re.sub(r"\bSERIOUS_MODE\b[:\s\S]*$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bCRITICAL\b[:\s\S]*$", "", text, flags=re.IGNORECASE)
+        labels = [
+            r"dry hook",
+            r"direct factual correction",
+            r"plain explanation",
+            r"wry observation",
+            r"authority close",
+        ]
+        for label in labels:
+            text = re.sub(rf"\b{label}\b\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        return text
+
+    def _build_count_response(self, text: str) -> str:
+        target = self._parse_count_target(text)
+        if target < 1:
+            target = 1
+        target = min(target, 50)
+        return ", ".join(str(i) for i in range(1, target + 1))
+
+    def _parse_count_target(self, text: str) -> int:
+        if not text:
+            return 5
+        match = re.search(r"\b(\d+)\b", text)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 5
+        words = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+            "six": 6,
+            "seven": 7,
+            "eight": 8,
+            "nine": 9,
+            "ten": 10,
+            "eleven": 11,
+            "twelve": 12,
+            "thirteen": 13,
+            "fourteen": 14,
+            "fifteen": 15,
+            "sixteen": 16,
+            "seventeen": 17,
+            "eighteen": 18,
+            "nineteen": 19,
+            "twenty": 20,
+        }
+        for word, value in words.items():
+            if re.search(rf"\b{word}\b", text, flags=re.IGNORECASE):
+                return value
+        return 5
+
     def speak(self, text, interaction_id: str = ""):
         if not self.runtime_overrides.get("tts_enabled", True):
             self.logger.info("[TTS] Disabled by runtime override")
             return
         self.logger.info(f"[TTS] Speaking with {self.current_voice_key}...")
+        if self.current_state == "TRANSCRIBING":
+            self.transition_state("THINKING", interaction_id=interaction_id, source="tts")
         self.transition_state("SPEAKING", interaction_id=interaction_id, source="tts")
         self.stop_signal.clear()
         self.is_speaking = True
@@ -405,8 +559,131 @@ class ArgoPipeline:
                 self.logger.warning("No speech recognized.")
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                 return
+            stt_conf = 0.0
+            try:
+                stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
+            except Exception:
+                stt_conf = 0.0
+            if stt_conf < 0.15 or not user_text.strip():
+                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
 
             self.broadcast("log", f"User: {user_text}")
+
+            intent = None
+            try:
+                intent = self._intent_parser.parse(user_text)
+            except Exception:
+                intent = None
+
+            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
+            user_text_lower = user_text.lower()
+            if any(term in user_text_lower for term in stop_terms):
+                music_player = get_music_player()
+                if music_player.is_playing():
+                    self.logger.info("[ARGO] Active music detected")
+                    music_player.stop()
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+
+            if intent and intent.intent_type in {
+                IntentType.MUSIC,
+                IntentType.MUSIC_STOP,
+                IntentType.MUSIC_NEXT,
+                IntentType.MUSIC_STATUS,
+            }:
+                if not self.runtime_overrides.get("music_enabled", True):
+                    msg = "Music is disabled."
+                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                        self.speak(msg, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+
+                music_player = get_music_player()
+                blocked = music_player.preflight()
+                if blocked:
+                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                        self.speak("Music library not indexed yet.", interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+                playback_started = False
+                error_message = ""
+
+                if intent.intent_type == IntentType.MUSIC_STOP:
+                    music_player.stop()
+                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                        self.speak("Stopped.", interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+
+                if intent.intent_type == IntentType.MUSIC_NEXT:
+                    playback_started = music_player.play_next(None)
+                    if not playback_started:
+                        error_message = "No music playing."
+
+                elif intent.intent_type == IntentType.MUSIC_STATUS:
+                    status = query_music_status()
+                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                        self.speak(status, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+
+                else:
+                    artist = intent.artist
+                    title = intent.title
+                    do_not_try_genre_lookup = bool(title)
+                    explicit_genre = bool(getattr(intent, "explicit_genre", False))
+                    if getattr(intent, "is_generic_play", False) and not artist and not title and not intent.keyword:
+                        playback_started = music_player.play_random(None)
+                        if not playback_started:
+                            error_message = "Your music library is empty or unavailable."
+                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                        return
+                    if title:
+                        playback_started = music_player.play_by_song(title, None)
+                    if not playback_started and artist:
+                        playback_started = music_player.play_by_artist(artist, None)
+                    if not playback_started and intent.keyword:
+                        keyword = intent.keyword
+                        if explicit_genre and not do_not_try_genre_lookup:
+                            playback_started = music_player.play_by_genre(keyword, None)
+                        if not playback_started:
+                            playback_started = music_player.play_by_keyword(keyword, None)
+                        if not playback_started:
+                            error_message = f"No music found for '{keyword}'."
+                    if not playback_started and not artist and not title and not intent.keyword:
+                        playback_started = music_player.play_random(None)
+                        if not playback_started:
+                            error_message = "No music available."
+
+                if intent.intent_type == IntentType.MUSIC and not playback_started and title:
+                    setattr(intent, "unresolved", True)
+                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                        self.speak("I can’t find that track in your library.", interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+
+                if error_message and self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak(error_message, interaction_id=interaction_id)
+
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+
+            if intent and intent.intent_type == IntentType.COUNT:
+                response = self._build_count_response(user_text)
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
 
             self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
             ai_text = self.generate_response(user_text, interaction_id=interaction_id)

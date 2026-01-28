@@ -16,8 +16,23 @@ Does NOT:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, Tuple
 import re
+import logging
+
+MUSIC_FILLER_WORDS = {
+    "play", "me", "a", "the", "some", "good", "song", "music", "from"
+}
+MUSIC_MODIFIER_WORDS = {"good", "best", "random", "favorite", "favourite"}
+GENERIC_PLAY_PHRASES = {
+    "play",
+    "play music",
+    "play some music",
+    "play a song",
+    "play some songs",
+    "play something",
+    "surprise me",
+}
 
 
 class IntentType(Enum):
@@ -25,6 +40,7 @@ class IntentType(Enum):
     GREETING = "greeting"
     QUESTION = "question"
     COMMAND = "command"
+    COUNT = "count"
     MUSIC = "music"
     MUSIC_STOP = "music_stop"
     MUSIC_NEXT = "music_next"
@@ -44,20 +60,34 @@ class Intent:
     - confidence: Simple score [0.0, 1.0] (1.0 = high confidence, 0.0 = low)
     - raw_text: Original input text (preserved for debugging)
     - keyword: Optional keyword extracted from command (for MUSIC intents)
+    - artist: Optional artist extracted (for MUSIC intents)
+    - title: Optional title extracted (for MUSIC intents)
+    - modifiers: Optional modifiers extracted (for MUSIC intents)
+    - is_generic_play: True if intent is a generic play request
     """
     intent_type: IntentType
     confidence: float
     raw_text: str
     keyword: Optional[str] = None
+    artist: Optional[str] = None
+    title: Optional[str] = None
+    modifiers: Optional[List[str]] = None
+    is_generic_play: bool = False
     serious_mode: bool = False
+    unresolved: bool = False
+    explicit_genre: bool = False
 
     def __str__(self) -> str:
         """Human-readable representation."""
         keyword_str = f", keyword='{self.keyword}'" if self.keyword else ""
+        artist_str = f", artist='{self.artist}'" if self.artist else ""
+        title_str = f", title='{self.title}'" if self.title else ""
+        modifiers_str = f", modifiers={self.modifiers}" if self.modifiers else ""
+        generic_str = ", generic_play=true" if self.is_generic_play else ""
         serious_str = ", serious_mode=true" if self.serious_mode else ""
         return (
             f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}"
-            f"{keyword_str}{serious_str}, text='{self.raw_text[:50]}')"
+            f"{keyword_str}{artist_str}{title_str}{modifiers_str}{generic_str}{serious_str}, text='{self.raw_text[:50]}')"
         )
 
 
@@ -96,6 +126,7 @@ class RuleBasedIntentParser(IntentParser):
 
     def __init__(self):
         """Initialize hardcoded rules."""
+        self.logger = logging.getLogger(__name__)
         # Greeting keywords (case-insensitive)
         self.greeting_keywords = {
             "hello",
@@ -234,6 +265,7 @@ class RuleBasedIntentParser(IntentParser):
             "play zeppelin",
         }
 
+
         # Sleep command phrases (high priority, no LLM)
         self.sleep_phrases = {
             "sleep",
@@ -325,8 +357,8 @@ class RuleBasedIntentParser(IntentParser):
         if not text or not text.strip():
             raise ValueError("text is empty")
 
-        text = text.strip()
-        text_lower = text.lower()
+        text_original = text.strip()
+        text_lower = text_original.lower()
 
         # Phonetic fixes for common mishears
         phonetic_fixes = {
@@ -341,7 +373,8 @@ class RuleBasedIntentParser(IntentParser):
 
         # Strip wake word prefix (e.g., "argo, ...") from parsing logic
         text_lower = re.sub(r"^(argo[\s,]+)+", "", text_lower).strip()
-        text = text_lower
+        text_original = re.sub(r"^(argo[\s,]+)+", "", text_original, flags=re.IGNORECASE).strip()
+        text = text_original
         tokens = re.findall(r"[a-z0-9']+", text_lower)
         first_word = tokens[0] if tokens else ""
 
@@ -359,7 +392,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.SLEEP,
                 confidence=1.0,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -368,7 +401,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.DEVELOP,
                 confidence=0.98,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -377,7 +410,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.QUESTION,
                 confidence=0.9,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -387,7 +420,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.MUSIC_STOP,
                 confidence=1.0,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -397,7 +430,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.MUSIC_NEXT,
                 confidence=1.0,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -407,7 +440,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.MUSIC_STATUS,
                 confidence=1.0,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -418,12 +451,37 @@ class RuleBasedIntentParser(IntentParser):
         has_music_term = any(term in text_lower for term in music_terms)
         has_genre_play = any(f"play {genre}" in text_lower for genre in self.music_genres)
         if (has_play or has_music_term) and not any(keyword in text_lower for keyword in self.tech_keywords):
-            keyword = self._extract_music_keyword(text_lower)
+            artist, title, modifiers = self._extract_music_components(text_original, text_lower)
+            keyword = title or artist or self._extract_music_keyword(text_lower)
+            is_generic_play = False
+            if not artist and not title and not keyword:
+                normalized_phrase = " ".join(re.findall(r"[a-z0-9']+", text_lower)).strip()
+                is_generic_play = normalized_phrase in GENERIC_PLAY_PHRASES
+            self.logger.debug(
+                "[INTENT] artist=\"%s\" title=%s modifiers=%s",
+                artist,
+                f"\"{title}\"" if title else "None",
+                modifiers or [],
+            )
             return Intent(
                 intent_type=IntentType.MUSIC,
                 confidence=0.95,
-                raw_text=text,
+                raw_text=text_original,
                 keyword=keyword,
+                artist=artist,
+                title=title,
+                modifiers=modifiers or [],
+                is_generic_play=is_generic_play,
+                serious_mode=serious_mode,
+                explicit_genre=has_genre_play,
+            )
+
+        # Rule 4.5: COUNT intent (deterministic, no LLM)
+        if "count" in tokens:
+            return Intent(
+                intent_type=IntentType.COUNT,
+                confidence=0.9,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -434,7 +492,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.COMMAND,
                 confidence=0.9,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -443,7 +501,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.QUESTION,
                 confidence=1.0,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -452,7 +510,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.QUESTION,
                 confidence=0.85,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -461,7 +519,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.GREETING,
                 confidence=0.95,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -470,7 +528,7 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.COMMAND,
                 confidence=0.75,
-                raw_text=text,
+                raw_text=text_original,
                 serious_mode=serious_mode,
             )
 
@@ -478,9 +536,90 @@ class RuleBasedIntentParser(IntentParser):
         return Intent(
             intent_type=IntentType.UNKNOWN,
             confidence=0.1,
-            raw_text=text,
+            raw_text=text_original,
             serious_mode=serious_mode,
         )
+
+    def _extract_music_components(
+        self,
+        text_original: str,
+        text_lower: str,
+    ) -> Tuple[Optional[str], Optional[str], List[str]]:
+        original = self._strip_music_anchors(text_original)
+        lower = original.lower()
+
+        match = re.search(r"\b(from|by)\b", original, flags=re.IGNORECASE)
+        artist = None
+        title = None
+        modifiers: List[str] = []
+
+        if match:
+            before_original = original[:match.start()].strip()
+            after_original = original[match.end():].strip()
+            if after_original:
+                artist = self._clean_artist_candidate(after_original)
+
+            title, modifiers = self._split_title_and_modifiers(before_original)
+            return artist, title, modifiers
+
+        title, modifiers = self._split_title_and_modifiers(original)
+        return artist, title, modifiers
+
+    def _strip_music_anchors(self, text_original: str) -> str:
+        anchors = [
+            "play",
+            "playing",
+            "played",
+            "plays",
+            "put on",
+            "throw on",
+            "queue up",
+            "i want",
+            "give me",
+            "let me hear",
+        ]
+        stripped = text_original.strip()
+        for phrase in anchors:
+            pattern = r"^\s*" + re.escape(phrase) + r"\b"
+            if re.search(pattern, stripped, flags=re.IGNORECASE):
+                stripped = re.sub(pattern, "", stripped, flags=re.IGNORECASE).strip()
+                break
+        return stripped
+
+    def _split_title_and_modifiers(self, text_original: str) -> Tuple[Optional[str], List[str]]:
+        if not text_original:
+            return None, []
+        original_tokens = re.findall(r"[A-Za-z0-9']+", text_original)
+        lower_tokens = [token.lower() for token in original_tokens]
+
+        filtered_tokens = [
+            (orig, low)
+            for orig, low in zip(original_tokens, lower_tokens)
+            if low not in MUSIC_FILLER_WORDS
+        ]
+
+        title_tokens: List[str] = []
+        modifiers: List[str] = []
+        for orig, low in filtered_tokens:
+            if low in MUSIC_MODIFIER_WORDS:
+                modifiers.append(low)
+            else:
+                title_tokens.append(orig)
+
+        title = " ".join(title_tokens).strip() if title_tokens else None
+        return title, modifiers
+
+    def _clean_artist_candidate(self, artist_text: str) -> Optional[str]:
+        if not artist_text:
+            return None
+        tokens = re.findall(r"[A-Za-z0-9']+", artist_text)
+        cleaned_tokens = [
+            token
+            for token in tokens
+            if token.lower() not in MUSIC_FILLER_WORDS and token.lower() not in {"by", "from"}
+        ]
+        cleaned = " ".join(cleaned_tokens).strip()
+        return cleaned or None
 
     def _extract_music_keyword(self, text_lower: str) -> Optional[str]:
         """

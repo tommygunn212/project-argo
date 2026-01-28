@@ -5,7 +5,7 @@ Loads personality examples based on explicit mode.
 
 Rules (from personality_injection_design_reference-clap.txt):
 - Personality is ONLY example-driven
-- Two modes: Mild (default) + Claptrap (explicit only)
+- Modes: Mild (default), Claptrap (explicit only), Tommy Gunn (explicit only)
 - No rules, sliders, heuristics, or tone logic
 - Examples stored as Q→A pairs in examples/{mode}/*.txt
 - If no example found or loading fails → default to Mild
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class PersonalityLoader:
     """Load personality examples from disk."""
     
-    SUPPORTED_MODES = ["mild", "claptrap"]
+    SUPPORTED_MODES = ["mild", "claptrap", "tommy_gunn"]
     DEFAULT_MODE = "mild"
     
     def __init__(self, examples_dir: str = "examples"):

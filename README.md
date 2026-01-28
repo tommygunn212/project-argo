@@ -60,6 +60,15 @@ python main.py
 
 ---
 
+## Music Indexing Lifecycle
+
+- SQLite DB is created by Jellyfin ingest.
+- ARGO runs without it.
+- Music commands are disabled until indexed.
+- Re-ingest required if schema version changes.
+
+---
+
 ## Issues & Fixes
 
 ### 1) Piper not found

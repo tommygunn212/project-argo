@@ -51,6 +51,11 @@ class JellyfinMusicProvider:
         self.user_id = JELLYFIN_USER_ID
         self.tracks: List[Dict] = []
         self.session = requests.Session()
+        self.album_genres_by_id: Dict[str, List[str]] = {}
+        self.album_genres_by_name: Dict[str, List[str]] = {}
+        self.artist_genres_by_id: Dict[str, List[str]] = {}
+        self.artist_genres_by_name: Dict[str, List[str]] = {}
+        self.anomalies: List[Dict] = []
         
         # Validate credentials
         if not all([self.url, self.api_key, self.user_id]):
@@ -58,7 +63,7 @@ class JellyfinMusicProvider:
             logger.error(msg)
             raise ValueError(msg)
     
-    def _api_call(self, endpoint: str, params: dict = None) -> Optional[Dict]:
+    def _api_call(self, endpoint: str, params: dict = None, *, log_errors: bool = True) -> Optional[Dict]:
         """Make authenticated API call to Jellyfin."""
         if params is None:
             params = {}
@@ -76,8 +81,87 @@ class JellyfinMusicProvider:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            logger.error(f"[JELLYFIN] API error: {e}")
+            if log_errors:
+                logger.error(f"[JELLYFIN] API error: {e}")
             return None
+
+    def _normalize_genres(self, genres: Optional[List[str]]) -> List[str]:
+        if not genres:
+            return []
+        normalized = []
+        for genre in genres:
+            if not genre:
+                continue
+            cleaned = genre.strip().lower()
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+        return normalized
+
+    def lookup_track_details(self, jellyfin_id: str) -> Dict[str, Optional[str]]:
+        if not jellyfin_id:
+            return {"name": None, "path": None, "type": None}
+        result = self._api_call(f"/Items/{jellyfin_id}", log_errors=False)
+        if not result:
+            return {"name": None, "path": None, "type": None}
+        return {
+            "name": result.get("Name"),
+            "path": result.get("Path"),
+            "type": result.get("Type"),
+        }
+
+    def _handle_missing_title(self, item: Dict) -> None:
+        jellyfin_id = item.get("Id")
+        details = self.lookup_track_details(jellyfin_id)
+        logger.warning(
+            "Missing track title\n  jellyfin_id=%s\n  name=\"%s\"\n  path=\"%s\"",
+            jellyfin_id,
+            details.get("name"),
+            details.get("path"),
+        )
+        self.anomalies.append({
+            "jellyfin_id": jellyfin_id,
+            "issue": "missing_title",
+            "raw_name": details.get("name"),
+            "path": details.get("path"),
+        })
+
+    def _fetch_items(self, item_type: str) -> List[Dict]:
+        params = {
+            "userId": self.user_id,
+            "includeItemTypes": item_type,
+            "recursive": "true",
+            "fields": "Genres",
+            "limit": 10000,
+            "startIndex": 0,
+        }
+        result = self._api_call("/Items", params)
+        if not result:
+            return []
+        return result.get("Items", [])
+
+    def _load_album_genres(self) -> None:
+        items = self._fetch_items("MusicAlbum")
+        for item in items:
+            item_id = item.get("Id")
+            name = item.get("Name")
+            genres = self._normalize_genres(item.get("Genres"))
+            if item_id and genres:
+                self.album_genres_by_id[item_id] = genres
+            if name and genres:
+                self.album_genres_by_name[name.strip().lower()] = genres
+        logger.info("[JELLYFIN] Loaded %s album genre entries", len(self.album_genres_by_id))
+
+    def _load_artist_genres(self) -> None:
+        items = self._fetch_items("MusicArtist")
+        for item in items:
+            item_id = item.get("Id")
+            name = item.get("Name")
+            genres = self._normalize_genres(item.get("Genres"))
+            if item_id and genres:
+                self.artist_genres_by_id[item_id] = genres
+            if name and genres:
+                self.artist_genres_by_name[name.strip().lower()] = genres
+        logger.info("[JELLYFIN] Loaded %s artist genre entries", len(self.artist_genres_by_id))
     
     def load_music_library(self) -> List[Dict]:
         """
@@ -90,12 +174,15 @@ class JellyfinMusicProvider:
         """
         logger.info(f"[JELLYFIN] Connecting to {self.url}...")
         
+        self._load_artist_genres()
+        self._load_album_genres()
+
         # Query all audio items (songs)
         params = {
             "userId": self.user_id,
             "includeItemTypes": "Audio",
             "recursive": "true",
-            "fields": "PrimaryImageAspectRatio,SortName,BasicSyncInfo",
+            "fields": "PrimaryImageAspectRatio,SortName,BasicSyncInfo,Genres,AlbumId,AlbumArtists,ArtistItems",
             "limit": 10000,  # Pagination: max items per request
             "startIndex": 0
         }
@@ -139,17 +226,41 @@ class JellyfinMusicProvider:
             artist_name = item.get("Artists", [None])[0] if item.get("Artists") else None
             album = item.get("Album")
             year = item.get("ProductionYear")
-            
-            if not (item_id and name):
+
+            cleaned_name = name.strip() if isinstance(name, str) else None
+            if not cleaned_name:
+                self._handle_missing_title(item)
+                return None
+            if not item_id:
                 return None
             
             # Extract metadata
             artist = artist_name or "Unknown Artist"
-            song = name
-            genre = (item.get("Genres", [None])[0] or "").lower() if item.get("Genres") else None
+            song = cleaned_name
+            genres = self._normalize_genres(item.get("Genres"))
+            if not genres:
+                album_id = item.get("AlbumId")
+                if album_id and album_id in self.album_genres_by_id:
+                    genres = self.album_genres_by_id.get(album_id, [])
+                elif album:
+                    genres = self.album_genres_by_name.get(album.strip().lower(), [])
+            if not genres:
+                artist_items = item.get("AlbumArtists") or item.get("ArtistItems") or []
+                for artist_item in artist_items:
+                    artist_id = artist_item.get("Id") if isinstance(artist_item, dict) else None
+                    artist_name = artist_item.get("Name") if isinstance(artist_item, dict) else None
+                    if artist_id and artist_id in self.artist_genres_by_id:
+                        genres = self.artist_genres_by_id.get(artist_id, [])
+                        break
+                    if artist_name:
+                        genres = self.artist_genres_by_name.get(artist_name.strip().lower(), [])
+                        if genres:
+                            break
+            if not genres and artist_name:
+                genres = self.artist_genres_by_name.get(artist_name.strip().lower(), [])
             
             # Build tokens for search
-            tokens = self._tokenize(song, artist, album, genre)
+            tokens = self._tokenize(song, artist, album, genres)
             
             # Generate stable ID
             track_id = hashlib.md5(item_id.encode()).hexdigest()[:16]
@@ -165,7 +276,7 @@ class JellyfinMusicProvider:
                 "album": album,
                 "year": year,
                 "tokens": tokens,
-                "genre": genre,
+                "genres": genres,
                 "ext": ".mp3"  # All assumed to be audio
             }
         
@@ -173,7 +284,7 @@ class JellyfinMusicProvider:
             logger.debug(f"[JELLYFIN] Error building track record: {e}")
             return None
     
-    def _tokenize(self, song: str, artist: str, album: Optional[str], genre: Optional[str]) -> List[str]:
+    def _tokenize(self, song: str, artist: str, album: Optional[str], genres: Optional[List[str]]) -> List[str]:
         """Generate search tokens from metadata."""
         tokens = set()
         
@@ -184,8 +295,10 @@ class JellyfinMusicProvider:
             tokens.update(artist.lower().split())
         if album:
             tokens.update(album.lower().split())
-        if genre:
-            tokens.update(genre.lower().split())
+        if genres:
+            for genre in genres:
+                if genre:
+                    tokens.update(genre.lower().split())
         
         # Remove common filler words
         filler = {"the", "a", "an", "and", "or", "of", "in", "on"}

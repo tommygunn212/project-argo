@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 
+from core.config import get_config
+
 # Try to import mutagen for ID3 support
 try:
     from mutagen.easyid3 import EasyID3
@@ -137,7 +139,7 @@ class MusicIndex:
         self.no_music_available = False
         
         # Validate music directory exists if music is enabled
-        music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+        music_enabled = _is_music_enabled()
         if music_enabled and not os.path.exists(self.music_dir):
             msg = f"[ARGO] MUSIC_ENABLED=true but MUSIC_DIR not found: {self.music_dir}"
             logger.error(msg)
@@ -692,6 +694,37 @@ class MusicIndex:
 _index_instance: Optional[MusicIndex] = None
 
 
+def _get_env_bool(name: str) -> Optional[bool]:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return value.lower() == "true"
+
+
+def _is_music_enabled() -> bool:
+    env_value = _get_env_bool("MUSIC_ENABLED")
+    if env_value is not None:
+        return env_value
+    config = get_config()
+    return bool(config.get("music.enabled", True))
+
+
+def _get_music_dir() -> str:
+    env_value = os.getenv("MUSIC_DIR")
+    if env_value:
+        return env_value
+    config = get_config()
+    return str(config.get("music.library_path", "I:\\My Music"))
+
+
+def _get_music_index_file() -> str:
+    env_value = os.getenv("MUSIC_INDEX_FILE")
+    if env_value:
+        return env_value
+    config = get_config()
+    return str(config.get("music.index_file", "data/music_index.json"))
+
+
 def get_music_index() -> MusicIndex:
     """
     Get or create global music index instance.
@@ -708,7 +741,7 @@ def get_music_index() -> MusicIndex:
     global _index_instance
     
     if _index_instance is None:
-        music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+        music_enabled = _is_music_enabled()
         
         if not music_enabled:
             logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
@@ -716,8 +749,8 @@ def get_music_index() -> MusicIndex:
             _index_instance.tracks = []
             return _index_instance
         
-        music_dir = os.getenv("MUSIC_DIR", "I:\\My Music")
-        index_file = os.getenv("MUSIC_INDEX_FILE", "data/music_index.json")
+        music_dir = _get_music_dir()
+        index_file = _get_music_index_file()
         
         try:
             _index_instance = MusicIndex(music_dir, index_file)

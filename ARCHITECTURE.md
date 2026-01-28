@@ -153,6 +153,7 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 **Responsibility:**
 - Generate response text from Intent via LLM
 - **ONLY place where Qwen LLM is called**
+- Apply the active personality mode (default: TOMMY_GUNN) while respecting SERIOUS_MODE
 
 **What it does:**
 - ✅ Accept Intent object + original user text

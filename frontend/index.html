@@ -87,6 +87,7 @@
             const [illegalTransition, setIllegalTransition] = useState(null);
             const [illegalTransitionOpen, setIllegalTransitionOpen] = useState(false);
             const [runtimeOverrides, setRuntimeOverrides] = useState({});
+            const [dbStatus, setDbStatus] = useState({ present: false, indexed: false, track_count: 0, last_ingest_time: null });
             const [timeline, setTimeline] = useState([]);
             const timelineRef = useRef({});
             const stageRef = useRef({});
@@ -219,6 +220,9 @@
                     }
                     else if (data.type === 'runtime_overrides') {
                         setRuntimeOverrides(data.payload || {});
+                    }
+                    else if (data.type === 'db_status') {
+                        setDbStatus(data.payload || { present: false, indexed: false, track_count: 0, last_ingest_time: null });
                     }
                     else if (data.type === 'audio_owner') {
                         setAudioOwner(data.payload || { owner: 'UNKNOWN', contested: false });
@@ -406,7 +410,7 @@
                     )}
 
                     {/* System Health Modules */}
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-4 gap-4">
                         {Object.entries(health).map(([key, status]) => (
                             <div key={key} className={`p-4 rounded-xl flex flex-col items-center justify-center border transition-all ${status === 'Ready' ? 'bg-emerald-950/20 border-emerald-900' : 'bg-slate-900 border-slate-800'}`}>
                                 <div className="text-2xl mb-1">{key === 'stt' ? '⏳' : key === 'llm' ? '🧠' : '🗣️'}</div>
@@ -420,6 +424,19 @@
                                 )}
                             </div>
                         ))}
+                        <div className={`p-4 rounded-xl flex flex-col items-center justify-center border transition-all ${dbStatus.present ? 'bg-emerald-950/20 border-emerald-900' : 'bg-slate-900 border-slate-800'}`}>
+                            <div className="text-2xl mb-1">🗄️</div>
+                            <div className="text-xs font-black text-slate-500 uppercase tracking-widest">DB</div>
+                            <div className={`text-xs font-mono mt-1 ${dbStatus.present ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {dbStatus.present ? (dbStatus.indexed ? 'INDEXED' : 'UNINDEXED') : 'OFFLINE'}
+                            </div>
+                            <div className="text-[10px] font-mono mt-1 text-slate-400">
+                                Tracks: {dbStatus.track_count ?? 0}
+                            </div>
+                            <div className="text-[10px] font-mono mt-1 text-slate-400">
+                                Last ingest: {dbStatus.last_ingest_time || 'N/A'}
+                            </div>
+                        </div>
                     </div>
 
                     {/* Solutions Alert */}

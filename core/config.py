@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Feature flags
 ENABLE_LLM_TTS_STREAMING = True
+REQUIRE_LLM = False
+MUSIC_DB_PATH = "data/music.db"
+AUTO_INIT_DB = False
 
 
 class Config:
@@ -77,6 +80,7 @@ _DEFAULT_CONFIG = {
         "device_name": None,
         "input_device_index": None,
         "output_device_index": None,
+        "always_listen": True,
         "max_recording_duration": 10.0,
         "silence_timeout_seconds": 2.5,
         "silence_threshold": 30
@@ -95,17 +99,25 @@ _DEFAULT_CONFIG = {
         "voice_model_path": "audio/piper/voices/en_US-lessac-medium.onnx"
     },
     "llm": {
-        "model": "qwen",
+        "model": "qwen:latest",
         "base_url": "http://localhost:11434",
         "timeout_seconds": 30,
-        "enable_tts_streaming": ENABLE_LLM_TTS_STREAMING
+        "enable_tts_streaming": ENABLE_LLM_TTS_STREAMING,
+        "required": REQUIRE_LLM
+    },
+    "personality": {
+        "mode": "tommy_gunn"
     },
     "music": {
         "enabled": True,
+        "backend": None,
         "library_path": r"I:\My Music",
         "index_file": "data/music_index.json",
         "supported_extensions": [".mp3", ".wav", ".flac", ".m4a"]
     },
+    "music_backend": None,
+    "music_db_path": MUSIC_DB_PATH,
+    "auto_init_db": AUTO_INIT_DB,
     "output": {
         "debug_dir": "audio/debug",
         "piper_executable": "audio/piper/piper.exe"
@@ -127,6 +139,7 @@ _RUNTIME_OVERRIDES_DEFAULT = {
     "tts_enabled": True,
     "music_enabled": True,
     "debug_level": "INFO",
+    "personality_mode": "tommy_gunn",
 }
 _runtime_overrides = dict(_RUNTIME_OVERRIDES_DEFAULT)
 

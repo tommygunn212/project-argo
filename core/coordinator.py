@@ -977,6 +977,25 @@ class Coordinator:
                 self.interaction_count -= 1
                 return False
 
+            # Early STT quality guard (quality-of-life)
+            stt_metrics = None
+            try:
+                stt_metrics = self.stt.get_last_metrics()
+            except Exception:
+                stt_metrics = None
+            stt_conf = 0.0
+            if stt_metrics:
+                try:
+                    stt_conf = float(stt_metrics.get("confidence", 0.0))
+                except Exception:
+                    stt_conf = 0.0
+            if stt_conf < 0.15 or not text.strip():
+                self.logger.info(
+                    f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
+                )
+                self.interaction_count -= 1
+                return False
+
             # 3. Parse intent
             self.logger.info(
                 f"[Iteration {self.interaction_count}] Parsing intent..."
@@ -1017,6 +1036,7 @@ class Coordinator:
             confidence_threshold = get_config().get("speech_to_text.command_confidence_threshold", 0.35)
             if stt_metrics and intent.intent_type in {
                 IntentType.COMMAND,
+                IntentType.COUNT,
                 IntentType.MUSIC,
                 IntentType.MUSIC_NEXT,
                 IntentType.MUSIC_STOP,
@@ -1089,6 +1109,23 @@ class Coordinator:
                 _finalize_response_watchdog()
                 return True
 
+            if intent.intent_type == IntentType.COUNT:
+                self.logger.info(f"[Iteration {self.interaction_count}] Count command detected")
+                response_text = self._build_count_response(text)
+                try:
+                    self._safe_speak(response_text, interaction_id=self.interaction_id)
+                    output_produced = True
+                except Exception:
+                    pass
+                self._last_utterance_time = time.time()
+                self.current_probe.mark("llm_end")
+                self.current_probe.mark("tts_start")
+                self.current_probe.mark("tts_end")
+                self.current_probe.log_summary()
+                self.latency_stats.add_probe(self.current_probe)
+                _finalize_response_watchdog()
+                return True
+
             if self.executor.can_execute(text):
                 self.logger.info(f"[Iteration {self.interaction_count}] Procedural command detected: '{text}'")
                 # TASK 15: Mark LLM start (skip for procedural commands)
@@ -1112,6 +1149,17 @@ class Coordinator:
                     self._last_utterance_time = time.time()
                     return True
 
+            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
+            if any(term in text.lower() for term in stop_terms):
+                from core.music_player import get_music_player
+                music_player = get_music_player()
+                if music_player.is_playing():
+                    self.logger.info("[ARGO] Active music detected")
+                    music_player.stop()
+                    self._last_utterance_time = time.time()
+                    _finalize_response_watchdog()
+                    return True
+
             # Generate response (LLM, with SessionMemory available)
             self.logger.info(
                 f"[Iteration {self.interaction_count}] Generating response..."
@@ -1127,6 +1175,18 @@ class Coordinator:
                 self.logger.info(f"[Iteration {self.interaction_count}] STOP command: Stopping music")
                 from core.music_player import get_music_player
                 music_player = get_music_player()
+
+                blocked = music_player.preflight()
+                if blocked:
+                    msg = "Music library not indexed yet."
+                    self.logger.info(f"[Iteration {self.interaction_count}] Music blocked: {blocked.get('reason')}")
+                    if self.runtime_overrides.get("tts_enabled", True):
+                        self._safe_speak(msg, interaction_id=self.interaction_id)
+                    self.release_audio("MUSIC")
+                    self.current_probe.mark("llm_end")
+                    _finalize_response_watchdog()
+                    self._last_utterance_time = time.time()
+                    return True
                 music_player.stop()
                 try:
                     self.release_audio("MUSIC")
@@ -1216,36 +1276,48 @@ class Coordinator:
                 playback_started = False
                 error_message = ""
 
-                if intent.keyword:
+                artist = getattr(intent, "artist", None)
+                title = getattr(intent, "title", None)
+                do_not_try_genre_lookup = bool(title)
+                explicit_genre = bool(getattr(intent, "explicit_genre", False))
+                if getattr(intent, "is_generic_play", False) and not artist and not title and not intent.keyword:
+                    self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM (generic play)")
+                    playback_started = music_player.play_random(None)
+                    if not playback_started:
+                        error_message = "Your music library is empty or unavailable."
+                
+                if title:
+                    self.logger.info(f"[Iteration {self.interaction_count}] Music title: '{title}'")
+                    if not playback_started:
+                        playback_started = music_player.play_by_song(title, None)
+                        if playback_started:
+                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: SONG match")
+
+                if not playback_started and artist:
+                    self.logger.info(f"[Iteration {self.interaction_count}] Music artist: '{artist}'")
+                    playback_started = music_player.play_by_artist(artist, None)
+                    if playback_started:
+                        self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST match")
+
+                if not playback_started and intent.keyword:
                     keyword = intent.keyword
                     self.logger.info(f"[Iteration {self.interaction_count}] Music keyword: '{keyword}'")
 
                     # PRIORITY ORDER (FIXED):
-                    # 1. Exact artist match
+                    # 1. Genre match (with adjacent fallback)
                     if not playback_started:
-                        playback_started = music_player.play_by_artist(keyword, None)  # No sink here
-                        if playback_started:
-                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST match")
-
-                    # 2. Exact song match
-                    if not playback_started:
-                        playback_started = music_player.play_by_song(keyword, None)  # No sink here
-                        if playback_started:
-                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: SONG match")
-
-                    # 3. Genre match (with adjacent fallback)
-                    if not playback_started:
-                        playback_started = music_player.play_by_genre(keyword, None)  # No sink here
+                        if explicit_genre and not do_not_try_genre_lookup:
+                            playback_started = music_player.play_by_genre(keyword, None)  # No sink here
                         if playback_started:
                             self.logger.info(f"[Iteration {self.interaction_count}] Music route: GENRE match")
 
-                    # 4. Keyword token match
+                    # 2. Keyword token match
                     if not playback_started:
                         playback_started = music_player.play_by_keyword(keyword, None)  # No sink here
                         if playback_started:
                             self.logger.info(f"[Iteration {self.interaction_count}] Music route: KEYWORD match")
 
-                    # If still no playback, consolidate error into single message
+                # If still no playback, consolidate error into single message
                     if not playback_started:
                         error_message = f"No music found for '{keyword}'."
                         self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
@@ -1258,6 +1330,16 @@ class Coordinator:
                         self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
 
                 response_text = ""  # No LLM response for music
+
+                if intent.intent_type == IntentType.MUSIC and not playback_started and title:
+                    setattr(intent, "unresolved", True)
+                    self._safe_speak("I can’t find that track in your library.", interaction_id=self.interaction_id)
+                    output_produced = True
+                    self.release_audio("MUSIC")
+                    self.current_probe.mark("llm_end")
+                    _finalize_response_watchdog()
+                    self._last_utterance_time = time.time()
+                    return True
 
                 # Speak error message only once (if no playback started)
                 if error_message and not playback_started:
@@ -1938,6 +2020,49 @@ class Coordinator:
                 self._is_speaking.clear()
             except Exception:
                 pass
+
+    def _build_count_response(self, text: str) -> str:
+        target = self._parse_count_target(text)
+        if target < 1:
+            target = 1
+        target = min(target, 50)
+        return ", ".join(str(i) for i in range(1, target + 1))
+
+    def _parse_count_target(self, text: str) -> int:
+        if not text:
+            return 5
+        match = re.search(r"\b(\d+)\b", text)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 5
+        words = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+            "six": 6,
+            "seven": 7,
+            "eight": 8,
+            "nine": 9,
+            "ten": 10,
+            "eleven": 11,
+            "twelve": 12,
+            "thirteen": 13,
+            "fourteen": 14,
+            "fifteen": 15,
+            "sixteen": 16,
+            "seventeen": 17,
+            "eighteen": 18,
+            "nineteen": 19,
+            "twenty": 20,
+        }
+        for word, value in words.items():
+            if re.search(rf"\b{word}\b", text, flags=re.IGNORECASE):
+                return value
+        return 5
 
     def _safe_speak(self, text: str, interaction_id: Optional[str] = None) -> None:
         if not text or not text.strip():

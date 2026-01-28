@@ -27,8 +27,11 @@ if os.path.isdir(system_piper_dir):
 if path_prefixes:
     os.environ["PATH"] = os.pathsep.join(path_prefixes) + os.pathsep + os.environ.get("PATH", "")
 
-from core.audio_manager import AudioManager
+from core.audio_manager import AudioManager, INPUT_SAMPLE_RATE, BLOCK_SIZE
 from core.pipeline import ArgoPipeline
+from core.startup_checks import check_ollama
+from core.database import music_db_exists, get_db_status
+from core.config import MUSIC_DB_PATH
 from core.instrumentation import log_event
 from core.config import (
     get_config,
@@ -78,6 +81,9 @@ AUDIO_OUTPUT_INDEX = config.get("audio.output_device_index")
 # Runtime control
 RUNTIME_OVERRIDES = get_runtime_overrides()
 NEXT_INTERACTION_OVERRIDES = {}
+
+# Start in always-listening mode unless explicitly disabled
+LISTENING_ENABLED = bool(config.get("audio.always_listen", True))
 
 def broadcast_msg(msg_type, data):
     """Bridge between Sync Backend and Async UI."""
@@ -136,6 +142,7 @@ async def websocket_handler(websocket):
         await websocket.send(json.dumps({"type": "config", "payload": {"hash": get_config_hash()}}))
         await websocket.send(json.dumps({"type": "runtime_overrides", "payload": get_runtime_overrides()}))
         await websocket.send(json.dumps({"type": "audio_owner", "payload": {"owner": "UNKNOWN", "contested": False}}))
+        await websocket.send(json.dumps({"type": "db_status", "payload": get_db_status(MUSIC_DB_PATH)}))
 
         async for message in websocket:
             try:
@@ -338,6 +345,26 @@ def main_loop():
     
     try:
         audio.start()
+
+        ollama_available = check_ollama()
+        require_llm = bool(config.get("llm.required", False))
+
+        if require_llm and not ollama_available:
+            raise RuntimeError("LLM required but Ollama is not running")
+        elif not ollama_available:
+            logger.info("LLM offline: running in no-brain mode")
+        else:
+            logger.info("Ollama online")
+
+        db_ready = music_db_exists(MUSIC_DB_PATH)
+        db_status = get_db_status(MUSIC_DB_PATH)
+        if db_ready:
+            logger.info("Music DB detected")
+        else:
+            logger.info("Music DB not present (awaiting Jellyfin ingest)")
+        broadcast_msg("db_status", db_status)
+
+        pipeline.set_llm_enabled(ollama_available)
         pipeline.warmup()
     except Exception as e:
         logger.critical(f"Startup Failed: {e}")
@@ -362,7 +389,8 @@ def main_loop():
     speech_buffer = []
     is_recording = False
     silence_counter = 0
-    silence_threshold = 30  # ~1.5 seconds
+    silence_seconds = 1.5
+    silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
     
     while SERVER_ENABLED:

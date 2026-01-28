@@ -9,6 +9,7 @@
     "device_name": null,
     "input_device_index": null,
     "output_device_index": null,
+    "always_listen": true,
     "max_recording_duration": 10.0,
     "silence_timeout_seconds": 2.5,
     "silence_threshold": 30
@@ -26,22 +27,31 @@
   
   "text_to_speech": {
     "engine": "piper",
-    "voice": "lessac",
-    "voice_model_path": "audio/piper/voices/en_US-lessac-medium.onnx"
+    "voice": "alan",
+    "voice_model_path": "audio/piper/voices/en_GB-alan-medium.onnx"
   },
   
   "llm": {
-    "model": "qwen",
+    "model": "qwen:latest",
     "base_url": "http://localhost:11434",
     "timeout_seconds": 30
+  },
+
+  "personality": {
+    "mode": "tommy_gunn"
   },
   
   "music": {
     "enabled": true,
+    "backend": null,
     "library_path": "I:\\My Music",
     "index_file": "data/music_index.json",
     "supported_extensions": [".mp3", ".wav", ".flac", ".m4a"]
   },
+
+  "music_backend": null,
+  "music_db_path": "data/music.db",
+  "auto_init_db": false,
   
   "output": {
     "debug_dir": "audio/debug",

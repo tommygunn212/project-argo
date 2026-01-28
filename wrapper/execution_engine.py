@@ -981,6 +981,23 @@ class ExecutionMode:
                 result.completed_at = datetime.now().isoformat()
                 return result
             
+            # Re-verify preconditions immediately before executing (TOCTOU guard)
+            if not self._check_real_preconditions(step):
+                result.error_message = f"Precondition changed before execution for {step.operation} on {step.target}"
+                self.logger.warning(f"Step {step.step_id}: {result.error_message}")
+                if step.rollback_procedure and step.rollback_capability != RollbackCapability.NONE:
+                    result.rollback_invoked = True
+                    try:
+                        self._perform_rollback(step)
+                        result.rollback_succeeded = True
+                        self.logger.info(f"Step {step.step_id}: Rollback succeeded")
+                    except Exception as rollback_error:
+                        result.rollback_succeeded = False
+                        self.logger.error(f"Step {step.step_id}: Rollback FAILED: {rollback_error}")
+                        result.rollback_detail = str(rollback_error)
+                result.completed_at = datetime.now().isoformat()
+                return result
+
             # Execute the step
             self.logger.debug(f"Executing step {step.step_id}: {step.operation} {step.target}")
             self._perform_step_action(step)

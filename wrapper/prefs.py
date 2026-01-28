@@ -66,6 +66,8 @@ DESIGN PRINCIPLES
 """
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 PREF_FILE = Path(__file__).parent.joinpath("user_preferences.json")
@@ -93,8 +95,26 @@ def load_prefs():
 
 def save_prefs(prefs):
     """Save user preferences to disk."""
-    with open(PREF_FILE, "w", encoding="utf-8") as f:
-        json.dump(prefs, f, indent=2)
+    os.makedirs(PREF_FILE.parent, exist_ok=True)
+    temp_file = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=str(PREF_FILE.parent),
+            delete=False,
+        ) as f:
+            temp_file = f.name
+            json.dump(prefs, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, PREF_FILE)
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
 
 
 def update_prefs(user_input: str, prefs: dict) -> dict:

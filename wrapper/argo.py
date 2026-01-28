@@ -79,6 +79,8 @@ import json
 import uuid
 import asyncio
 import logging
+import threading
+import queue
 from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
@@ -233,6 +235,56 @@ PIPER_ENABLED = os.getenv("PIPER_ENABLED", "false").lower() == "true"
 # Audio Output Helper (Async Bridge for CLI)
 # ============================================================================
 
+MAX_VOICE_CHARS = 150
+
+_output_queue: "queue.Queue[str]" = queue.Queue()
+_output_thread: threading.Thread | None = None
+_output_thread_lock = threading.Lock()
+
+
+def _output_worker() -> None:
+    """Background worker to send TTS output without blocking the main loop."""
+    sink = None
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    while True:
+        text = _output_queue.get()
+        if text is None:
+            break
+        if sink is None:
+            try:
+                sink = get_output_sink()
+            except Exception as e:
+                print(f"⚠ Audio output error: {e}", file=sys.stderr)
+                sink = None
+        if sink is None:
+            continue
+        try:
+            loop.run_until_complete(sink.send(text))
+        except Exception as e:
+            print(f"⚠ Audio output error: {e}", file=sys.stderr)
+    try:
+        loop.stop()
+    finally:
+        loop.close()
+
+
+def _start_output_thread() -> None:
+    global _output_thread
+    if _output_thread and _output_thread.is_alive():
+        return
+    if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
+        return
+    with _output_thread_lock:
+        if _output_thread and _output_thread.is_alive():
+            return
+        _output_thread = threading.Thread(
+            target=_output_worker,
+            name="ArgoOutputSink",
+            daemon=True,
+        )
+        _output_thread.start()
+
 def _send_to_output_sink(text: str) -> None:
     """
     Bridge between sync CLI context and async OutputSink.
@@ -248,40 +300,15 @@ def _send_to_output_sink(text: str) -> None:
     Args:
         text: Text to send to audio output
     """
-    # Debug: check what values we have
-    print(f"[DEBUG] _send_to_output_sink called, VOICE={VOICE_ENABLED}, PIPER={PIPER_ENABLED}, SINK={OUTPUT_SINK_AVAILABLE}", file=sys.stderr)
-    
     if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
-        print(f"[DEBUG] Audio disabled, skipping", file=sys.stderr)
         return  # Audio disabled, text already printed
-    
-    # [CRITICAL] Cap spoken output to prevent long audio and latency
-    MAX_VOICE_CHARS = 150
+
     spoken_text = text[:MAX_VOICE_CHARS]
     if len(text) > MAX_VOICE_CHARS:
         logger.debug(f"Capping voice output: {len(text)} → {MAX_VOICE_CHARS} chars")
-    
-    try:
-        sink = get_output_sink()
-        print(f"[DEBUG] Got sink: {type(sink).__name__}", file=sys.stderr)
-        
-        # Try to get existing event loop (FastAPI context)
-        try:
-            loop = asyncio.get_running_loop()
-            # We're in async context, create task to send
-            asyncio.create_task(sink.send(spoken_text))
-        except RuntimeError:
-            # No running loop, create one for CLI
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            except Exception:
-                pass
-            print(f"[DEBUG] Running async sink.send()", file=sys.stderr)
-            asyncio.run(sink.send(spoken_text))
-    except Exception as e:
-        # Gracefully degrade: log error but don't crash
-        print(f"⚠ Audio output error: {e}", file=sys.stderr)
+
+    _start_output_thread()
+    _output_queue.put(spoken_text)
 
 
 # ============================================================================

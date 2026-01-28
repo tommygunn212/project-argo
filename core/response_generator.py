@@ -33,7 +33,8 @@ import os
 import re
 import json
 from typing import Optional
-from core.config import ENABLE_LLM_TTS_STREAMING, get_config
+from core.config import ENABLE_LLM_TTS_STREAMING, get_config, get_runtime_overrides
+from core.startup_checks import check_ollama
 from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
 from core.watchdog import Watchdog
 from core.output_sink import get_output_sink
@@ -112,7 +113,11 @@ class LLMResponseGenerator(ResponseGenerator):
         
         # Hardcoded LLM endpoint
         self.ollama_url = "http://localhost:11434"
-        self.model = "argo:latest"
+        try:
+            config = get_config()
+            self.model = config.get("llm.model", "qwen:latest")
+        except Exception:
+            self.model = "qwen:latest"
         
         # Hardcoded generation parameters
         self.temperature = 0.85  # Increased for more personality and creativity (0.7 was too dry)
@@ -121,7 +126,8 @@ class LLMResponseGenerator(ResponseGenerator):
         # Personality injection (example-driven)
         from core.personality import get_personality_loader
         self.personality_loader = get_personality_loader()
-        self.personality_mode = "mild"  # Default mode
+        self._config = get_config()
+        self.personality_mode = self._resolve_personality_mode()
         
         self.logger = logger
         self.logger.info("[LLMResponseGenerator v5] Initialized")
@@ -130,6 +136,7 @@ class LLMResponseGenerator(ResponseGenerator):
         self.logger.debug(f"  Temperature: {self.temperature}")
         self.logger.debug(f"  Max tokens: {self.max_tokens}")
         self.logger.debug(f"  Personality mode: {self.personality_mode}")
+        self.enabled = check_ollama()
         # Transient last response for single-process correction inheritance
         self._last_response: Optional[str] = None
         # Transient uncommitted command candidate (text)
@@ -155,6 +162,16 @@ class LLMResponseGenerator(ResponseGenerator):
         self._llm_request_start = None
         self._llm_first_token_logged = False
 
+    def _resolve_personality_mode(self) -> str:
+        try:
+            overrides = get_runtime_overrides()
+            mode = overrides.get("personality_mode") or self._config.get("personality.mode", "mild")
+        except Exception:
+            mode = "mild"
+        if mode not in self.personality_loader.SUPPORTED_MODES:
+            mode = self.personality_loader.DEFAULT_MODE
+        return mode
+
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
         Generate a response using Qwen LLM with optional context from memory.
@@ -173,10 +190,18 @@ class LLMResponseGenerator(ResponseGenerator):
         if intent is None:
             raise ValueError("intent is None")
 
+        if not self.enabled:
+            self.logger.info("LLM offline: skipping generation")
+            return ""
+
         # Extract intent information
         intent_type = intent.intent_type.value  # "greeting", "question", etc.
         raw_text = intent.raw_text  # Original user input
         confidence = intent.confidence
+        serious_mode = bool(getattr(intent, "serious_mode", False))
+
+        # Refresh personality mode per request (runtime overrides can change)
+        self.personality_mode = self._resolve_personality_mode()
 
         # Canonical example exact-match (authoritative)
         try:
@@ -342,7 +367,7 @@ class LLMResponseGenerator(ResponseGenerator):
         # === Personality Injection (v5) ===
         # Check personality examples before calling LLM
         # Only applies to non-command intents (commands stay humor-free)
-        if intent_type != "command":
+        if intent_type != "command" and not serious_mode:
             try:
                 if raw_text and isinstance(raw_text, str):
                     example = self.personality_loader.get_example(self.personality_mode, raw_text)
@@ -353,7 +378,7 @@ class LLMResponseGenerator(ResponseGenerator):
                 self.logger.debug(f"[generate] Personality lookup failed: {e}")
 
         # Build prompt for LLM
-        prompt = self._build_prompt(intent_type, raw_text, confidence, memory, bool(getattr(intent, "serious_mode", False)))
+        prompt = self._build_prompt(intent_type, raw_text, confidence, memory, serious_mode)
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug("[generate] Prompt:\n%s", prompt)
 
@@ -430,6 +455,28 @@ class LLMResponseGenerator(ResponseGenerator):
             "End with a line that adds perspective or a small smile.\n"
             "Do not perform, hype, or explain yourself.\n"
         )
+
+        if serious_mode:
+            persona_contract = (
+                "You are ARGO in SERIOUS_MODE.\n"
+                "Tone: clean, calm, surgical. No jokes. No sarcasm.\n"
+                "Give a direct answer, then a brief explanation.\n"
+                "No fluff. No theatrics. No filler.\n"
+            )
+        elif self.personality_mode == "tommy_gunn":
+            persona_contract = (
+                "You are ARGO in TOMMY GUNN MODE (Dry, Smart, Amused).\n"
+                "Tone: sharp, well-read adult. Dry and observational. Calm confidence.\n"
+                "Required flow: Dry hook (1 sentence) → Direct factual correction → Plain explanation → Wry observation on myth origin → Authority close.\n"
+                "No greetings. No questions at the end unless user explicitly asked for follow-ups.\n"
+                "Humor: one dry jab max, must not add new info. If in doubt, remove it.\n"
+                "Metaphors optional, brief, grounded. No stacked metaphors.\n"
+                "SERIOUS_MODE: drop humor entirely, skip dry hook, deliver facts cleanly and directly.\n"
+                "Do NOT output section labels (e.g., 'Dry hook:', 'Direct factual correction:', 'Plain explanation:', 'Wry observation:', 'Authority close:').\n"
+                "Do NOT repeat system instructions or flags like SERIOUS_MODE or CRITICAL.\n"
+                "No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
+                "Never include system diagnostics in responses.\n"
+            )
 
         raw_text_lower = raw_text.lower() if isinstance(raw_text, str) else ""
         domain_guidance = ""
@@ -553,12 +600,58 @@ class LLMResponseGenerator(ResponseGenerator):
         serious_mode = bool(getattr(intent, "serious_mode", False))
         response_text = response_text.strip()
         response_text = self._sanitize_fourth_wall(response_text)
+        response_text = self._strip_prompt_artifacts(response_text)
+        response_text = self._scrub_system_output(response_text)
         response_text = self._flatten_numbered_lists(response_text)
         response_text = self._scrub_preamble(response_text)
         response_text = self._limit_emojis(response_text, serious_mode)
         response_text = self._apply_sentence_rules(response_text, serious_mode)
         response_text = self._enforce_response_shape(response_text)
         return response_text.strip()
+
+    def _strip_prompt_artifacts(self, text: str) -> str:
+        """Remove prompt leakage and section labels from responses."""
+        if not text:
+            return text
+        # Remove leaked system flags
+        text = re.sub(r"\bSERIOUS_MODE\b[:\s\S]*$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bCRITICAL\b[:\s\S]*$", "", text, flags=re.IGNORECASE)
+        # Remove section labels
+        labels = [
+            r"dry hook",
+            r"direct factual correction",
+            r"plain explanation",
+            r"wry observation",
+            r"authority close",
+        ]
+        for label in labels:
+            text = re.sub(rf"\b{label}\b\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        return text
+
+    def _scrub_system_output(self, text: str) -> str:
+        """Remove any system diagnostics from user-facing responses."""
+        if not text:
+            return text
+        patterns = [
+            r"\bVAD\b",
+            r"\bSTT\b",
+            r"\bLLM\b",
+            r"\bTTS\b",
+            r"\bAUDIO\b",
+            r"\bTHREAD\b",
+            r"\bDEBUG\b",
+            r"\binteraction_id\b",
+            r"\brms\b",
+            r"\bpeak\b",
+            r"\bsilence\b",
+            r"\bthreshold\b",
+        ]
+        cleaned = text
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned
 
     def _load_system_profile(self) -> str:
         """Load host system profile from data/system_profile.json if present."""

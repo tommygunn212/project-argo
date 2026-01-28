@@ -3,10 +3,10 @@ MUSIC PLAYER MODULE
 
 Music playback for ARGO supporting both local files and Jellyfin media server.
 
-Uses either music_index.py (local) or jellyfin_provider.py (server).
+Uses either Jellyfin ingestion or local catalog for playback.
 
 Features:
-- Persistent JSON catalog (fast startup for local)
+- SQLite-backed lookup for deterministic matching
 - Genre filtering (punk, classic rock, glam, etc.)
 - Keyword search (artist, album, track names)
 - Fire-and-forget playback (non-blocking)
@@ -22,7 +22,7 @@ Configuration:
 - JELLYFIN_URL (env): Jellyfin server address
 - JELLYFIN_API_KEY (env): Jellyfin authentication token
 - JELLYFIN_USER_ID (env): Jellyfin user ID
-- MUSIC_INDEX_FILE (env): Path to JSON catalog (local only)
+- MUSIC_DB_FILE (env): Path to SQLite database (optional)
 
 File types supported:
 - .mp3
@@ -47,6 +47,8 @@ import random
 import threading
 import json
 import time
+import re
+import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -57,11 +59,14 @@ from core.policy import (
     AUDIO_WATCHDOG_SECONDS,
 )
 from core.watchdog import Watchdog
+from core.config import get_config, MUSIC_DB_PATH
+from core.database import MusicDatabase, music_db_exists
+from core.jellyfin_ingest import ingest_jellyfin_library
 
 # Import music index for catalog and filtering
 from core.music_index import get_music_index
 from core.playback_state import get_playback_state
-from core.music_resolver import MusicResolver
+from core.audio_owner import get_audio_owner
 
 # ============================================================================
 # LOGGER
@@ -74,11 +79,47 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
-MUSIC_ENABLED = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+def _get_env_bool(name: str):
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return value.lower() == "true"
+
+
+def _is_music_enabled() -> bool:
+    env_value = _get_env_bool("MUSIC_ENABLED")
+    if env_value is not None:
+        return env_value
+    config = get_config()
+    return bool(config.get("music.enabled", True))
+
+
+def _get_music_source() -> str:
+    env_value = os.getenv("MUSIC_SOURCE")
+    if env_value:
+        return env_value.lower()
+    config = get_config()
+    return str(config.get("music.source", "local")).lower()
+
+
+def _get_music_backend(music_source: str) -> str:
+    config = get_config()
+    backend = config.get("music_backend")
+    if not backend:
+        backend = config.get("music.backend")
+    if backend:
+        return str(backend).lower()
+    return "sqlite" if music_source == "jellyfin" else "json"
+
+
+MUSIC_ENABLED = _is_music_enabled()
 """Enable/disable music playback entirely."""
 
-MUSIC_SOURCE = os.getenv("MUSIC_SOURCE", "local").lower()
+MUSIC_SOURCE = _get_music_source()
 """Music source: 'local' or 'jellyfin'"""
+
+MUSIC_BACKEND = _get_music_backend(MUSIC_SOURCE)
+"""Music backend: 'sqlite' or 'json'"""
 
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
 """Supported audio file extensions."""
@@ -163,50 +204,9 @@ GENRE_ALIASES = {
 }
 """Genre aliases and synonyms for better matching."""
 
-GENRE_ADJACENCY = {
-    # Punk adjacency: rock-related genres
-    "punk": ["rock", "new wave", "alternative"],
-    
-    # Rock adjacency
-    "rock": ["punk", "metal", "classic rock"],
-    
-    # Metal adjacency
-    "metal": ["rock", "punk", "alternative"],
-    
-    # Pop adjacency
-    "pop": ["soul", "r&b", "indie"],
-    
-    # Rap adjacency
-    "rap": ["soul", "r&b", "funk"],
-    
-    # Jazz adjacency
-    "jazz": ["soul", "blues", "funk"],
-    
-    # Soul adjacency
-    "soul": ["r&b", "jazz", "funk"],
-    
-    # Blues adjacency
-    "blues": ["jazz", "soul", "folk"],
-    
-    # Country adjacency
-    "country": ["folk", "americana", "bluegrass"],
-    
-    # Folk adjacency
-    "folk": ["country", "blues", "singer-songwriter"],
-    
-    # Electronic adjacency
-    "electronic": ["house", "techno", "ambient"],
-    
-    # House adjacency
-    "house": ["electronic", "techno", "funk"],
-    
-    # Indie adjacency
-    "indie": ["alternative", "pop", "rock"],
-    
-    # Alternative adjacency
-    "alternative": ["indie", "rock", "punk"],
+ARTIST_FILLER_WORDS = {
+    "play", "me", "a", "the", "some", "good", "song", "music", "from", "by"
 }
-"""Adjacent genres for fallback (ordered by proximity)."""
 
 def normalize_genre(genre: str) -> str:
     """
@@ -227,18 +227,27 @@ def normalize_genre(genre: str) -> str:
     # Check if it's an alias
     return GENRE_ALIASES.get(genre_lower, genre_lower)
 
-def get_adjacent_genres(genre: str) -> List[str]:
-    """
-    Get adjacent genres for fallback when primary genre has no tracks.
+
+def normalize_title_for_match(title: str) -> str:
+    if not title:
+        return ""
+    cleaned = title.lower()
+    cleaned = re.sub(r"[^\w\s]", "", cleaned)
+    cleaned = re.sub(r"\b(a|an|the)\b", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned.endswith("s"):
+        cleaned = cleaned[:-1]
+    return cleaned
+
+
+def normalize_artist_query(artist: str) -> str:
+    if not artist:
+        return ""
+    tokens = re.findall(r"[A-Za-z0-9']+", artist)
+    cleaned_tokens = [token for token in tokens if token.lower() not in ARTIST_FILLER_WORDS]
+    return " ".join(cleaned_tokens).strip()
+
     
-    Args:
-        genre: Genre name
-        
-    Returns:
-        List of adjacent genres (ordered by proximity)
-    """
-    genre_normalized = normalize_genre(genre)
-    return GENRE_ADJACENCY.get(genre_normalized, [])
 
 
 # ============================================================================
@@ -263,11 +272,13 @@ class MusicPlayer:
         """Initialize music player and load index (local or Jellyfin)."""
         self.index = None
         self.jellyfin_provider = None
-        self.current_process: Optional[object] = None
-        self._music_process = None  # For ffplay/mpv/vlc streaming process
-        self.is_playing = False
+        self.current_process: Optional[subprocess.Popen] = None
+        self.playback_mode: Optional[str] = None
+        self._is_playing_flag = False
         self.current_track: Dict = {}  # Track metadata (artist, song, path, etc.)
-        self._resolver: Optional[MusicResolver] = None
+        self._audio_owner = get_audio_owner()
+        self._db = MusicDatabase()
+        self._music_backend = MUSIC_BACKEND
 
         if not MUSIC_ENABLED:
             logger.info("[ARGO] Music disabled (MUSIC_ENABLED=false)")
@@ -275,25 +286,34 @@ class MusicPlayer:
 
         # ===== JELLYFIN MODE =====
         if MUSIC_SOURCE == "jellyfin":
+            if not self._music_backend:
+                self._music_backend = "sqlite"
+            if self._music_backend != "sqlite":
+                raise RuntimeError("Jellyfin requires music_backend=sqlite")
             try:
                 from core.jellyfin_provider import get_jellyfin_provider
                 self.jellyfin_provider = get_jellyfin_provider()
-                # Pre-load library for searches
-                tracks = self.jellyfin_provider.load_music_library()
-                logger.info(f"[ARGO] Jellyfin connected: {len(tracks)} tracks")
-                self._resolver = MusicResolver(self.jellyfin_provider.tracks)
+                if not music_db_exists(MUSIC_DB_PATH):
+                    ingest_jellyfin_library()
+                self._db.validate_schema()
+                logger.info("[ARGO] Jellyfin connected")
+                self._db.set_artist_sovereignty(KNOWN_ARTISTS, rank=10)
                 return
             except Exception as e:
                 logger.error(f"[ARGO] Jellyfin connection failed: {e}")
                 self.jellyfin_provider = None
-                return
+                raise RuntimeError(f"SQLite backend unavailable: {e}")
         
         # ===== LOCAL MODE =====
+        if not self._music_backend:
+            self._music_backend = "json"
+        if self._music_backend != "json":
+            raise RuntimeError("Local music requires music_backend=json")
+
         try:
             self.index = get_music_index()
             track_count = len(self.index.tracks) if self.index.tracks else 0
             logger.info(f"[ARGO] Music index loaded: {track_count} tracks")
-            self._resolver = MusicResolver(self.index.tracks or [])
         except Exception as e:
             logger.error(f"[ARGO] Error loading music index: {e}")
             self.index = None
@@ -315,18 +335,18 @@ class MusicPlayer:
         
         # ===== JELLYFIN MODE =====
         if self.jellyfin_provider:
-            if not self.jellyfin_provider.tracks:
+            if not music_db_exists(MUSIC_DB_PATH):
                 if output_sink:
-                    output_sink.speak("No music available in Jellyfin.")
+                    output_sink.speak("Music library not indexed yet.")
                 return False
-            
-            import random
-            track = random.choice(self.jellyfin_provider.tracks)
+            track = self._db.random_track()
+            if not track:
+                if output_sink:
+                    output_sink.speak("Your music library is empty or unavailable.")
+                return False
+
             announcement = self._build_announcement(track)
-            
-            # For Jellyfin, we stream instead of playing local files
-            result = self._play_jellyfin_track(track, announcement, output_sink)
-            return result
+            return self._play_jellyfin_track(track, announcement, output_sink)
         
         # ===== LOCAL MODE =====
         if not self.index or not self.index.tracks:
@@ -337,7 +357,7 @@ class MusicPlayer:
         track = self.index.get_random_track()
         if not track:
             if output_sink:
-                output_sink.speak("No music available.")
+                output_sink.speak("Your music library is empty or unavailable.")
             return False
 
         track_path = track.get("path", "")
@@ -367,7 +387,42 @@ class MusicPlayer:
         Returns:
             True if playback started, False otherwise
         """
-        if not MUSIC_ENABLED or not self.index:
+        if not MUSIC_ENABLED:
+            return False
+
+        if self.jellyfin_provider:
+            if not music_db_exists(MUSIC_DB_PATH):
+                if output_sink:
+                    output_sink.speak("Music library not indexed yet.")
+                return False
+            genre_normalized = normalize_genre(genre)
+            tracks = self._db.query_tracks(genre=genre_normalized, limit=200, intent=f"play {genre}")
+            used_genre = genre_normalized
+
+            if not tracks:
+                for adjacent in self._get_adjacent_genres(genre_normalized):
+                    adjacent_normalized = normalize_genre(adjacent)
+                    tracks = self._db.query_tracks(genre=adjacent_normalized, limit=200, intent=f"play {genre}")
+                    if tracks:
+                        used_genre = adjacent_normalized
+                        logger.info(
+                            f"[ARGO] Genre '{genre_normalized}' not found, using adjacent: '{used_genre}'"
+                        )
+                        break
+
+            if not tracks:
+                logger.warning(f"[ARGO] No tracks found for genre '{genre}' or adjacent genres")
+                return False
+
+            track = tracks[0]
+            announcement = self._build_announcement(track)
+            result = self._play_jellyfin_track(track, announcement, output_sink)
+            if result:
+                playback_state = get_playback_state()
+                playback_state.set_genre_mode(used_genre, track)
+            return result
+
+        if not self.index:
             return False
 
         # Normalize genre (apply aliases)
@@ -379,7 +434,7 @@ class MusicPlayer:
         
         # Try adjacent genres if primary not found
         if not tracks:
-            for adjacent in get_adjacent_genres(genre_normalized):
+            for adjacent in self._get_adjacent_genres(genre_normalized):
                 adjacent_normalized = normalize_genre(adjacent)
                 tracks = self.index.filter_by_genre(adjacent_normalized)
                 if tracks:
@@ -414,15 +469,55 @@ class MusicPlayer:
         Returns:
             True if playback started, False otherwise
         """
-        if not MUSIC_ENABLED or not self.index:
+        if not MUSIC_ENABLED:
             if output_sink:
                 output_sink.speak("I couldn't find any music.")
             return False
 
-        tracks = self.index.filter_by_artist(artist)
+        artist_cleaned = normalize_artist_query(artist)
+        if not artist_cleaned:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        if self.jellyfin_provider:
+            if not music_db_exists(MUSIC_DB_PATH):
+                if output_sink:
+                    output_sink.speak("Music library not indexed yet.")
+                return False
+            tracks = self._db.query_tracks(artist=artist_cleaned, limit=200, intent=f"play {artist_cleaned}")
+            if not tracks:
+                tracks = self._db.query_tracks_artist_like(artist_cleaned, limit=200, intent=f"play {artist_cleaned}")
+            if not tracks:
+                if output_sink:
+                    output_sink.speak(f"No music found for '{artist_cleaned}'.")
+                return False
+
+            track = tracks[0]
+            announcement = self._build_announcement(track)
+            result = self._play_jellyfin_track(track, announcement, output_sink)
+            if result:
+                playback_state = get_playback_state()
+                playback_state.set_artist_mode(artist_cleaned, track)
+            return result
+
+        if not self.index:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        tracks = self.index.filter_by_artist(artist_cleaned)
+        if not tracks:
+            artist_lower = artist_cleaned.lower()
+            tracks = [
+                t for t in self.index.tracks
+                if t.get("artist") and artist_lower in t.get("artist", "").lower()
+            ]
+            if tracks:
+                logger.info(f"[ARGO] Music artist LIKE match: {artist_cleaned} ({len(tracks)} tracks)")
         if not tracks:
             if output_sink:
-                output_sink.speak(f"No tracks by {artist} found.")
+                output_sink.speak(f"No tracks by {artist_cleaned} found.")
             return False
 
         track = random.choice(tracks)
@@ -433,7 +528,7 @@ class MusicPlayer:
         if result:
             # Set playback state to artist mode
             playback_state = get_playback_state()
-            playback_state.set_artist_mode(artist, track)
+            playback_state.set_artist_mode(artist_cleaned, track)
         return result
 
     def play_by_song(self, song: str, output_sink=None) -> bool:
@@ -447,12 +542,48 @@ class MusicPlayer:
         Returns:
             True if playback started, False otherwise
         """
-        if not MUSIC_ENABLED or not self.index:
+        if not MUSIC_ENABLED:
+            if output_sink:
+                output_sink.speak("I couldn't find any music.")
+            return False
+
+        if self.jellyfin_provider:
+            if not music_db_exists(MUSIC_DB_PATH):
+                if output_sink:
+                    output_sink.speak("Music library not indexed yet.")
+                return False
+            tracks = self._db.query_tracks(title=song, limit=50, intent=f"play {song}")
+            if not tracks:
+                tracks = self._db.query_tracks_soft_title(song, limit=200, intent=f"play {song}")
+            if not tracks:
+                if output_sink:
+                    output_sink.speak(f"Song {song} not found.")
+                return False
+
+            track = tracks[0]
+            announcement = self._build_announcement(track)
+            result = self._play_jellyfin_track(track, announcement, output_sink)
+            if result:
+                playback_state = get_playback_state()
+                if track.get("artist"):
+                    playback_state.set_artist_mode(track.get("artist"), track)
+            return result
+
+        if not self.index:
             if output_sink:
                 output_sink.speak("I couldn't find any music.")
             return False
 
         tracks = self.index.filter_by_song(song)
+        if not tracks:
+            normalized = normalize_title_for_match(song)
+            if normalized:
+                tracks = [
+                    t for t in self.index.tracks
+                    if normalize_title_for_match(t.get("song", "")) == normalized
+                ]
+                if tracks:
+                    logger.info(f"[ARGO] Music song soft match: {song} ({len(tracks)} tracks)")
         if not tracks:
             if output_sink:
                 output_sink.speak(f"Song {song} not found.")
@@ -495,21 +626,30 @@ class MusicPlayer:
                 output_sink.speak("I couldn't find any music.")
             return False
         
-        # ===== JELLYFIN MODE =====
-        if self.jellyfin_provider and self._resolver:
-            resolution = self._resolver.resolve(keyword, self._interpret_music_intent)
-            if resolution.clarification:
+        # ===== JELLYFIN MODE (SQLite lookup) =====
+        if self.jellyfin_provider:
+            if not music_db_exists(MUSIC_DB_PATH):
                 if output_sink:
-                    output_sink.speak(resolution.clarification)
-                    time.sleep(5)
+                    output_sink.speak("Music library not indexed yet.")
                 return False
-            if not resolution.tracks:
+            fields = self._extract_query_fields(keyword)
+            tracks = self._db.query_tracks(
+                title=fields.get("song"),
+                artist=fields.get("artist"),
+                genre=fields.get("genre"),
+                year_start=fields.get("year_start"),
+                year_end=fields.get("year_end"),
+                limit=200,
+                intent=f"play {keyword}",
+            )
+
+            if not tracks:
                 logger.info(f"music_unresolved_phrase = \"{keyword}\"")
                 if output_sink:
                     output_sink.speak(f"No music found for '{keyword}'.")
                 return False
 
-            track = random.choice(resolution.tracks)
+            track = tracks[0]
             announcement = self._build_announcement(track)
             return self._play_jellyfin_track(track, announcement, output_sink)
         
@@ -519,22 +659,14 @@ class MusicPlayer:
                 output_sink.speak("I couldn't find any music.")
             return False
 
-        if not self._resolver:
-            self._resolver = MusicResolver(self.index.tracks or [])
-
-        resolution = self._resolver.resolve(keyword, self._interpret_music_intent)
-        if resolution.clarification:
-            if output_sink:
-                output_sink.speak(resolution.clarification)
-                time.sleep(5)
-            return False
-        if not resolution.tracks:
+        resolution_tracks = self.index.filter_by_keyword(keyword)
+        if not resolution_tracks:
             logger.info(f"music_unresolved_phrase = \"{keyword}\"")
             if output_sink:
                 output_sink.speak(f"No music found for '{keyword}'.")
             return False
 
-        track = random.choice(resolution.tracks)
+        track = random.choice(resolution_tracks)
         track_path = track.get("path", "")
         announcement = self._build_announcement(track)
         
@@ -888,6 +1020,96 @@ Response (JSON ONLY):"""
         else:
             return name
 
+    def _acquire_music_audio(self) -> bool:
+        try:
+            self._audio_owner.acquire("MUSIC")
+            return True
+        except Exception as e:
+            logger.warning(f"[ARGO] Music blocked: {e}")
+            return False
+
+    def _release_music_audio(self) -> None:
+        try:
+            self._audio_owner.release("MUSIC")
+        except Exception:
+            pass
+
+    def preflight(self) -> Optional[Dict]:
+        if self._music_backend == "sqlite" and not music_db_exists(MUSIC_DB_PATH):
+            return {"status": "blocked", "reason": "music_not_indexed"}
+        return None
+
+    def _extract_year_range_from_text(self, text: str) -> tuple[Optional[int], Optional[int]]:
+        import re
+
+        text_lower = text.lower()
+        decade_match = re.search(r"\b(\d{2})s\b", text_lower)
+        four_decade_match = re.search(r"\b(19|20)\d{2}s\b", text_lower)
+        year_match = re.search(r"\b(19|20)\d{2}\b", text_lower)
+
+        if four_decade_match:
+            year = int(four_decade_match.group()[:4])
+            return year, year + 9
+        if decade_match:
+            decade = int(decade_match.group(1))
+            year = 1900 + decade if decade >= 50 else 2000 + decade
+            return year, year + 9
+        if year_match:
+            year = int(year_match.group())
+            return year, year
+        return None, None
+
+    def _extract_jellyfin_id_from_path(self, path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        if path.startswith("jellyfin://"):
+            return path.split("jellyfin://", 1)[1]
+        return None
+
+    def _get_adjacent_genres(self, genre: str) -> List[str]:
+        genre_normalized = normalize_genre(genre)
+        try:
+            return self._db.get_adjacent_genres(genre_normalized)
+        except Exception:
+            return []
+
+    def _extract_query_fields(self, keyword: str) -> Dict:
+        keyword_lower = keyword.lower().strip()
+
+        if keyword_lower in KNOWN_ARTISTS:
+            return {
+                "artist": keyword,
+                "song": None,
+                "genre": None,
+                "year_start": None,
+                "year_end": None,
+            }
+
+        extracted = self._extract_metadata_with_llm(keyword)
+        if not extracted:
+            extracted = self._parse_music_keyword(keyword)
+
+        artist = extracted.get("artist") if extracted else None
+        song = extracted.get("song") if extracted else None
+        genre = extracted.get("genre") if extracted else None
+        year = extracted.get("year") if extracted else None
+
+        if genre:
+            genre = normalize_genre(str(genre))
+
+        year_start, year_end = self._extract_year_range_from_text(keyword)
+        if year is not None and year_start is None:
+            year_start = int(year)
+            year_end = int(year)
+
+        return {
+            "artist": artist,
+            "song": song,
+            "genre": genre,
+            "year_start": year_start,
+            "year_end": year_end,
+        }
+
     def play(self, track_path: str, track_name: str, output_sink=None, track_data: Dict = None) -> bool:
         """
         Play a specific track.
@@ -906,6 +1128,8 @@ Response (JSON ONLY):"""
             return False
 
         try:
+            if not self._acquire_music_audio():
+                return False
             # Announce what's playing
             if output_sink:
                 output_sink.speak(f"Playing: {track_name}")
@@ -925,11 +1149,13 @@ Response (JSON ONLY):"""
             thread.start()
 
             logger.info(f"[ARGO] Playing music: {track_path}")
-            self.is_playing = True
+            self._is_playing_flag = True
+            self.playback_mode = "music"
             return True
 
         except Exception as e:
             logger.error(f"[ARGO] Error starting playback: {e}")
+            self._release_music_audio()
             return False
 
     def play_next(self, output_sink=None) -> bool:
@@ -984,8 +1210,13 @@ Response (JSON ONLY):"""
             True if playback started, False otherwise
         """
         try:
-            jellyfin_id = track.get("jellyfin_id")
+            jellyfin_id = track.get("jellyfin_id") or track.get("jellyfin_item_id")
             if not jellyfin_id:
+                jellyfin_id = self._extract_jellyfin_id_from_path(track.get("path"))
+            if not jellyfin_id:
+                return False
+
+            if not self._acquire_music_audio():
                 return False
             
             # Get streaming URL from Jellyfin
@@ -1004,11 +1235,22 @@ Response (JSON ONLY):"""
             
             # Update current track
             self.current_track = track
-            self.is_playing = True
+            self._is_playing_flag = True
+            self.playback_mode = "music"
             
             # Direct streaming with ffplay (no download, no temp file, instant start)
-            import subprocess
             import shutil
+
+            def _monitor_process(proc: subprocess.Popen) -> None:
+                try:
+                    proc.wait()
+                except Exception:
+                    pass
+                finally:
+                    self._is_playing_flag = False
+                    self.playback_mode = None
+                    self.current_process = None
+                    self._release_music_audio()
             
             try:
                 ffplay_path = shutil.which("ffplay")
@@ -1019,7 +1261,7 @@ Response (JSON ONLY):"""
                 logger.debug(f"[ARGO] Starting ffplay streaming from {stream_url[:80]}...")
                 
                 # Launch ffplay with streaming flags for instant playback
-                self._music_process = subprocess.Popen(
+                self.current_process = subprocess.Popen(
                     [
                         ffplay_path,
                         "-nodisp",           # Don't display video window
@@ -1033,7 +1275,8 @@ Response (JSON ONLY):"""
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                logger.info(f"[ARGO] ffplay process started (PID: {self._music_process.pid})")
+                logger.info(f"[ARGO] ffplay process started (PID: {self.current_process.pid})")
+                threading.Thread(target=_monitor_process, args=(self.current_process,), daemon=True).start()
                 return True
             
             except Exception as e:
@@ -1043,41 +1286,51 @@ Response (JSON ONLY):"""
             mpv_path = shutil.which("mpv")
             if mpv_path:
                 logger.debug("[ARGO] Using mpv for streaming")
-                self._music_process = subprocess.Popen(
+                self.current_process = subprocess.Popen(
                     [mpv_path, "--no-video", stream_url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                logger.info(f"[ARGO] mpv process started (PID: {self.current_process.pid})")
+                threading.Thread(target=_monitor_process, args=(self.current_process,), daemon=True).start()
                 return True
             
             # Try mpv
             mpv_path = shutil.which("mpv")
             if mpv_path:
                 logger.debug("[ARGO] Using mpv for streaming")
-                subprocess.Popen(
+                self.current_process = subprocess.Popen(
                     [mpv_path, "--no-video", stream_url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                logger.info(f"[ARGO] mpv process started (PID: {self.current_process.pid})")
+                threading.Thread(target=_monitor_process, args=(self.current_process,), daemon=True).start()
                 return True
             
             # Try VLC
             vlc_path = shutil.which("vlc")
             if vlc_path:
                 logger.debug("[ARGO] Using VLC for streaming")
-                subprocess.Popen(
+                self.current_process = subprocess.Popen(
                     [vlc_path, "--play-and-exit", stream_url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                logger.info(f"[ARGO] vlc process started (PID: {self.current_process.pid})")
+                threading.Thread(target=_monitor_process, args=(self.current_process,), daemon=True).start()
                 return True
             
             logger.error("[ARGO] No audio player found. Install ffmpeg, mpv, or VLC.")
+            self._release_music_audio()
             return False
                 
         except Exception as e:
             logger.error(f"[ARGO] Jellyfin playback error: {e}")
-            self.is_playing = False
+            self._is_playing_flag = False
+            self.playback_mode = None
+            self.current_process = None
+            self._release_music_audio()
             return False
 
     def _play_background(self, track_path: str) -> None:
@@ -1131,17 +1384,23 @@ Response (JSON ONLY):"""
                 
                 # Method 3: Try ffplay via subprocess
                 try:
-                    import subprocess
                     import shutil
                     
                     ffplay_path = shutil.which("ffplay")
                     if ffplay_path:
                         logger.info(f"[ARGO] Playing via ffplay: {ffplay_path}")
-                        subprocess.run(
+                        self.current_process = subprocess.Popen(
                             [ffplay_path, "-nodisp", "-autoexit", track_path],
-                            capture_output=True,
-                            timeout=AUDIO_PLAYBACK_TIMEOUT_SECONDS
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
                         )
+                        self.playback_mode = "music"
+                        logger.info(f"[ARGO] ffplay process started (PID: {self.current_process.pid})")
+                        try:
+                            self.current_process.wait(timeout=AUDIO_PLAYBACK_TIMEOUT_SECONDS)
+                        finally:
+                            self.current_process = None
+                            self.playback_mode = None
                         logger.info(f"[ARGO] Playback completed via ffplay")
                         return
                 except Exception as e:
@@ -1156,8 +1415,13 @@ Response (JSON ONLY):"""
         except Exception as e:
             logger.error(f"[ARGO] Playback error: {type(e).__name__}: {e}")
         finally:
-            self.is_playing = False
+            self._is_playing_flag = False
+            self.playback_mode = None
+            self._release_music_audio()
             logger.info("[ARGO] Music playback stopped")
+
+    def is_playing(self) -> bool:
+        return self.current_process is not None and self.current_process.poll() is None
 
     def stop(self) -> None:
         """Stop current playback immediately (idempotent). No graceful fade, just STOP."""
@@ -1165,31 +1429,25 @@ Response (JSON ONLY):"""
         playback_state = get_playback_state()
         playback_state.reset()
         
-        if not self.is_playing:
+        if not self.is_playing():
             return
 
         try:
-            # Kill ffplay/mpv/vlc process immediately
-            if self._music_process:
+            if self.current_process and self.current_process.poll() is None:
+                logger.info("[ARGO] Stopping music playback")
+                self.current_process.terminate()
                 try:
-                    self._music_process.terminate()
-                    self._music_process.wait(timeout=AUDIO_STOP_TIMEOUT_SECONDS)
-                except (subprocess.TimeoutExpired, AttributeError):
-                    try:
-                        self._music_process.kill()
-                    except:
-                        pass
-                finally:
-                    self._music_process = None
-            
-            # Legacy simpleaudio support
-            if self.current_process:
-                if hasattr(self.current_process, "stop"):
-                    self.current_process.stop()
-            
-            self.is_playing = False
+                    self.current_process.wait(timeout=1)
+                except Exception:
+                    self.current_process.kill()
+                self.current_process = None
+                self.playback_mode = None
+                logger.info("[ARGO] ffplay terminated")
+
+            self._is_playing_flag = False
             self.current_track = {}
-            
+            self._release_music_audio()
+
             logger.info("[ARGO] Music playback stopped")
         except Exception as e:
             logger.error(f"[ARGO] Error stopping music: {e}")

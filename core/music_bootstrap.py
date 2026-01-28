@@ -16,6 +16,9 @@ import json
 import logging
 from pathlib import Path
 
+from core.config import get_config
+from core.database import MusicDatabase
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +37,11 @@ def bootstrap_music_system() -> bool:
         RuntimeError: If configuration is invalid (fail fast)
     """
     
-    music_enabled = os.getenv("MUSIC_ENABLED", "false").lower() == "true"
+    env_enabled = os.getenv("MUSIC_ENABLED")
+    if env_enabled is None or env_enabled == "":
+        music_enabled = bool(get_config().get("music.enabled", True))
+    else:
+        music_enabled = env_enabled.lower() == "true"
     
     if not music_enabled:
         logger.info("[MUSIC BOOTSTRAP] Music disabled (MUSIC_ENABLED=false)")
@@ -42,7 +49,10 @@ def bootstrap_music_system() -> bool:
     
     logger.info("[MUSIC BOOTSTRAP] Starting music system bootstrap...")
     
-    music_source = os.getenv("MUSIC_SOURCE", "local").lower()
+    music_source = os.getenv("MUSIC_SOURCE")
+    if not music_source:
+        music_source = str(get_config().get("music.source", "local"))
+    music_source = music_source.lower()
     
     # ========== JELLYFIN MODE ==========
     if music_source == "jellyfin":
@@ -66,6 +76,13 @@ def bootstrap_music_system() -> bool:
             provider = get_jellyfin_provider()
             tracks = provider.load_music_library()
             logger.info(f"[MUSIC BOOTSTRAP] Loaded {len(tracks)} tracks from Jellyfin")
+            try:
+                db = MusicDatabase()
+                if db.count_tracks() > 0:
+                    db.optimize(vacuum=len(tracks) > 5000)
+                    logger.info("[MUSIC BOOTSTRAP] SQLite optimized")
+            except Exception as e:
+                logger.warning(f"[MUSIC BOOTSTRAP] SQLite optimize skipped: {e}")
             return True
         except Exception as e:
             raise RuntimeError(f"[MUSIC BOOTSTRAP] FATAL: Jellyfin connection failed: {e}")
@@ -77,9 +94,11 @@ def bootstrap_music_system() -> bool:
         # Step 1: Check MUSIC_DIR
         music_dir = os.getenv("MUSIC_DIR")
         if not music_dir:
+            music_dir = str(get_config().get("music.library_path", ""))
+        if not music_dir:
             raise RuntimeError(
                 "[MUSIC BOOTSTRAP] FATAL: MUSIC_DIR not set in .env. "
-                "Set MUSIC_DIR=/path/to/music to enable music playback."
+                "Set MUSIC_DIR=/path/to/music or config music.library_path to enable music playback."
             )
         
         if not os.path.isdir(music_dir):
@@ -91,7 +110,9 @@ def bootstrap_music_system() -> bool:
         logger.info(f"[MUSIC BOOTSTRAP] Music directory: {music_dir}")
         
         # Step 2: Check MUSIC_INDEX_FILE
-        index_file = os.getenv("MUSIC_INDEX_FILE", "data/music_index.json")
+        index_file = os.getenv("MUSIC_INDEX_FILE")
+        if not index_file:
+            index_file = str(get_config().get("music.index_file", "data/music_index.json"))
         index_path = Path(index_file)
         
         # Ensure parent directory exists

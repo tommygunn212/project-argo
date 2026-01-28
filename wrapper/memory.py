@@ -89,6 +89,7 @@ DESIGN PRINCIPLES
 
 import json
 import os
+import tempfile
 import math
 from datetime import datetime
 from pathlib import Path
@@ -134,8 +135,26 @@ def load_memory() -> List[Dict]:
 
 def save_memory(memory: List[Dict]):
     """Save interaction history to disk."""
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2)
+    os.makedirs(MEMORY_FILE.parent, exist_ok=True)
+    temp_file = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=str(MEMORY_FILE.parent),
+            delete=False,
+        ) as f:
+            temp_file = f.name
+            json.dump(memory, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, MEMORY_FILE)
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
 
 
 def infer_topic(text: str) -> str | None:
