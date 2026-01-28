@@ -44,6 +44,7 @@ import re
 from datetime import datetime
 
 from core.policy import TTS_TIMEOUT_SECONDS, TTS_WATCHDOG_SECONDS
+from core.audio_owner import get_audio_owner
 from core.watchdog import Watchdog
 
 
@@ -353,8 +354,22 @@ class PiperOutputSink(OutputSink):
                 # Process sentence
                 self._set_playing(True)
                 try:
+                    # Audio ownership guard
+                    audio_owner = get_audio_owner()
+                    try:
+                        audio_owner.acquire("TTS")
+                        log_event("AUDIO_ACQUIRED owner=TTS")
+                    except Exception:
+                        log_event(f"AUDIO_CONTESTED owner={audio_owner.get_owner()} requested=TTS")
+                        self._set_playing(False)
+                        continue
                     self._play_sentence(item)
                 finally:
+                    try:
+                        audio_owner.release("TTS")
+                        log_event("AUDIO_RELEASED owner=TTS")
+                    except Exception:
+                        pass
                     self._set_playing(False)
 
                 # Resume trigger only when queue empty and playback idle

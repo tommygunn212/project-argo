@@ -13,6 +13,13 @@ Does NOT:
 """
 
 from abc import ABC, abstractmethod
+import time
+
+try:
+    from core.instrumentation import log_event
+except Exception:
+    def log_event(event: str, stage: str = "", interaction_id: str = ""):
+        pass
 
 
 class SpeechToText(ABC):
@@ -39,6 +46,9 @@ class SpeechToText(ABC):
         """
         pass
 
+    def get_last_metrics(self) -> dict | None:
+        return None
+
 
 class WhisperSTT(SpeechToText):
     """
@@ -61,6 +71,7 @@ class WhisperSTT(SpeechToText):
         # Load base model (reasonable size, reasonable accuracy)
         # Hardcoded for predictability
         self.model = whisper.load_model("base")
+        self.last_metrics = None
 
     def transcribe(self, audio_data: bytes, sample_rate: int) -> str:
         """
@@ -104,6 +115,7 @@ class WhisperSTT(SpeechToText):
         audio_array = np.clip(audio_array, -1.0, 1.0)
 
         # Transcribe
+        start = time.perf_counter()
         result = self.model.transcribe(
             audio_array,
             language="en",
@@ -113,4 +125,25 @@ class WhisperSTT(SpeechToText):
         )
 
         text = result.get("text", "").strip()
+        duration_ms = (time.perf_counter() - start) * 1000
+        rms = float(np.sqrt(np.mean(audio_array ** 2))) if len(audio_array) else 0.0
+        silence_ratio = float(np.mean(np.abs(audio_array) < 0.01)) if len(audio_array) else 1.0
+        conf = 0.0
+        duration_s = len(audio_array) / float(sample_rate or 16000)
+        if duration_s > 0:
+            conf = min(1.0, (len(text) / max(1.0, duration_s * 10)) * (1.0 - silence_ratio))
+        self.last_metrics = {
+            "text_len": len(text),
+            "rms": rms,
+            "silence_ratio": silence_ratio,
+            "confidence": conf,
+            "duration_ms": duration_ms,
+        }
+        log_event(
+            f"STT_DONE len={len(text)} rms={rms:.4f} silence={silence_ratio:.2f} conf={conf:.2f} {duration_ms:.0f}ms",
+            stage="stt",
+        )
         return text
+
+    def get_last_metrics(self) -> dict | None:
+        return self.last_metrics

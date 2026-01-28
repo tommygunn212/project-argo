@@ -7,6 +7,8 @@
   "audio": {
     "sample_rate": 16000,
     "device_name": null,
+    "input_device_index": null,
+    "output_device_index": null,
     "max_recording_duration": 10.0,
     "silence_timeout_seconds": 2.5,
     "silence_threshold": 30

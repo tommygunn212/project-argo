@@ -13,6 +13,7 @@ Usage:
 import json
 import os
 import logging
+import hashlib
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class Config:
     def __init__(self, data: dict):
         """Initialize with config dict."""
         self._data = data
+        self._hash = config_hash(self._data)
     
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -59,6 +61,10 @@ class Config:
         """Allow dict-style access."""
         return self.get(key)
 
+    @property
+    def hash(self) -> str:
+        return self._hash
+
 
 # Default configuration (fallback if config.json missing)
 _DEFAULT_CONFIG = {
@@ -69,7 +75,8 @@ _DEFAULT_CONFIG = {
     "audio": {
         "sample_rate": 16000,
         "device_name": None,
-        "input_device_index": 2,  # M-Track: Locked microphone (no autodetect)
+        "input_device_index": None,
+        "output_device_index": None,
         "max_recording_duration": 10.0,
         "silence_timeout_seconds": 2.5,
         "silence_threshold": 30
@@ -113,6 +120,15 @@ _DEFAULT_CONFIG = {
 }
 
 _config_instance: Optional[Config] = None
+
+# Runtime overrides (non-persistent)
+_RUNTIME_OVERRIDES_DEFAULT = {
+    "barge_in_enabled": True,
+    "tts_enabled": True,
+    "music_enabled": True,
+    "debug_level": "INFO",
+}
+_runtime_overrides = dict(_RUNTIME_OVERRIDES_DEFAULT)
 
 
 def load_config(config_path: str = "config.json") -> Config:
@@ -158,6 +174,33 @@ def get_config() -> Config:
     if _config_instance is None:
         load_config()
     return _config_instance
+
+
+def get_runtime_overrides() -> dict:
+    return _runtime_overrides
+
+
+def set_runtime_override(key: str, value) -> None:
+    _runtime_overrides[key] = value
+
+
+def set_runtime_overrides(updates: dict) -> None:
+    for key, value in updates.items():
+        _runtime_overrides[key] = value
+
+
+def clear_runtime_overrides() -> None:
+    _runtime_overrides.clear()
+    _runtime_overrides.update(_RUNTIME_OVERRIDES_DEFAULT)
+
+
+def config_hash(cfg: dict) -> str:
+    return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
+
+
+def get_config_hash() -> str:
+    cfg = get_config()
+    return cfg.hash
 
 
 def _merge_dicts(base: dict, override: dict) -> None:

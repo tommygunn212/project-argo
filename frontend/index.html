@@ -78,6 +78,28 @@
             });
             const [latency, setLatency] = useState({ stt: null, llm: null, tts: null, total: null });
             const [metrics, setMetrics] = useState({ attempts: 0, failures: 0 });
+            const [audioOwner, setAudioOwner] = useState({ owner: 'UNKNOWN', contested: false });
+            const [configHash, setConfigHash] = useState('');
+            const [configDrift, setConfigDrift] = useState(false);
+            const [sttMetrics, setSttMetrics] = useState(null);
+            const [llmMetrics, setLlmMetrics] = useState(null);
+            const [bargeIn, setBargeIn] = useState(null);
+            const [illegalTransition, setIllegalTransition] = useState(null);
+            const [illegalTransitionOpen, setIllegalTransitionOpen] = useState(false);
+            const [runtimeOverrides, setRuntimeOverrides] = useState({});
+            const [timeline, setTimeline] = useState([]);
+            const timelineRef = useRef({});
+            const stageRef = useRef({});
+            const [replays, setReplays] = useState([]);
+            const ttsEnabled = runtimeOverrides.tts_enabled !== false;
+            const musicEnabled = runtimeOverrides.music_enabled !== false;
+            const bargeEnabled = runtimeOverrides.barge_in_enabled !== false;
+            const [bottomHeight, setBottomHeight] = useState(() => {
+                const saved = localStorage.getItem('argo.bottomPaneHeight');
+                const parsed = saved ? parseInt(saved, 10) : 360;
+                return Number.isFinite(parsed) ? Math.max(220, parsed) : 360;
+            });
+            const resizeRef = useRef({ active: false, startY: 0, startHeight: 360 });
             
             const ws = useRef(null);
 
@@ -92,6 +114,39 @@
                     if (data.type === 'log') {
                         const msg = data.payload;
                         setLogs(p => [...p.slice(-200), { time: new Date().toLocaleTimeString().split(' ')[0], msg }]);
+
+                        // Timeline parsing
+                        if (msg.includes('[EVT]')) {
+                            const m = msg.match(/\[EVT\]\s+t=(\d+)\s+id=([^\s]*)\s+stage=([^\s]*)\s+event=(.*?)\s+thread=(.*)$/);
+                            if (m) {
+                                const evt = {
+                                    t: parseInt(m[1], 10),
+                                    id: m[2] || 'unknown',
+                                    stage: m[3],
+                                    event: m[4],
+                                    thread: m[5]
+                                };
+                                const addTimelineEvent = (event) => {
+                                    const id = event.id || 'unknown';
+                                    const entry = timelineRef.current[id] || { id, events: [], hasOverlap: false };
+                                    const state = stageRef.current[id] || { sttDone: false, llmDone: false };
+
+                                    if (event.event.includes('STT_DONE')) state.sttDone = true;
+                                    if (event.event.includes('LLM_DONE')) state.llmDone = true;
+                                    if (event.event.includes('LLM_REQUEST_START') && !state.sttDone) entry.hasOverlap = true;
+                                    if (event.event.includes('TTS_START') && !state.llmDone) entry.hasOverlap = true;
+                                    if (event.event.includes('ILLEGAL_TRANSITION')) entry.hasOverlap = true;
+
+                                    entry.events = [...entry.events, event].slice(-50);
+                                    timelineRef.current[id] = entry;
+                                    stageRef.current[id] = state;
+                                    const list = Object.values(timelineRef.current)
+                                        .sort((a, b) => (b.events[b.events.length - 1]?.t || 0) - (a.events[a.events.length - 1]?.t || 0));
+                                    setTimeline(list);
+                                };
+                                addTimelineEvent(evt);
+                            }
+                        }
 
                         // Parsing Logic
                         if (msg.includes('User:')) setUserText(msg.split('User:')[1]);
@@ -124,6 +179,15 @@
                         // Metrics
                         if (msg.includes('Starting Interaction')) setMetrics(m => ({...m, attempts: m.attempts + 1}));
                         if (msg.includes('Pipeline Error') || msg.includes('Error connecting')) setMetrics(m => ({...m, failures: m.failures + 1}));
+                        if (msg.includes('ILLEGAL TRANSITION') && !illegalTransition) {
+                            setIllegalTransition({
+                                from: 'UNKNOWN',
+                                to: 'UNKNOWN',
+                                allowed: [],
+                                source: 'unknown',
+                                interaction_id: ''
+                            });
+                        }
 
                         // VAD Chart Data
                         if (msg.includes('[VAD] Speech detected')) {
@@ -147,6 +211,36 @@
                             total: payload.total ?? prev.total
                         }));
                     }
+                    else if (data.type === 'stt_metrics') {
+                        setSttMetrics(data.payload || null);
+                    }
+                    else if (data.type === 'llm_metrics') {
+                        setLlmMetrics(data.payload || null);
+                    }
+                    else if (data.type === 'runtime_overrides') {
+                        setRuntimeOverrides(data.payload || {});
+                    }
+                    else if (data.type === 'audio_owner') {
+                        setAudioOwner(data.payload || { owner: 'UNKNOWN', contested: false });
+                    }
+                    else if (data.type === 'barge_in') {
+                        setBargeIn(data.payload || null);
+                    }
+                    else if (data.type === 'illegal_transition') {
+                        setIllegalTransition(data.payload || null);
+                        setIllegalTransitionOpen(true);
+                    }
+                    else if (data.type === 'config') {
+                        const next = data.payload?.hash || '';
+                        if (configHash && next && configHash !== next) setConfigDrift(true);
+                        setConfigHash(next);
+                    }
+                    else if (data.type === 'replay_saved') {
+                        const payload = data.payload || {};
+                        if (payload.interaction_id) {
+                            setReplays(prev => [{ id: payload.interaction_id, created_at: payload.created_at }, ...prev].slice(0, 20));
+                        }
+                    }
                     else if (data.type === 'status') {
                         setPipelineStage(data.payload);
                         // If system reports READY, force all health to Ready (backup)
@@ -162,21 +256,58 @@
                 ws.current?.send(JSON.stringify({ type: 'set_voice', payload: v }));
             };
 
+            const replayInteraction = (id) => {
+                if (!id) return;
+                ws.current?.send(JSON.stringify({ type: 'replay', payload: id }));
+            };
+
             useEffect(() => { connect(); return () => ws.current?.close(); }, []);
+
+            useEffect(() => {
+                const onMove = (e) => {
+                    if (!resizeRef.current.active) return;
+                    const delta = resizeRef.current.startY - e.clientY;
+                    const next = Math.max(220, Math.min(window.innerHeight - 180, resizeRef.current.startHeight + delta));
+                    setBottomHeight(next);
+                };
+                const onUp = () => {
+                    if (!resizeRef.current.active) return;
+                    resizeRef.current.active = false;
+                    localStorage.setItem('argo.bottomPaneHeight', String(bottomHeight));
+                };
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                return () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                };
+            }, [bottomHeight]);
 
             const getStepClass = (step) => {
                 const map = {
-                    'LISTENING': ['LISTENING', 'RECORDING'],
-                    'TRANSCRIBING': ['PROCESSING'],
-                    'THINKING': ['PROCESSING'],
+                    'LISTENING': ['LISTENING'],
+                    'TRANSCRIBING': ['TRANSCRIBING'],
+                    'THINKING': ['THINKING'],
                     'SPEAKING': ['SPEAKING']
                 };
                 if (map[step].includes(pipelineStage)) return "status-active border-blue-500 text-blue-400 bg-blue-950/30";
                 return "status-idle border-slate-800 bg-slate-900";
             };
 
+            const getEventClass = (evt) => {
+                if (evt.event?.startsWith('UI_CMD_') || evt.stage === 'ui') return 'bg-fuchsia-900/40 text-fuchsia-200 border border-fuchsia-700/60';
+                if (evt.stage === 'control' || evt.event?.startsWith('CONTROL_')) return 'bg-cyan-900/30 text-cyan-200 border border-cyan-700/60';
+                if (evt.stage === 'audio') return 'bg-amber-900/40 text-amber-200 border border-amber-700/60';
+                if (evt.stage === 'stt') return 'bg-blue-900/40 text-blue-300';
+                if (evt.stage === 'llm') return 'bg-emerald-900/40 text-emerald-300';
+                if (evt.stage === 'tts') return 'bg-purple-900/40 text-purple-300';
+                if (evt.stage === 'vad') return 'bg-amber-900/40 text-amber-300';
+                return 'bg-slate-800 text-slate-300';
+            };
+
             return (
                 <div className="h-full flex flex-col bg-slate-950 p-6 gap-4 overflow-hidden">
+                    <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
                     {/* Header with Metrics */}
                     <div className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xl">
                         <div>
@@ -199,12 +330,80 @@
                             </div>
                         </div>
 
+                        {/* Config + Audio Owner */}
+                        <div className="flex flex-col gap-1 items-end text-[10px] font-mono">
+                            <div className={`${configDrift ? 'text-red-400' : 'text-slate-400'}`}>
+                                Config: {configHash ? configHash.slice(0, 12) : 'loading'}
+                                {configDrift && <span className="ml-2 text-red-500">DRIFT</span>}
+                            </div>
+                            <div className={`${audioOwner.contested ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
+                                Audio Owner: {audioOwner.owner}
+                            </div>
+                            <div className="text-slate-500">
+                                Listening: {(audioOwner.owner && audioOwner.owner !== 'NONE' && audioOwner.owner !== 'STT') ? 'Passive' : 'Active'}
+                            </div>
+                        </div>
+
                         {/* Voice Controls */}
                         <div className="flex gap-3">
                             <button onClick={() => changeVoice('lessac')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'lessac' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>LESSAC (US)</button>
                             <button onClick={() => changeVoice('alan')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alan' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALAN (GB)</button>
                         </div>
+
+                        {/* Start/Stop Controls */}
+                        <div className="flex gap-2">
+                            <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'RESUME' } }))} className="px-3 py-2 rounded text-xs font-bold bg-emerald-600 text-white">START VAD</button>
+                            <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'PAUSE' } }))} className="px-3 py-2 rounded text-xs font-bold bg-red-600 text-white">STOP VAD</button>
+                        </div>
+
+                        {/* Server Controls */}
+                        <div className="flex gap-2">
+                            <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'SERVER_START' } }))} className="px-3 py-2 rounded text-xs font-bold bg-blue-600 text-white">START SERVER</button>
+                            <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'SERVER_STOP' } }))} className="px-3 py-2 rounded text-xs font-bold bg-slate-700 text-white">STOP SERVER</button>
+                        </div>
                     </div>
+
+                    {/* Runtime Toggles */}
+                    <div className="flex gap-2 items-center text-[10px] font-mono">
+                        <span className="text-slate-400">TTS</span>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'tts_enabled', value: !ttsEnabled } }))} className={`px-2 py-1 rounded ${ttsEnabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>{ttsEnabled ? 'ON' : 'OFF'}</button>
+                        <span className="text-slate-400">Music</span>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'music_enabled', value: !musicEnabled } }))} className={`px-2 py-1 rounded ${musicEnabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>{musicEnabled ? 'ON' : 'OFF'}</button>
+                        <span className="text-slate-400">Barge-in</span>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'barge_in_enabled', value: !bargeEnabled } }))} className={`px-2 py-1 rounded ${bargeEnabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>{bargeEnabled ? 'ON' : 'OFF'}</button>
+                    </div>
+
+                    {/* Next Interaction Overrides */}
+                    <div className="flex gap-2">
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'next_override', payload: { key: 'suppress_tts', value: true } }))} className="px-3 py-2 rounded text-xs font-bold bg-slate-800 text-slate-300">NEXT: NO TTS</button>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'next_override', payload: { key: 'force_passive_listening', value: true } }))} className="px-3 py-2 rounded text-xs font-bold bg-slate-800 text-slate-300">NEXT: PASSIVE</button>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'clear_overrides' }))} className="px-3 py-2 rounded text-xs font-bold bg-slate-700 text-white">CLEAR OVERRIDES</button>
+                    </div>
+
+                    {/* Recovery Controls */}
+                    <div className="flex gap-2">
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'RESET_INTERACTION' } }))} className="px-3 py-2 rounded text-xs font-bold bg-amber-700 text-white">RESET INTERACTION</button>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'FORCE_RELEASE_AUDIO' } }))} className="px-3 py-2 rounded text-xs font-bold bg-amber-900 text-white">FORCE RELEASE AUDIO</button>
+                        <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'FULL_RESET' } }))} className="px-3 py-2 rounded text-xs font-bold bg-red-700 text-white">FULL RESET</button>
+                    </div>
+
+                    {/* Illegal Transition Banner */}
+                    {illegalTransition && (
+                        <div className="bg-red-950/40 border border-red-800 text-red-200 p-3 rounded-xl text-xs">
+                            <div className="flex items-center justify-between">
+                                <div className="font-bold tracking-widest">ILLEGAL TRANSITION DETECTED — PLAYBACK FROZEN</div>
+                                <button onClick={() => setIllegalTransitionOpen(v => !v)} className="text-red-300 text-[10px]">{illegalTransitionOpen ? 'HIDE' : 'DETAILS'}</button>
+                            </div>
+                            {illegalTransitionOpen && (
+                                <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] font-mono">
+                                    <div>Attempted: {illegalTransition.from} → {illegalTransition.to}</div>
+                                    <div>Source: {illegalTransition.source}</div>
+                                    <div>Allowed: {(illegalTransition.allowed || []).join(', ') || 'None'}</div>
+                                    <div>Interaction: {illegalTransition.interaction_id || 'N/A'}</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* System Health Modules */}
                     <div className="grid grid-cols-3 gap-4">
@@ -253,13 +452,13 @@
                         <div className="flex-1 bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col">
                             <div className="text-xs font-bold text-slate-500 uppercase mb-2">Microphone Input (STT)</div>
                             <div className="flex-1 font-mono text-lg text-blue-200 leading-relaxed overflow-y-auto">
-                                {pipelineStage === 'RECORDING' ? <span className="animate-pulse">...Processing Audio...</span> : userText}
+                                {pipelineStage === 'TRANSCRIBING' ? <span className="animate-pulse">...Processing Audio...</span> : userText}
                             </div>
                         </div>
                         <div className="flex-[1.5] bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col">
                             <div className="text-xs font-bold text-slate-500 uppercase mb-2">AI Response (LLM)</div>
                             <div className="flex-1 font-mono text-lg text-emerald-200 leading-relaxed overflow-y-auto">
-                                {pipelineStage === 'PROCESSING' ? <span className="animate-pulse">...Generating Response...</span> : aiText}
+                                {pipelineStage === 'THINKING' ? <span className="animate-pulse">...Generating Response...</span> : aiText}
                             </div>
                         </div>
                     </div>
@@ -281,14 +480,107 @@
                         </ResponsiveContainer>
                     </div>
 
-                    {/* Logs */}
-                    <div className="flex-1 bg-black p-4 font-mono text-[10px] overflow-y-auto border border-slate-800 rounded-lg text-gray-500 shadow-inner">
-                         {logs.map((l, i) => (
-                             <div key={i} className="hover:bg-slate-900/50 px-1">
-                                 <span className="text-slate-600">[{l.time}]</span> 
-                                 <span className={l.msg.includes('ERROR') ? 'text-red-400' : l.msg.includes('[VAD]') ? 'text-slate-600' : 'text-slate-300'}> {l.msg}</span>
-                             </div>
-                         ))}
+                    {/* STT / LLM / Barge-In Panels */}
+                    <div className="grid grid-cols-3 gap-4">
+                        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">STT Quality</div>
+                            {sttMetrics ? (
+                                <>
+                                    <div className="text-[10px] text-slate-400 font-mono">len={sttMetrics.text_len} rms={sttMetrics.rms?.toFixed(4)} silence={sttMetrics.silence_ratio?.toFixed(2)}</div>
+                                    <div className="w-full h-2 bg-slate-800 rounded mt-2">
+                                        <div className={`h-2 rounded ${sttMetrics.confidence < 0.2 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${Math.round((sttMetrics.confidence || 0) * 100)}%` }}></div>
+                                    </div>
+                                    {sttMetrics.confidence < 0.2 && (
+                                        <div className="text-[10px] text-red-300 mt-2 font-bold">Likely hallucination</div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="text-[10px] text-slate-500">No STT metrics yet</div>
+                            )}
+                        </div>
+                        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">LLM Latency</div>
+                            {llmMetrics ? (
+                                <>
+                                    <div className="text-[10px] text-slate-400 font-mono">first token: {llmMetrics.first_token_ms ? `${Math.round(llmMetrics.first_token_ms)}ms` : '—'}</div>
+                                    <div className="text-[10px] text-slate-400 font-mono">total: {llmMetrics.total_ms ? `${Math.round(llmMetrics.total_ms)}ms` : '—'}</div>
+                                </>
+                            ) : (
+                                <div className="text-[10px] text-slate-500">No LLM metrics yet</div>
+                            )}
+                        </div>
+                        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-2">Barge-In</div>
+                            {bargeIn ? (
+                                <div className="text-[10px] text-slate-300 font-mono">
+                                    stage={bargeIn.stage} rms={bargeIn.rms?.toFixed(2)} / {bargeIn.threshold}
+                                    <div className={`mt-1 ${bargeIn.allowed ? 'text-emerald-400' : 'text-red-400'}`}>allowed={String(bargeIn.allowed)}</div>
+                                </div>
+                            ) : (
+                                <div className="text-[10px] text-slate-500">No barge-in events</div>
+                            )}
+                        </div>
+                    </div>
+                    </div>
+
+                    {/* Resize Handle */}
+                    <div
+                        onMouseDown={(e) => {
+                            resizeRef.current.active = true;
+                            resizeRef.current.startY = e.clientY;
+                            resizeRef.current.startHeight = bottomHeight;
+                        }}
+                        className="h-2 bg-slate-900/80 border border-slate-800 rounded cursor-row-resize flex items-center justify-center"
+                    >
+                        <div className="w-12 h-0.5 bg-slate-600 rounded"></div>
+                    </div>
+
+                    {/* Bottom Pane */}
+                    <div style={{ height: bottomHeight }} className="min-h-[220px] flex flex-col gap-4 overflow-hidden">
+                        {/* Timeline + Replay */}
+                        <div className="grid grid-cols-2 gap-4 flex-1 min-h-0">
+                            <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col min-h-0">
+                                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Interaction Timeline</div>
+                                <div className="flex-1 overflow-y-auto scrollbar-default">
+                                    {timeline.length === 0 && <div className="text-[10px] text-slate-500">No events yet</div>}
+                                    {timeline.map((row, rowIdx) => (
+                                        <div key={row.id} className={`mb-3 p-2 rounded border-l-4 ${row.hasOverlap ? 'border-red-700 bg-red-950/30' : rowIdx % 2 === 0 ? 'border-slate-700/80 bg-slate-950/40' : 'border-slate-600/60 bg-slate-950/20'}`}>
+                                            <div className="text-[10px] font-mono text-slate-400">id={row.id}</div>
+                                            <div className="flex flex-wrap gap-1 mt-2">
+                                                {row.events.map((evt, idx) => (
+                                                    <span key={idx} className={`text-[10px] px-2 py-0.5 rounded font-mono ${getEventClass(evt)}`}>
+                                                        {(evt.event?.startsWith('UI_CMD_') || evt.stage === 'ui') && <span className="mr-1 text-[8px] uppercase">UI</span>}
+                                                        {evt.event}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col min-h-0">
+                                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Replay</div>
+                                <div className="flex-1 overflow-y-auto scrollbar-default">
+                                    {replays.length === 0 && <div className="text-[10px] text-slate-500">No saved interactions</div>}
+                                    {replays.map((r) => (
+                                        <div key={r.id} className="flex items-center justify-between bg-slate-950/40 border border-slate-800 rounded px-2 py-1 mb-2">
+                                            <div className="text-[10px] font-mono text-slate-300">{r.id}</div>
+                                            <button onClick={() => replayInteraction(r.id)} className="text-[10px] px-2 py-1 bg-blue-600/80 text-white rounded">Replay</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Logs */}
+                        <div className="flex-1 bg-black p-4 font-mono text-[10px] overflow-y-auto border border-slate-800 rounded-lg text-gray-500 shadow-inner">
+                             {logs.map((l, i) => (
+                                 <div key={i} className="hover:bg-slate-900/50 px-1">
+                                     <span className="text-slate-600">[{l.time}]</span> 
+                                     <span className={l.msg.includes('ERROR') ? 'text-red-400' : l.msg.includes('[VAD]') ? 'text-slate-600' : 'text-slate-300'}> {l.msg}</span>
+                                 </div>
+                             ))}
+                        </div>
                     </div>
                 </div>
             );

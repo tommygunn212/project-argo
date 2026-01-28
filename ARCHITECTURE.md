@@ -4,6 +4,15 @@
 
 ARGO is a 7-layer voice system designed for predictability, debuggability, and control.
 
+### 2026 Runtime Notes (VAD Control Plane)
+
+- **Always-listening VAD loop** runs in `main.py` with explicit Start/Stop controls from the UI.
+- **State machine enforcement** blocks illegal transitions and surfaces structured details in the UI.
+- **Audio ownership** is centralized in `core/audio_owner.py` and enforced across STT/TTS/music.
+- **Barge-in** force-releases audio, forces state to `LISTENING`, and safely terminates Piper.
+- **Runtime overrides** (global + next-interaction) are non-persistent and UI-controlled.
+- **Timeline events** capture STT/LLM/TTS/State/UI activity for deterministic replay.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ (Coordinator v3: Bounded Loop)                          │

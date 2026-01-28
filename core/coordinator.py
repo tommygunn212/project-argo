@@ -81,8 +81,8 @@ from core.policy import (
 from core.watchdog import Watchdog
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
-from core.audio_authority import get_audio_authority
-from core.config import get_config
+from core.audio_owner import get_audio_owner
+from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
 
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
@@ -190,6 +190,13 @@ class Coordinator:
     AUDIO_STATE_IDLE = "IDLE"
     AUDIO_STATE_LISTENING = "LISTENING"
     AUDIO_STATE_SPEAKING = "SPEAKING"
+
+    ALLOWED_TRANSITIONS = {
+        "SLEEP": {"LISTENING"},
+        "LISTENING": {"THINKING"},
+        "THINKING": {"SPEAKING"},
+        "SPEAKING": {"LISTENING"},
+    }
     
     # Audio recording parameters
     AUDIO_SAMPLE_RATE = 16000  # Hz
@@ -235,9 +242,17 @@ class Coordinator:
         self.generator = response_generator
         self.sink = output_sink
         self.logger = logger
-        
-        # HARDENING STEP 3: Audio authority for explicit resource ownership
-        self.audio_authority = get_audio_authority()
+
+        # Runtime overrides (non-persistent)
+        self.runtime_overrides = get_runtime_overrides()
+        self.next_interaction_overrides = {}
+
+        # Illegal transition callback (optional UI hook)
+        self.on_illegal_transition = None
+
+        # Audio ownership (single authority)
+        self.audio_owner = get_audio_owner()
+        self._audio_owner_lock = threading.Lock()
         
         # Load config and lock microphone device
         config = get_config()
@@ -361,6 +376,14 @@ class Coordinator:
             "interaction_id increments ONLY in wake handler (_handle_wake_event). "
             "Any other increment is fatal."
         )
+
+    def set_next_override(self, key: str, value) -> None:
+        self.next_interaction_overrides[key] = value
+        log_event(f"NEXT_OVERRIDE_SET {key}={value}")
+
+    def clear_next_overrides(self) -> None:
+        self.next_interaction_overrides.clear()
+        log_event("NEXT_OVERRIDE_CLEARED")
     
     def _assert_no_id_reuse(self, new_id: int) -> None:
         """
@@ -445,6 +468,31 @@ class Coordinator:
             except Exception as e:
                 self.logger.debug(f"[Coordinator] on_status_update error: {e}")
 
+    def _safe_transition(self, action, next_state: State, source: str, interaction_id: str = "") -> bool:
+        prev_state = self.state_machine.current_state
+        try:
+            return action()
+        except RuntimeError:
+            payload = {
+                "from": prev_state.value,
+                "to": next_state.value,
+                "allowed": list(self.ALLOWED_TRANSITIONS.get(prev_state.value, set())),
+                "source": source,
+                "interaction_id": interaction_id,
+            }
+            log_event(
+                f"ILLEGAL_TRANSITION {prev_state.value}->{next_state.value} source={source}",
+                stage="state",
+                interaction_id=interaction_id,
+            )
+            if self.on_illegal_transition:
+                try:
+                    self.on_illegal_transition(payload)
+                except Exception:
+                    pass
+            self.stop_requested = True
+            return False
+
     def _assert_trigger_state(self, state: State) -> None:
         """
         HARDENING STEP 6: Assert that InputTrigger state matches StateMachine state.
@@ -517,6 +565,28 @@ class Coordinator:
             self._audio_state = new_state
         self.logger.info(f"[AudioState] {old_state} -> {new_state}")
 
+    def acquire_audio(self, owner: str) -> None:
+        with self._audio_owner_lock:
+            current_owner = self.audio_owner.get_owner()
+            if current_owner and current_owner != owner:
+                log_event(f"AUDIO_CONTESTED owner={current_owner} requested={owner}")
+                raise RuntimeError("Audio already owned")
+            self.audio_owner.acquire(owner)
+            log_event(f"AUDIO_ACQUIRED owner={owner}")
+
+    def release_audio(self, owner: str) -> None:
+        with self._audio_owner_lock:
+            if self.audio_owner.get_owner() == owner:
+                self.audio_owner.release(owner)
+                log_event(f"AUDIO_RELEASED owner={owner}")
+
+    def force_release_audio(self, reason: str = "") -> None:
+        with self._audio_owner_lock:
+            prior = self.audio_owner.get_owner()
+            if prior:
+                self.audio_owner.force_release(reason)
+                log_event(f"AUDIO_FORCED_RELEASE prior={prior} reason={reason}")
+
     def enqueue_wake_event(self) -> None:
         """Enqueue a wake event from the Porcupine callback (thread-safe)."""
         self._wake_event_queue.put(time.time())
@@ -558,7 +628,7 @@ class Coordinator:
             log_event("BARGE_IN start")
 
             try:
-                self.audio_authority.hard_kill_output()
+                self.force_release_audio("BARGE_IN")
                 log_event("AUDIO KILLED")
                 self.logger.info("[Wake] Audio authority hard-killed output")
             except Exception as e:
@@ -573,7 +643,12 @@ class Coordinator:
             self._is_speaking.clear()
 
             try:
-                self.state_machine.listening()
+                self._safe_transition(
+                    self.state_machine.listening,
+                    State.LISTENING,
+                    source="audio",
+                    interaction_id=str(self.interaction_id),
+                )
                 log_event("STATE_CHANGE SPEAKING -> LISTENING (barge-in)")
                 self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
             except RuntimeError as e:
@@ -586,7 +661,12 @@ class Coordinator:
             # Normal wake when not speaking
             try:
                 if self.state_machine.is_asleep:
-                    self.state_machine.wake()
+                    self._safe_transition(
+                        self.state_machine.wake,
+                        State.LISTENING,
+                        source="audio",
+                        interaction_id=str(self.interaction_id),
+                    )
             except RuntimeError as e:
                 self.logger.error(f"[Wake] FATAL: Invalid state transition: {e}")
                 self.stop_requested = True
@@ -744,6 +824,11 @@ class Coordinator:
         self.logger.info(f"[Loop] Memory: {self.memory}")
         self.logger.info(f"{'='*60}")
 
+        overrides = dict(self.next_interaction_overrides)
+        if overrides:
+            log_event(f"NEXT_INTERACTION_OVERRIDES_APPLIED {overrides}")
+        self.next_interaction_overrides.clear()
+
         try:
             # Half-duplex: abort if speaking
             if self._is_speaking.is_set():
@@ -751,6 +836,11 @@ class Coordinator:
                 self.interaction_count -= 1
                 return False
             self._is_processing.set()
+            current_owner = self.audio_owner.get_owner()
+            if current_owner and not overrides.get("force_passive_listening"):
+                log_event(f"STT_BLOCKED_AUDIO_OWNER owner={current_owner}")
+                self.interaction_count -= 1
+                return False
             # TASK 15: Initialize latency probe for this interaction
             self.current_probe = LatencyProbe(self.interaction_count)
             if mark_wake:
@@ -832,6 +922,12 @@ class Coordinator:
                 f"Transcribed: '{text}'"
             )
 
+            if overrides.get("force_passive_listening"):
+                self.logger.info(
+                    f"[Iteration {self.interaction_count}] Passive listening override active; skipping intent/command"
+                )
+                return False
+
             # Self-echo filter: drop transcripts too similar to last response
             if self.last_response_text:
                 similarity = self._similarity_ratio(text, self.last_response_text)
@@ -863,7 +959,7 @@ class Coordinator:
                 self._last_response = response_text
                 self.last_response_text = response_text
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(response_text, interaction_id=self.interaction_id)
+                self._safe_speak(response_text, interaction_id=self.interaction_id)
                 self.memory.append(
                     user_utterance=text,
                     parsed_intent=analysis_intent.intent_type.value,
@@ -912,6 +1008,36 @@ class Coordinator:
                 self.interaction_count -= 1
                 return False
 
+            # Command confidence gate (STT quality)
+            stt_metrics = None
+            try:
+                stt_metrics = self.stt.get_last_metrics()
+            except Exception:
+                stt_metrics = None
+            confidence_threshold = get_config().get("speech_to_text.command_confidence_threshold", 0.35)
+            if stt_metrics and intent.intent_type in {
+                IntentType.COMMAND,
+                IntentType.MUSIC,
+                IntentType.MUSIC_NEXT,
+                IntentType.MUSIC_STOP,
+                IntentType.MUSIC_STATUS,
+            }:
+                stt_conf = float(stt_metrics.get("confidence", 0.0))
+                if stt_conf < confidence_threshold:
+                    msg = "Command suppressed — low STT confidence"
+                    self.logger.warning(
+                        f"[Iteration {self.interaction_count}] {msg} (conf={stt_conf:.2f} < {confidence_threshold:.2f})"
+                    )
+                    log_event(f"COMMAND_SUPPRESSED_LOW_STT conf={stt_conf:.2f} threshold={confidence_threshold:.2f}", stage="stt")
+                    if self.runtime_overrides.get("tts_enabled", True):
+                        self._safe_speak(msg, interaction_id=self.interaction_id)
+                    self.current_probe.mark("llm_end")
+                    self.current_probe.mark("tts_start")
+                    self.current_probe.mark("tts_end")
+                    self.current_probe.log_summary()
+                    self.latency_stats.add_probe(self.current_probe)
+                    return True
+
             # 4. Fast-path deterministic commands (before LLM generation)
             # Procedural and deterministic commands must execute immediately without LLM latency
 
@@ -933,7 +1059,7 @@ class Coordinator:
                     )
                     if WATCHDOG_FALLBACK_RESPONSE:
                         try:
-                            self.sink.speak(WATCHDOG_FALLBACK_RESPONSE)
+                            self._safe_speak(WATCHDOG_FALLBACK_RESPONSE)
                             output_produced = True
                         except Exception:
                             pass
@@ -944,11 +1070,16 @@ class Coordinator:
             if intent.intent_type == IntentType.SLEEP:
                 self.logger.info(f"[Iteration {self.interaction_count}] Sleep command detected")
                 try:
-                    self.sink.speak("Going quiet.")
+                    self._safe_speak("Going quiet.")
                     output_produced = True
                 except Exception:
                     pass
-                self.state_machine.sleep()
+                self._safe_transition(
+                    self.state_machine.sleep,
+                    State.SLEEP,
+                    source="ui",
+                    interaction_id=str(self.interaction_id),
+                )
                 self._last_utterance_time = time.time()
                 self.current_probe.mark("llm_end")
                 self.current_probe.mark("tts_start")
@@ -997,10 +1128,14 @@ class Coordinator:
                 from core.music_player import get_music_player
                 music_player = get_music_player()
                 music_player.stop()
+                try:
+                    self.release_audio("MUSIC")
+                except Exception:
+                    pass
 
                 # Optional brief response
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak("Stopped.", interaction_id=self.interaction_id)
+                self._safe_speak("Stopped.", interaction_id=self.interaction_id)
                 output_produced = True
                 response_text = ""
                 self.current_probe.mark("llm_end")
@@ -1018,7 +1153,7 @@ class Coordinator:
                 playback_started = music_player.play_next(self.sink)
                 if not playback_started:
                     # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self.sink.speak("No music playing.", interaction_id=self.interaction_id)
+                    self._safe_speak("No music playing.", interaction_id=self.interaction_id)
                     self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
                     output_produced = True
                 else:
@@ -1041,7 +1176,7 @@ class Coordinator:
 
                 status = query_music_status()
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(status, interaction_id=self.interaction_id)
+                self._safe_speak(status, interaction_id=self.interaction_id)
                 self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
                 output_produced = True
 
@@ -1054,6 +1189,13 @@ class Coordinator:
 
             # Check if this is a music command (before LLM processing)
             if intent.intent_type == IntentType.MUSIC:
+                if not self.runtime_overrides.get("music_enabled", True):
+                    msg = "Music is disabled."
+                    self.logger.info(f"[Iteration {self.interaction_count}] {msg}")
+                    if self.runtime_overrides.get("tts_enabled", True):
+                        self._safe_speak(msg, interaction_id=self.interaction_id)
+                    self.current_probe.mark("llm_end")
+                    return True
                 # Music playback with STRICT priority routing
                 # IMPORTANT: Music commands don't count as conversational turns
                 is_music_iteration = True
@@ -1061,6 +1203,15 @@ class Coordinator:
 
                 from core.music_player import get_music_player
                 music_player = get_music_player()
+
+                try:
+                    self.acquire_audio("MUSIC")
+                except Exception as e:
+                    self.logger.warning(f"[Iteration {self.interaction_count}] Music blocked: {e}")
+                    if self.runtime_overrides.get("tts_enabled", True):
+                        self._safe_speak("Audio busy. Try again.", interaction_id=self.interaction_id)
+                    self.current_probe.mark("llm_end")
+                    return True
 
                 playback_started = False
                 error_message = ""
@@ -1111,7 +1262,7 @@ class Coordinator:
                 # Speak error message only once (if no playback started)
                 if error_message and not playback_started:
                     # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self.sink.speak(error_message, interaction_id=self.interaction_id)
+                    self._safe_speak(error_message, interaction_id=self.interaction_id)
                     output_produced = True
 
                 # Monitor for interrupt during music playback
@@ -1119,6 +1270,8 @@ class Coordinator:
                     self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
                     self._monitor_music_interrupt(music_player)
                     output_produced = True
+                else:
+                    self.release_audio("MUSIC")
 
                 self.current_probe.mark("llm_end")
             else:
@@ -1158,7 +1311,11 @@ class Coordinator:
             self.current_probe.mark("tts_start")
 
             # Only speak if response is not empty (music playback has empty response)
-            if response_text and response_text.strip():
+            if not self.runtime_overrides.get("tts_enabled", True):
+                self.logger.info("[TTS] Disabled by runtime override")
+            elif overrides.get("suppress_tts"):
+                self.logger.info("[TTS] Suppressed for next interaction override")
+            elif response_text and response_text.strip():
                 streamed_output = bool(getattr(self.generator, "_streamed_output", False))
                 if streamed_output:
                     self.logger.debug("[TTS] Streaming enabled; skipping duplicate speak")
@@ -1236,9 +1393,9 @@ class Coordinator:
         finally:
             # HARDENING STEP 3: Reset audio authority after each interaction
             try:
-                self.audio_authority.reset()
+                self.force_release_audio("ITERATION_END")
             except Exception as e:
-                self.logger.warning(f"[Iteration] Error resetting audio authority: {e}")
+                self.logger.warning(f"[Iteration] Error resetting audio owner: {e}")
             self._is_processing.clear()
     
     def run(self) -> None:
@@ -1313,7 +1470,12 @@ class Coordinator:
                         self.logger.info(
                             f"[Idle] No activity for {idle_elapsed:.1f}s; entering sleep"
                         )
-                        self.state_machine.sleep()
+                        self._safe_transition(
+                            self.state_machine.sleep,
+                            State.SLEEP,
+                            source="ui",
+                            interaction_id=str(self.interaction_id),
+                        )
                         continue
 
                 # Don't listen while speaking
@@ -1640,6 +1802,11 @@ class Coordinator:
         
         except Exception as e:
             self.logger.error(f"[Music] Monitor error: {e}")
+        finally:
+            try:
+                self.release_audio("MUSIC")
+            except Exception:
+                pass
 
     def _extract_code_block(self, text: str) -> Optional[str]:
         """Extract the first fenced code block from text."""
@@ -1740,7 +1907,15 @@ class Coordinator:
                 # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
                 # This prevents Argo from interrupting itself with its own audio
                 # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self.sink.speak(response_text, interaction_id=self.interaction_id)
+                try:
+                    self.acquire_audio("TTS")
+                except Exception as e:
+                    self.logger.warning(f"[TTS] Audio ownership denied: {e}")
+                    return
+                try:
+                    self.sink.speak(response_text, interaction_id=self.interaction_id)
+                finally:
+                    self.release_audio("TTS")
                 
                 self.logger.info("[TTS] Response finished")
             except Exception as e:
@@ -1763,3 +1938,18 @@ class Coordinator:
                 self._is_speaking.clear()
             except Exception:
                 pass
+
+    def _safe_speak(self, text: str, interaction_id: Optional[str] = None) -> None:
+        if not text or not text.strip():
+            return
+        if not self.runtime_overrides.get("tts_enabled", True):
+            return
+        try:
+            self.acquire_audio("TTS")
+        except Exception as e:
+            self.logger.warning(f"[TTS] Audio ownership denied: {e}")
+            return
+        try:
+            self.sink.speak(text, interaction_id=interaction_id or self.interaction_id)
+        finally:
+            self.release_audio("TTS")

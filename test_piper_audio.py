@@ -13,7 +13,7 @@ piper_voice_dir = os.path.expanduser("~/.local/share/piper/en_US-lessac-medium")
 piper_model_path = os.path.join(piper_voice_dir, "en_US-lessac-medium.onnx")
 
 # Test text to synthesize
-test_text = "Hello! This is Piper text to speech. It is working!"
+test_text = "Hello! This is Argo text to speech. It is working!"
 
 print(f"[TEST] Synthesizing: '{test_text}'")
 print(f"[TEST] Model: {piper_model_path}")

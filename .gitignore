@@ -30,6 +30,8 @@ temp/
 audio/debug/
 *.mp4
 *.jpg
+temp_piper/
+piper-master.zip
 
 # IDE / OS
 .vscode/

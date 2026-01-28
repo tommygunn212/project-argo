@@ -28,6 +28,7 @@ v5 Update:
 
 from abc import ABC, abstractmethod
 import logging
+import time
 import os
 import re
 import json
@@ -150,6 +151,9 @@ class LLMResponseGenerator(ResponseGenerator):
         self._personality_examples_applied = False
         # System profile (host machine context)
         self._system_profile = self._load_system_profile()
+        # LLM timing markers
+        self._llm_request_start = None
+        self._llm_first_token_logged = False
 
     def generate(self, intent, memory: Optional['SessionMemory'] = None) -> str:
         """
@@ -949,6 +953,9 @@ class LLMResponseGenerator(ResponseGenerator):
         try:
             # Reset streaming tracker per call
             self._streamed_output = False
+            self._llm_request_start = time.monotonic()
+            self._llm_first_token_logged = False
+            log_event("LLM_REQUEST_START", stage="llm")
             # Make request to Ollama
             url = f"{self.ollama_url}/api/generate"
             
@@ -977,10 +984,15 @@ class LLMResponseGenerator(ResponseGenerator):
 
                 if wd.triggered:
                     self.logger.warning("[WATCHDOG] LLM response exceeded watchdog; returning fallback response")
+                    log_event("LLM_WATCHDOG", stage="llm")
                     return WATCHDOG_FALLBACK_RESPONSE
 
                 if not response_text:
                     raise RuntimeError("LLM returned empty response")
+
+                if self._llm_request_start:
+                    total_ms = (time.monotonic() - self._llm_request_start) * 1000
+                    log_event(f"LLM_DONE {total_ms:.0f}ms", stage="llm")
 
                 return response_text
 
@@ -999,6 +1011,7 @@ class LLMResponseGenerator(ResponseGenerator):
 
             if wd.triggered:
                 self.logger.warning("[WATCHDOG] LLM response exceeded watchdog; returning fallback response")
+                log_event("LLM_WATCHDOG", stage="llm")
                 return WATCHDOG_FALLBACK_RESPONSE
 
             if not response_text:
@@ -1006,6 +1019,10 @@ class LLMResponseGenerator(ResponseGenerator):
 
             # Enhance response quality
             response_text = self._enhance_response(response_text)
+
+            if self._llm_request_start:
+                total_ms = (time.monotonic() - self._llm_request_start) * 1000
+                log_event(f"LLM_DONE {total_ms:.0f}ms", stage="llm")
 
             return response_text
 
@@ -1022,6 +1039,7 @@ class LLMResponseGenerator(ResponseGenerator):
         Stream LLM output, enqueue complete sentences to TTS, and return full text.
         """
         self.logger.debug("[_stream_llm_and_enqueue] Streaming started")
+        log_event("LLM_STREAM_START", stage="llm")
 
         sink = None
         try:
@@ -1045,6 +1063,10 @@ class LLMResponseGenerator(ResponseGenerator):
 
             chunk = data.get("response", "")
             if chunk:
+                if not self._llm_first_token_logged and self._llm_request_start:
+                    first_token_ms = (time.monotonic() - self._llm_request_start) * 1000
+                    log_event(f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms", stage="llm")
+                    self._llm_first_token_logged = True
                 buffer += chunk
                 full_response_parts.append(chunk)
 
@@ -1092,6 +1114,7 @@ class LLMResponseGenerator(ResponseGenerator):
                 sentence_counter += 1
 
         self.logger.debug("[_stream_llm_and_enqueue] Streaming complete")
+        log_event("LLM_STREAM_END", stage="llm")
 
         return "".join(full_response_parts).strip()
 

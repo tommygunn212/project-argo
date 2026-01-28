@@ -17,6 +17,14 @@ import queue
 import logging
 import collections
 
+from core.audio_owner import get_audio_owner
+
+try:
+    from core.instrumentation import log_event
+except Exception:
+    def log_event(event: str, stage: str = "", interaction_id: str = ""):
+        pass
+
 # Input Constants
 INPUT_SAMPLE_RATE = 16000
 BLOCK_SIZE = 512
@@ -29,9 +37,14 @@ OUTPUT_SAMPLE_RATE = 22050
 OUTPUT_DTYPE = 'int16'
 
 class AudioManager:
-    def __init__(self, input_device_index=None, output_device_index=None):
+    def __init__(self, input_device_index=None, output_device_index=None, on_owner_change=None):
         self.logger = logging.getLogger("ARGO.Audio")
         self.running = False
+
+        # Audio ownership
+        self._audio_owner = get_audio_owner()
+        self._owner_lock = threading.Lock()
+        self._on_owner_change = on_owner_change
         
         # Log available audio devices
         self.logger.info("[AUDIO] === Available Audio Devices ===")
@@ -61,6 +74,99 @@ class AudioManager:
         self._output_device_index = output_device_index
 
 
+    def _select_input_device(self, preferred_index):
+        try:
+            devices = sd.query_devices()
+        except Exception:
+            devices = []
+
+        if preferred_index is not None:
+            try:
+                dev = sd.query_devices(preferred_index)
+                if dev.get('max_input_channels', 0) > 0:
+                    sd.check_input_settings(
+                        device=preferred_index,
+                        channels=CHANNELS,
+                        samplerate=INPUT_SAMPLE_RATE,
+                    )
+                    return preferred_index
+            except Exception:
+                pass
+
+        try:
+            default_in = sd.default.device[0]
+            if default_in is not None:
+                dev = sd.query_devices(default_in)
+                if dev.get('max_input_channels', 0) > 0:
+                    sd.check_input_settings(
+                        device=default_in,
+                        channels=CHANNELS,
+                        samplerate=INPUT_SAMPLE_RATE,
+                    )
+                    return default_in
+        except Exception:
+            pass
+
+        for i, dev in enumerate(devices):
+            if dev.get('max_input_channels', 0) > 0:
+                try:
+                    sd.check_input_settings(
+                        device=i,
+                        channels=CHANNELS,
+                        samplerate=INPUT_SAMPLE_RATE,
+                    )
+                    return i
+                except Exception:
+                    continue
+        return None
+
+    def _select_output_device(self, preferred_index):
+        try:
+            devices = sd.query_devices()
+        except Exception:
+            devices = []
+
+        if preferred_index is not None:
+            try:
+                dev = sd.query_devices(preferred_index)
+                if dev.get('max_output_channels', 0) > 0:
+                    sd.check_output_settings(
+                        device=preferred_index,
+                        channels=CHANNELS,
+                        samplerate=OUTPUT_SAMPLE_RATE,
+                    )
+                    return preferred_index
+            except Exception:
+                pass
+
+        try:
+            default_out = sd.default.device[1]
+            if default_out is not None:
+                dev = sd.query_devices(default_out)
+                if dev.get('max_output_channels', 0) > 0:
+                    sd.check_output_settings(
+                        device=default_out,
+                        channels=CHANNELS,
+                        samplerate=OUTPUT_SAMPLE_RATE,
+                    )
+                    return default_out
+        except Exception:
+            pass
+
+        for i, dev in enumerate(devices):
+            if dev.get('max_output_channels', 0) > 0:
+                try:
+                    sd.check_output_settings(
+                        device=i,
+                        channels=CHANNELS,
+                        samplerate=OUTPUT_SAMPLE_RATE,
+                    )
+                    return i
+                except Exception:
+                    continue
+        return None
+
+
     def start(self):
         """Starts audio streams."""
         if self.running:
@@ -68,6 +174,13 @@ class AudioManager:
 
         self.logger.info(f"Audio Manager Starting...")
         try:
+            resolved_input = self._select_input_device(self._input_device_index)
+            if resolved_input != self._input_device_index:
+                self.logger.warning(
+                    f"[AUDIO] Input device fallback: {self._input_device_index} -> {resolved_input}"
+                )
+                self._input_device_index = resolved_input
+
             # 1. Input Stream
             self.input_stream = sd.InputStream(
                 device=self._input_device_index,
@@ -87,6 +200,12 @@ class AudioManager:
         """Lazy initializer for output stream to handle stops/restarts."""
         if self.output_stream is None or not self.output_stream.active:
             try:
+                resolved_output = self._select_output_device(self._output_device_index)
+                if resolved_output != self._output_device_index:
+                    self.logger.warning(
+                        f"[AUDIO] Output device fallback: {self._output_device_index} -> {resolved_output}"
+                    )
+                    self._output_device_index = resolved_output
                 self.output_stream = sd.OutputStream(
                     device=self._output_device_index,
                     channels=CHANNELS,
@@ -142,6 +261,55 @@ class AudioManager:
             finally:
                 self.output_stream = None
         self.logger.info("Audio playback flushed/stopped.")
+
+    def acquire_audio(self, owner: str, interaction_id: str = ""):
+        with self._owner_lock:
+            current_owner = self._audio_owner.get_owner()
+            if current_owner and current_owner != owner:
+                log_event(
+                    f"AUDIO_CONTESTED owner={current_owner} requested={owner}",
+                    stage="audio",
+                    interaction_id=interaction_id,
+                )
+                if self._on_owner_change:
+                    self._on_owner_change(current_owner, True)
+                raise RuntimeError("Audio already owned")
+            self._audio_owner.acquire(owner)
+            log_event(
+                f"AUDIO_ACQUIRED owner={owner}",
+                stage="audio",
+                interaction_id=interaction_id,
+            )
+            if self._on_owner_change:
+                self._on_owner_change(owner, False)
+
+    def release_audio(self, owner: str, interaction_id: str = ""):
+        with self._owner_lock:
+            if self._audio_owner.get_owner() == owner:
+                self._audio_owner.release(owner)
+                log_event(
+                    f"AUDIO_RELEASED owner={owner}",
+                    stage="audio",
+                    interaction_id=interaction_id,
+                )
+                if self._on_owner_change:
+                    self._on_owner_change("NONE", False)
+
+    def force_release_audio(self, reason: str = "", interaction_id: str = ""):
+        with self._owner_lock:
+            prior = self._audio_owner.get_owner()
+            if prior:
+                self._audio_owner.force_release(reason)
+                log_event(
+                    f"AUDIO_FORCED_RELEASE prior={prior} reason={reason}",
+                    stage="audio",
+                    interaction_id=interaction_id,
+                )
+                if self._on_owner_change:
+                    self._on_owner_change("NONE", True)
+
+    def get_audio_owner(self) -> str:
+        return self._audio_owner.get_owner() or "NONE"
 
     def get_preroll(self):
         if not self.ring_buffer:

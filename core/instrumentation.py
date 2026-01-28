@@ -8,22 +8,29 @@ Provides millisecond-precision event logging for atomicity verification:
 """
 
 import logging
+import time
+import threading
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 
-def log_event(message: str):
+def log_event(event: str, stage: str = "", interaction_id: str = ""):
     """
-    Log event with millisecond-precision timestamp.
-    
-    Format: [HH:MM:SS.mmm] MESSAGE
-    
+    Log event with monotonic timeline metadata.
+
+    Format: [EVT] t=<ms> id=<interaction_id> stage=<stage> event=<event> thread=<thread>
+
     Args:
-        message: Event message to log
+        event: Event label/message
+        stage: Optional stage name (e.g., "stt", "llm", "tts")
+        interaction_id: Optional interaction id for correlation
     """
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    logger.info(f"[{timestamp}] {message}")
+    ts = int(time.monotonic() * 1000)
+    thread = threading.current_thread().name
+    logger.info(
+        f"[EVT] t={ts} id={interaction_id} stage={stage} event={event} thread={thread}"
+    )
 
 
 def log_latency(stage: str, duration_ms=None):
