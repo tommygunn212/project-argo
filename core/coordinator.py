@@ -990,11 +990,16 @@ class Coordinator:
                 except Exception:
                     stt_conf = 0.0
             if stt_conf < 0.15 or not text.strip():
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
-                )
-                self.interaction_count -= 1
-                return False
+                if re.search(r"\bcount\b", text, flags=re.IGNORECASE):
+                    self.logger.info(
+                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but count detected; continuing"
+                    )
+                else:
+                    self.logger.info(
+                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
+                    )
+                    self.interaction_count -= 1
+                    return False
 
             # 3. Parse intent
             self.logger.info(

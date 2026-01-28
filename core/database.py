@@ -538,9 +538,6 @@ class MusicDatabase:
 
         exact_title_param = title or ""
         year_match_clause = "0"
-        if year_start is not None and year_end is not None:
-            year_match_clause = "CASE WHEN t.year BETWEEN ? AND ? THEN 1 ELSE 0 END"
-            params.extend([year_start, year_end])
 
         sql = f"""
             SELECT
@@ -570,7 +567,7 @@ class MusicDatabase:
             LIMIT ?
         """
 
-        params = [exact_title_param] + params + [limit]
+        params = params + [exact_title_param, limit]
         normalized_intent = (intent or "").strip().lower()
         start = time.perf_counter()
         results = self._cached_query(title, artist, genre, year_start, year_end, limit, normalized_intent)

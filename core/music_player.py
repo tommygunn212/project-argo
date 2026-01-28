@@ -1128,6 +1128,8 @@ Response (JSON ONLY):"""
             return False
 
         try:
+            if self.is_playing():
+                self.stop()
             if not self._acquire_music_audio():
                 return False
             # Announce what's playing
@@ -1216,6 +1218,8 @@ Response (JSON ONLY):"""
             if not jellyfin_id:
                 return False
 
+            if self.is_playing():
+                self.stop()
             if not self._acquire_music_audio():
                 return False
             

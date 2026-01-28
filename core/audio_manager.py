@@ -266,14 +266,23 @@ class AudioManager:
         with self._owner_lock:
             current_owner = self._audio_owner.get_owner()
             if current_owner and current_owner != owner:
-                log_event(
-                    f"AUDIO_CONTESTED owner={current_owner} requested={owner}",
-                    stage="audio",
-                    interaction_id=interaction_id,
-                )
-                if self._on_owner_change:
-                    self._on_owner_change(current_owner, True)
-                raise RuntimeError("Audio already owned")
+                if current_owner == "MUSIC" and owner == "STT":
+                    self._audio_owner.force_release("STT_PREEMPT")
+                    log_event(
+                        f"AUDIO_PREEMPT prior={current_owner} requested={owner}",
+                        stage="audio",
+                        interaction_id=interaction_id,
+                    )
+                    current_owner = None
+                if current_owner:
+                    log_event(
+                        f"AUDIO_CONTESTED owner={current_owner} requested={owner}",
+                        stage="audio",
+                        interaction_id=interaction_id,
+                    )
+                    if self._on_owner_change:
+                        self._on_owner_change(current_owner, True)
+                    raise RuntimeError("Audio already owned")
             self._audio_owner.acquire(owner)
             log_event(
                 f"AUDIO_ACQUIRED owner={owner}",

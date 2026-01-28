@@ -565,9 +565,12 @@ class ArgoPipeline:
             except Exception:
                 stt_conf = 0.0
             if stt_conf < 0.15 or not user_text.strip():
-                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
+                if re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
+                else:
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
 
             self.broadcast("log", f"User: {user_text}")
 

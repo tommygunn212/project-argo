@@ -410,7 +410,14 @@ def main_loop():
         volume = np.linalg.norm(frame) * 10
         
         owner = audio.get_audio_owner() if audio else "NONE"
-        passive_listen = owner not in ("NONE", "STT")
+        try:
+            from core.music_player import get_music_player
+            music_playing = get_music_player().is_playing()
+        except Exception:
+            music_playing = False
+        passive_listen = owner not in ("NONE", "STT", "MUSIC")
+        if owner == "MUSIC" and music_playing:
+            passive_listen = False
 
         # Trigger Recording (only when LISTENING to avoid illegal transitions)
         if (
