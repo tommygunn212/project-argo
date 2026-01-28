@@ -104,6 +104,8 @@ class AudioAuthority:
                 if self._owner_speaker == owner:
                     self._owner_speaker = None
                     return True
+                if self._speaker_killed and self._owner_speaker is None:
+                    return True
                 return False
     
     def hard_kill_output(self) -> None:

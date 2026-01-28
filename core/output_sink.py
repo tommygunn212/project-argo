@@ -257,7 +257,7 @@ class PiperOutputSink(OutputSink):
     - PIPER_VOICE: path to voice model (from .env)
     """
     
-    def __init__(self):
+    def __init__(self, piper_path: str | None = None, voice_path: str | None = None):
         """
         Initialize Piper output sink with queue and worker thread.
         
@@ -270,13 +270,15 @@ class PiperOutputSink(OutputSink):
         
         Raises ValueError if Piper or voice model not found.
         """
-        if not VOICE_ENABLED or not PIPER_ENABLED:
+        if (not VOICE_ENABLED or not PIPER_ENABLED) and piper_path != "echo":
             raise RuntimeError("PiperOutputSink cannot be initialized: VOICE_ENABLED and PIPER_ENABLED must both be true.")
-        self.piper_path = os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
+        self.piper_path = piper_path or os.getenv("PIPER_PATH", "audio/piper/piper/piper.exe")
         
         # Get voice model path based on VOICE_PROFILE
         # Priority: PIPER_VOICE env var > VOICE_PROFILE setting > default (lessac)
-        if os.getenv("PIPER_VOICE"):
+        if voice_path:
+            self.voice_path = voice_path
+        elif os.getenv("PIPER_VOICE"):
             self.voice_path = os.getenv("PIPER_VOICE")
         else:
             self.voice_path = _get_voice_model_path(VOICE_PROFILE)
@@ -288,11 +290,11 @@ class PiperOutputSink(OutputSink):
             print(f"[DEBUG] PiperOutputSink: voice_path={self.voice_path}", file=sys.stderr)
         
         # Validate Piper binary exists
-        if not os.path.exists(self.piper_path):
+        if self.piper_path != "echo" and not os.path.exists(self.piper_path) and not shutil.which(self.piper_path):
             raise ValueError(f"Piper binary not found: {self.piper_path}")
         
         # Validate voice model exists (warning only if missing, for testing flexibility)
-        if not os.path.exists(self.voice_path):
+        if self.piper_path != "echo" and not os.path.exists(self.voice_path):
             if os.getenv("SKIP_VOICE_VALIDATION") != "true":
                 raise ValueError(f"Voice model not found: {self.voice_path}")
         
