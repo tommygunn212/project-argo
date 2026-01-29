@@ -4,6 +4,9 @@ SQLite Music Database (Read-Optimized)
 Atomic initialization and lightweight ingest for music lookups.
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import os
 import sqlite3
 import threading
@@ -17,11 +20,20 @@ from typing import Iterable, Optional, Dict, List, Tuple
 
 from core.config import MUSIC_DB_PATH, AUTO_INIT_DB
 
+# ============================================================================
+# 2) LOGGER
+# ============================================================================
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# 3) PATHS / VERSIONING
+# ============================================================================
 _DEFAULT_DB_PATH = Path(MUSIC_DB_PATH)
 EXPECTED_SCHEMA_VERSION = "1.0"
 
+# ============================================================================
+# 4) SCHEMA DEFINITION
+# ============================================================================
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS artists (
     id INTEGER PRIMARY KEY,
@@ -75,6 +87,9 @@ CREATE INDEX IF NOT EXISTS idx_genres_name ON genres(name);
 CREATE INDEX IF NOT EXISTS idx_tracks_year ON tracks(year);
 """
 
+# ============================================================================
+# 5) DEFAULT GENRE GRAPH
+# ============================================================================
 _DEFAULT_GENRE_ADJACENCY = {
     "punk": ["rock", "new wave", "alternative"],
     "rock": ["punk", "metal", "classic rock"],
@@ -93,6 +108,9 @@ _DEFAULT_GENRE_ADJACENCY = {
 }
 
 
+# ============================================================================
+# 6) DB BOOTSTRAP
+# ============================================================================
 def music_db_exists(path: str) -> bool:
     db_path = Path(path)
     if not db_path.parent.exists():

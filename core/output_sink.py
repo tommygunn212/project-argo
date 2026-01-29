@@ -32,6 +32,9 @@ Hard stops:
 # AUDIO PATH STABLE
 # Verified working. Do not modify without reproduced issue + logs.
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import os
 import asyncio
 import subprocess
@@ -49,7 +52,7 @@ from core.watchdog import Watchdog
 
 
 # ============================================================================
-# INSTRUMENTATION: Millisecond-precision event logging
+# 2) INSTRUMENTATION: MILLISECOND-PRECISION EVENT LOGGING
 # ============================================================================
 
 def log_event(message: str) -> None:
@@ -59,7 +62,7 @@ def log_event(message: str) -> None:
 
 
 # ============================================================================
-# CONFIGURATION FLAGS
+# 3) CONFIGURATION FLAGS
 # ============================================================================
 
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() == "true"
@@ -79,7 +82,7 @@ FORCE_BLOCKING_TTS = os.getenv("FORCE_BLOCKING_TTS", "false").lower() == "true"
 
 
 # ============================================================================
-# OUTPUT SINK INTERFACE (PART 1)
+# 4) OUTPUT SINK INTERFACE (PART 1)
 # ============================================================================
 
 class OutputSink(ABC):

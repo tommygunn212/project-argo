@@ -1,5 +1,9 @@
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import asyncio
+import faulthandler
 import websockets
 import json
 import threading
@@ -12,9 +16,25 @@ import uuid
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 
+# ============================================================================
+# 2) PATH SETUP / ENV
+# ============================================================================
 # Add core to path just in case
 repo_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(repo_root)
+
+# Enable native crash logging (access violations, etc.)
+try:
+    logs_dir = os.path.join(repo_root, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    crash_log_path = os.path.join(logs_dir, "native_crash.log")
+    _faulthandler_file = open(crash_log_path, "a", buffering=1)
+    _faulthandler_file.write("\n" + "=" * 80 + "\n")
+    _faulthandler_file.write(f"NATIVE CRASH LOG START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    _faulthandler_file.write("=" * 80 + "\n")
+    faulthandler.enable(file=_faulthandler_file, all_threads=True)
+except Exception:
+    pass
 
 # Ensure Piper binary is on PATH (clean startup)
 local_piper_dir = os.path.join(repo_root, "audio", "piper")
@@ -27,6 +47,9 @@ if os.path.isdir(system_piper_dir):
 if path_prefixes:
     os.environ["PATH"] = os.pathsep.join(path_prefixes) + os.pathsep + os.environ.get("PATH", "")
 
+# ============================================================================
+# 3) CORE IMPORTS
+# ============================================================================
 from core.audio_manager import AudioManager, INPUT_SAMPLE_RATE, BLOCK_SIZE
 from core.pipeline import ArgoPipeline
 from core.startup_checks import check_ollama
@@ -44,6 +67,9 @@ from core.config import (
     clear_runtime_overrides,
 )
 
+# ============================================================================
+# 4) GLOBALS / RUNTIME STATE
+# ============================================================================
 # Thread-safe event loop reference BEFORE logging setup
 ui_loop = None
 connected_clients = set()
@@ -54,6 +80,9 @@ LISTENING_ENABLED = False
 SERVER_ENABLED = True
 main_loop_thread = None
 
+# ============================================================================
+# 5) LOGGING
+# ============================================================================
 # Custom logging handler to broadcast logs via WebSocket
 class WebSocketLogHandler(logging.Handler):
     def emit(self, record):
@@ -75,6 +104,9 @@ root_logger.addHandler(ws_handler)
 
 logger = logging.getLogger("ARGO.Main")
 
+# ============================================================================
+# 6) VERSION / PROFILE INIT
+# ============================================================================
 logger.info("[SYSTEM] ARGO version %s (%s)", CURRENT_VERSION, CURRENT_MILESTONE)
 
 # Load static system profile once
@@ -82,6 +114,9 @@ SYSTEM_PROFILE = get_system_profile()
 GPU_PROFILE = get_gpu_profile()
 logger.info("[SYSTEM] Hardware profile loaded")
 
+# ============================================================================
+# 7) CONFIG LOAD
+# ============================================================================
 # Hardware Config
 config = get_config()
 AUDIO_INPUT_INDEX = config.get("audio.input_device_index")
@@ -90,6 +125,11 @@ AUDIO_OUTPUT_INDEX = config.get("audio.output_device_index")
 # Runtime control
 RUNTIME_OVERRIDES = get_runtime_overrides()
 NEXT_INTERACTION_OVERRIDES = {}
+
+# Optional env overrides (non-persistent)
+barge_env = os.getenv("ARGO_BARGE_IN_ENABLED")
+if barge_env is not None:
+    RUNTIME_OVERRIDES["barge_in_enabled"] = barge_env.strip().lower() in ("1", "true", "yes", "on")
 
 # Start in always-listening mode unless explicitly disabled
 LISTENING_ENABLED = bool(config.get("audio.always_listen", True))
@@ -384,7 +424,7 @@ def main_loop():
     # --- VAD SETTINGS ---
     # Lower threshold = Easier to interrupt / easier to trigger
     vad_threshold = 3.0
-    barge_in_threshold = 4.0
+    barge_in_threshold = float(os.getenv("ARGO_BARGE_IN_THRESHOLD", "4.0"))
     
     if LISTENING_ENABLED:
         logger.info("Starting in always-listening mode (VAD-based)")

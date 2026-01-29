@@ -10,14 +10,23 @@ Usage:
     music_path = config.get("music.library_path")
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import json
 import os
 import logging
 import hashlib
 from typing import Any, Optional
 
+# ============================================================================
+# 2) MODULE LOGGER
+# ============================================================================
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# 3) FEATURE FLAGS / CONSTANTS
+# ============================================================================
 # Feature flags
 ENABLE_LLM_TTS_STREAMING = True
 REQUIRE_LLM = False
@@ -25,6 +34,9 @@ MUSIC_DB_PATH = "data/music.db"
 AUTO_INIT_DB = False
 
 
+# ============================================================================
+# 4) CONFIG WRAPPER (DOT-NOTATION ACCESS)
+# ============================================================================
 class Config:
     """Simple config wrapper with dot-notation access."""
     
@@ -33,6 +45,7 @@ class Config:
         self._data = data
         self._hash = config_hash(self._data)
     
+    # 4.1) Dot-notation getter
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get config value using dot notation.
@@ -60,15 +73,20 @@ class Config:
         
         return value
     
+    # 4.2) Dict-style getter
     def __getitem__(self, key: str) -> Any:
         """Allow dict-style access."""
         return self.get(key)
 
+    # 4.3) Config hash
     @property
     def hash(self) -> str:
         return self._hash
 
 
+# ============================================================================
+# 5) DEFAULT CONFIGURATION (FALLBACK)
+# ============================================================================
 # Default configuration (fallback if config.json missing)
 _DEFAULT_CONFIG = {
     "system": {
@@ -131,8 +149,14 @@ _DEFAULT_CONFIG = {
     }
 }
 
+# ============================================================================
+# 6) CONFIG SINGLETON
+# ============================================================================
 _config_instance: Optional[Config] = None
 
+# ============================================================================
+# 7) RUNTIME OVERRIDES (NON-PERSISTENT)
+# ============================================================================
 # Runtime overrides (non-persistent)
 _RUNTIME_OVERRIDES_DEFAULT = {
     "barge_in_enabled": True,
@@ -144,6 +168,9 @@ _RUNTIME_OVERRIDES_DEFAULT = {
 _runtime_overrides = dict(_RUNTIME_OVERRIDES_DEFAULT)
 
 
+# ============================================================================
+# 8) LOAD / GET CONFIG
+# ============================================================================
 def load_config(config_path: str = "config.json") -> Config:
     """
     Load configuration from JSON file.
@@ -189,6 +216,9 @@ def get_config() -> Config:
     return _config_instance
 
 
+# ============================================================================
+# 9) OVERRIDE ACCESSORS
+# ============================================================================
 def get_runtime_overrides() -> dict:
     return _runtime_overrides
 
@@ -207,6 +237,9 @@ def clear_runtime_overrides() -> None:
     _runtime_overrides.update(_RUNTIME_OVERRIDES_DEFAULT)
 
 
+# ============================================================================
+# 10) HELPERS
+# ============================================================================
 def config_hash(cfg: dict) -> str:
     return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
 

@@ -19,14 +19,24 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# 1) PERSONALITY LOADER (PUBLIC API)
+# ============================================================================
 class PersonalityLoader:
-    """Load personality examples from disk."""
+    """Load personality examples from disk.
+
+    Design:
+    - Example-driven only (no heuristics, no sliders)
+    - Explicit mode selection (mild/claptrap/tommy_gunn)
+    - Cached to avoid repeated disk reads
+    """
     
     SUPPORTED_MODES = ["mild", "claptrap", "tommy_gunn"]
     DEFAULT_MODE = "mild"
     
     def __init__(self, examples_dir: str = "examples"):
         """Initialize with examples directory."""
+        # 1.1) Resolve examples directory
         # Convert relative path to absolute if needed
         if not os.path.isabs(examples_dir):
             # Get the directory of this file (core/)
@@ -34,6 +44,7 @@ class PersonalityLoader:
             parent_dir = os.path.dirname(core_dir)
             examples_dir = os.path.join(parent_dir, examples_dir)
         
+        # 1.2) Internal state
         self.examples_dir = examples_dir
         self.cache: Dict[str, List[Dict[str, str]]] = {}
         
@@ -47,16 +58,16 @@ class PersonalityLoader:
         Returns:
             List of {"question": str, "answer": str} dicts
         """
-        # Validate mode
+        # 2.1) Validate mode
         if mode not in self.SUPPORTED_MODES:
             logger.warning(f"[Personality] Unknown mode '{mode}', defaulting to {self.DEFAULT_MODE}")
             mode = self.DEFAULT_MODE
         
-        # Return cached if available
+        # 2.2) Return cached if available
         if mode in self.cache:
             return self.cache[mode]
         
-        # Load from disk
+        # 2.3) Load from disk
         examples = []
         mode_dir = os.path.join(self.examples_dir, mode)
         
@@ -64,6 +75,7 @@ class PersonalityLoader:
             logger.warning(f"[Personality] Mode directory not found: {mode_dir}")
             return []
         
+        # 2.4) Parse files (Q/A pairs)
         try:
             for filename in sorted(os.listdir(mode_dir)):
                 if not filename.endswith(".txt"):
@@ -99,6 +111,7 @@ class PersonalityLoader:
         Returns:
             List of {"question": str, "answer": str} dicts
         """
+        # 3.1) Parse loop state
         pairs = []
         current_q = None
         current_a = None
@@ -108,6 +121,7 @@ class PersonalityLoader:
                 lines = f.readlines()
             
             i = 0
+            # 3.2) Single-pass parse (preserves order)
             while i < len(lines):
                 line = lines[i].strip()
                 i += 1
@@ -140,7 +154,7 @@ class PersonalityLoader:
                         current_a += "\n" + next_line.strip()
                         i += 1
             
-            # Save last pair
+            # 3.3) Save last pair
             if current_q is not None and current_a is not None:
                 pairs.append({"question": current_q, "answer": current_a})
         
@@ -164,23 +178,24 @@ class PersonalityLoader:
         Returns:
             Example answer if found, None otherwise
         """
+        # 4.1) Load examples for mode
         examples = self.load_examples(mode)
         
         question_lower = question.lower()
         
-        # Extract keywords (filter out common stop words)
+        # 4.2) Extract keywords (filter out common stop words)
         stop_words = {"do", "why", "what", "how", "is", "the", "a", "an", "that", "this", "i", "my", "you", "your"}
         user_keywords = [w for w in question_lower.split() if w and w not in stop_words and len(w) > 2]
         
         for ex in examples:
             ex_q = ex["question"].lower()
             
-            # Try exact substring match first
+            # 4.3) Exact substring match first
             if question_lower in ex_q or ex_q in question_lower:
                 logger.debug(f"[Personality] Exact match found for '{question}'")
                 return ex["answer"]
             
-            # Try keyword match (all user keywords appear in example question)
+            # 4.4) Keyword match (all user keywords appear in example question)
             if user_keywords and all(kw in ex_q for kw in user_keywords):
                 logger.debug(f"[Personality] Keyword match found for '{question}'")
                 return ex["answer"]
@@ -188,12 +203,16 @@ class PersonalityLoader:
         return None
 
 
+# ============================================================================
+# 5) GLOBAL LOADER SINGLETON
+# ============================================================================
 # Global instance
 _personality_loader: Optional[PersonalityLoader] = None
 
 
 def get_personality_loader(examples_dir: str = "examples") -> PersonalityLoader:
     """Get or create global personality loader."""
+    # 5.1) Initialize on first access
     global _personality_loader
     if _personality_loader is None:
         _personality_loader = PersonalityLoader(examples_dir)

@@ -12,10 +12,16 @@ Returns what's currently playing without:
 Uses existing PlaybackState singleton as source of truth.
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 from typing import Optional
 from core.playback_state import get_playback_state
 
 
+# ============================================================================
+# 2) PUBLIC API
+# ============================================================================
 def query_music_status() -> str:
     """
     Get human-readable status of current playback.

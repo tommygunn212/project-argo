@@ -26,6 +26,8 @@ import logging
 import re
 import asyncio
 import time
+import os
+import subprocess
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,21 @@ class CommandExecutor:
     # Pattern: "count to N" - supports digits OR spelled-out numbers
     # Matches: "count to 5", "count to five", "count to ten", "can you count to five?"
     COUNT_PATTERN = re.compile(r'count\s+to\s+(\d+|\w+)', re.IGNORECASE)
+
+    # Pattern: "set computer light(s) ..."
+    LIGHT_PATTERN = re.compile(r'\bset\s+computer\s+lights?\b(.*)', re.IGNORECASE)
+
+    COLOR_MAP = {
+        "red": "FF0000",
+        "green": "00FF00",
+        "blue": "0000FF",
+        "white": "FFFFFF",
+        "purple": "8000FF",
+        "pink": "FF00FF",
+        "cyan": "00FFFF",
+        "yellow": "FFFF00",
+        "orange": "FFA500",
+    }
     
     def __init__(self, audio_sink=None):
         """
@@ -83,6 +100,10 @@ class CommandExecutor:
         if not text:
             return False
         
+        # Check lighting pattern
+        if self.LIGHT_PATTERN.search(text):
+            return True
+
         # Check count pattern (digits or spelled-out numbers)
         match = self.COUNT_PATTERN.search(text)
         if match:
@@ -127,6 +148,15 @@ class CommandExecutor:
         Returns:
             True if executed successfully, False if no pattern matched or error
         """
+        # Try lighting command
+        light_match = self.LIGHT_PATTERN.search(text)
+        if light_match:
+            try:
+                return self._execute_lighting(light_match.group(1))
+            except Exception as e:
+                self.logger.error(f"[CommandExecutor] Lighting command failed: {e}")
+                return False
+
         # Try count command
         count_match = self.COUNT_PATTERN.search(text)
         if count_match:
@@ -143,6 +173,94 @@ class CommandExecutor:
                 return False
         
         return False
+
+    def _execute_lighting(self, tail: str) -> bool:
+        """
+        Execute: set computer lights <color|mode|on|off>.
+
+        Examples:
+        - "set computer light red"
+        - "set computer lights to blue"
+        - "set computer lights rainbow mode"
+        - "set computer light off"
+        """
+        tail = (tail or "").strip().lower()
+        # Remove leading "to" if present
+        if tail.startswith("to "):
+            tail = tail[3:].strip()
+
+        mode = None
+        color = None
+
+        if "off" in tail:
+            mode = "off"
+        elif "rainbow" in tail:
+            mode = "rainbow"
+        elif "breathing" in tail:
+            mode = "breathing"
+        elif "static" in tail:
+            mode = "static"
+
+        for name, hex_color in self.COLOR_MAP.items():
+            if name in tail:
+                color = hex_color
+                if mode is None:
+                    mode = "static"
+                break
+
+        if "on" in tail and mode is None:
+            mode = "static"
+            color = color or "FFFFFF"
+
+        if mode is None:
+            self.logger.warning("[CommandExecutor] Lighting command missing mode/color")
+            return False
+
+        return self._run_openrgb(mode=mode, color=color)
+
+    def _run_openrgb(self, mode: str, color: Optional[str] = None) -> bool:
+        exe = os.getenv("OPENRGB_EXE", r"C:\Program Files\OpenRGB\OpenRGB.exe")
+        if not os.path.exists(exe):
+            exe = "OpenRGB.exe"
+
+        base_args = [exe, "--client", "127.0.0.1:6742", "--mode", mode]
+        if color:
+            base_args += ["--color", color]
+
+        devices_env = os.getenv("OPENRGB_DEVICES", "").strip()
+        devices = [d.strip() for d in devices_env.split(",") if d.strip()] if devices_env else [None]
+
+        for dev in devices:
+            args = list(base_args)
+            if dev is not None:
+                args += ["--device", dev]
+            try:
+                result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+            except Exception as e:
+                self.logger.error(f"[CommandExecutor] OpenRGB call failed: {e}")
+                return False
+
+            if result.returncode != 0:
+                self.logger.error(
+                    "[CommandExecutor] OpenRGB error: %s",
+                    (result.stderr or result.stdout).strip(),
+                )
+                return False
+
+        if self.audio_sink:
+            try:
+                if mode == "off":
+                    self.audio_sink.speak("Computer lights off.")
+                elif mode == "rainbow":
+                    self.audio_sink.speak("Computer lights set to rainbow.")
+                elif mode == "breathing":
+                    self.audio_sink.speak("Computer lights set to breathing mode.")
+                else:
+                    self.audio_sink.speak("Computer lights updated.")
+            except Exception:
+                pass
+
+        return True
     
     def _execute_count(self, count_to: int) -> None:
         """

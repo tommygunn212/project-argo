@@ -41,6 +41,9 @@ No complex playlists, no metadata obsession.
 # AUDIO PATH STABLE
 # Verified working. Do not modify without reproduced issue + logs.
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import os
 import logging
 import random
@@ -69,14 +72,14 @@ from core.playback_state import get_playback_state
 from core.audio_owner import get_audio_owner
 
 # ============================================================================
-# LOGGER
+# 2) LOGGER
 # ============================================================================
 
 logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# CONFIGURATION
+# 3) CONFIGURATION
 # ============================================================================
 
 def _get_env_bool(name: str):

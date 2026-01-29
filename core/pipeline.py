@@ -6,6 +6,9 @@ Synchronous, queue-based processing pipeline.
 Uses faster-whisper, ollama, and piper.
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import time
 import logging
 import numpy as np
@@ -32,9 +35,13 @@ from system_health import (
     get_temperatures,
     get_temperature_health,
     get_disk_info,
+    get_system_full_report,
 )
 from system_profile import get_system_profile, get_gpu_profile
 
+# ============================================================================
+# 2) PIPELINE ORCHESTRATOR
+# ============================================================================
 class ArgoPipeline:
     def __init__(self, audio_manager, websocket_broadcast):
         self.logger = logging.getLogger("ARGO.Pipeline")
@@ -488,6 +495,99 @@ class ArgoPipeline:
             return "Temperature sensors are not available on this system."
         return " ".join(parts) + " Normal."
 
+    def _format_system_full_report(self, report: dict) -> str:
+        health = report.get("health", {}) or {}
+        disks = report.get("disks", {}) or {}
+        uptime_seconds = report.get("uptime_seconds", 0) or 0
+        network = report.get("network", []) or []
+        battery = report.get("battery")
+        fans = report.get("fans")
+
+        parts = []
+        cpu_pct = health.get("cpu_percent")
+        ram_pct = health.get("ram_percent")
+        disk_pct = health.get("disk_percent")
+        gpu_pct = health.get("gpu_percent")
+        gpu_mem = health.get("gpu_mem_percent")
+        if cpu_pct is not None and ram_pct is not None and disk_pct is not None:
+            parts.append(f"CPU is {cpu_pct} percent. Memory is {ram_pct} percent. Disk usage is {disk_pct} percent.")
+        if gpu_pct is not None:
+            if gpu_mem is not None:
+                parts.append(f"GPU usage is {gpu_pct} percent, with VRAM at {gpu_mem} percent.")
+            else:
+                parts.append(f"GPU usage is {gpu_pct} percent.")
+
+        cpu_temp = health.get("cpu_temp")
+        gpu_temp = health.get("gpu_temp")
+        if cpu_temp is not None or gpu_temp is not None:
+            temp_bits = []
+            if cpu_temp is not None:
+                temp_bits.append(f"CPU {cpu_temp}°C")
+            if gpu_temp is not None:
+                temp_bits.append(f"GPU {gpu_temp}°C")
+            parts.append("Temperatures: " + ", ".join(temp_bits) + ".")
+
+        if uptime_seconds:
+            hours = round(uptime_seconds / 3600, 1)
+            parts.append(f"Uptime is {hours} hours.")
+
+        if disks:
+            disk_bits = []
+            for label, info in sorted(disks.items()):
+                drive_label = label.replace(":", "")
+                free_text = self._format_size_gb(info["free_gb"])
+                total_text = self._format_size_gb(info["total_gb"])
+                disk_bits.append(
+                    f"{drive_label} drive is {info['percent']} percent full, with {free_text} free out of {total_text}."
+                )
+            parts.append("Drives: " + " ".join(disk_bits))
+
+        if network:
+            net_bits = []
+            for nic in network:
+                label = nic.get("name")
+                ip = nic.get("ip")
+                speed = nic.get("speed_mbps")
+                seg = label or "Network"
+                if ip:
+                    seg += f" {ip}"
+                if speed:
+                    seg += f" {speed}Mbps"
+                net_bits.append(seg)
+            parts.append("Network: " + ", ".join(net_bits) + ".")
+
+        if battery:
+            pct = battery.get("percent")
+            plugged = battery.get("plugged")
+            if pct is not None:
+                status = "plugged in" if plugged else "on battery"
+                parts.append(f"Battery is {pct} percent, {status}.")
+
+        if fans:
+            fan_bits = [f"{f['label']} {f['rpm']}RPM" for f in fans if f.get("rpm") is not None]
+            if fan_bits:
+                parts.append("Fans: " + ", ".join(fan_bits) + ".")
+
+        if not parts:
+            return "Hardware information unavailable."
+
+        return "System status. " + " ".join(parts)
+
+    def _format_size_gb(self, gb: float) -> str:
+        try:
+            if gb >= 1024:
+                tb = round(gb / 1024, 2)
+                return f"{tb} terabytes"
+            gigs = int(gb)
+            megs = int(round((gb - gigs) * 1024))
+            if gigs > 0 and megs > 0:
+                return f"{gigs} gigs {megs} megs"
+            if gigs > 0:
+                return f"{gigs} gigs"
+            return f"{megs} megs"
+        except Exception:
+            return f"{gb} gigs"
+
     def _strip_disallowed_phrases(self, text: str) -> str:
         if not text:
             return text
@@ -789,11 +889,38 @@ class ArgoPipeline:
                         else:
                             total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
                             response = f"You have {total_free} gigabytes free across {len(disks)} drives."
+                elif subintent == "full":
+                    report = get_system_full_report()
+                    response = self._format_system_full_report(report)
                 elif subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
                     profile = get_system_profile()
                     gpus = get_gpu_profile()
+                    raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
+                    wants_specs = "spec" in raw_text_lower or "detail" in raw_text_lower
                     if subintent == "memory":
                         ram_gb = profile.get("ram_gb") if profile else None
+                        if wants_specs and profile:
+                            speed = profile.get("memory_speed_mhz")
+                            modules = profile.get("memory_modules")
+                            extra = []
+                            if speed:
+                                extra.append(f"{speed}MHz")
+                            if modules:
+                                extra.append(f"{modules} modules")
+                            extra_text = f" ({', '.join(extra)})" if extra else ""
+                            response = f"Your system has {ram_gb} gigabytes of memory{extra_text}."
+                            self.broadcast("log", f"Argo: {response}")
+                            if not self.stop_signal.is_set() and not replay_mode:
+                                tts_text = self._sanitize_tts_text(response)
+                                tts_override = (overrides or {}).get("suppress_tts", False)
+                                if tts_override:
+                                    self.logger.info("[TTS] Suppressed for next interaction override")
+                                elif tts_text:
+                                    self.speak(tts_text, interaction_id=interaction_id)
+                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                            self.logger.info("--- Interaction Complete ---")
+                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                            return
                         response = (
                             f"Your system has {ram_gb} gigabytes of memory."
                             if ram_gb is not None
@@ -801,6 +928,34 @@ class ArgoPipeline:
                         )
                     elif subintent == "cpu":
                         cpu_name = profile.get("cpu") if profile else None
+                        if wants_specs and profile:
+                            cores = profile.get("cpu_cores")
+                            threads = profile.get("cpu_threads")
+                            mhz = profile.get("cpu_max_mhz")
+                            maker = profile.get("cpu_manufacturer")
+                            bits = []
+                            if maker:
+                                bits.append(maker)
+                            if cores:
+                                bits.append(f"{cores} cores")
+                            if threads:
+                                bits.append(f"{threads} threads")
+                            if mhz:
+                                bits.append(f"{mhz} MHz max")
+                            detail = f" ({', '.join(bits)})" if bits else ""
+                            response = f"Your CPU is a {cpu_name}{detail}." if cpu_name else "Hardware information unavailable."
+                            self.broadcast("log", f"Argo: {response}")
+                            if not self.stop_signal.is_set() and not replay_mode:
+                                tts_text = self._sanitize_tts_text(response)
+                                tts_override = (overrides or {}).get("suppress_tts", False)
+                                if tts_override:
+                                    self.logger.info("[TTS] Suppressed for next interaction override")
+                                elif tts_text:
+                                    self.speak(tts_text, interaction_id=interaction_id)
+                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                            self.logger.info("--- Interaction Complete ---")
+                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                            return
                         response = (
                             f"Your CPU is a {cpu_name}."
                             if cpu_name
@@ -808,6 +963,31 @@ class ArgoPipeline:
                         )
                     elif subintent == "gpu":
                         if gpus:
+                            if wants_specs:
+                                gpu_bits = []
+                                for gpu in gpus:
+                                    name = gpu.get("name")
+                                    vram = gpu.get("vram_mb")
+                                    dv = gpu.get("driver_version")
+                                    detail = []
+                                    if vram:
+                                        detail.append(f"{vram}MB VRAM")
+                                    if dv:
+                                        detail.append(f"driver {dv}")
+                                    gpu_bits.append(f"{name} ({', '.join(detail)})" if detail else f"{name}")
+                                response = "Your GPU(s): " + "; ".join(gpu_bits) + "."
+                                self.broadcast("log", f"Argo: {response}")
+                                if not self.stop_signal.is_set() and not replay_mode:
+                                    tts_text = self._sanitize_tts_text(response)
+                                    tts_override = (overrides or {}).get("suppress_tts", False)
+                                    if tts_override:
+                                        self.logger.info("[TTS] Suppressed for next interaction override")
+                                    elif tts_text:
+                                        self.speak(tts_text, interaction_id=interaction_id)
+                                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                                self.logger.info("--- Interaction Complete ---")
+                                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                                return
                             response = f"Your GPU is {gpus[0].get('name')}."
                         else:
                             response = "No GPU detected."
@@ -820,6 +1000,29 @@ class ArgoPipeline:
                         )
                     elif subintent == "motherboard":
                         board = profile.get("motherboard") if profile else None
+                        if wants_specs and profile:
+                            bios = profile.get("bios_version")
+                            sys_maker = profile.get("system_manufacturer")
+                            sys_model = profile.get("system_model")
+                            parts = []
+                            if sys_maker or sys_model:
+                                parts.append(" ".join(p for p in [sys_maker, sys_model] if p))
+                            if bios:
+                                parts.append(f"BIOS {bios}")
+                            extra = f" ({', '.join(parts)})" if parts else ""
+                            response = f"Your motherboard is {board}{extra}." if board else "Hardware information unavailable."
+                            self.broadcast("log", f"Argo: {response}")
+                            if not self.stop_signal.is_set() and not replay_mode:
+                                tts_text = self._sanitize_tts_text(response)
+                                tts_override = (overrides or {}).get("suppress_tts", False)
+                                if tts_override:
+                                    self.logger.info("[TTS] Suppressed for next interaction override")
+                                elif tts_text:
+                                    self.speak(tts_text, interaction_id=interaction_id)
+                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                            self.logger.info("--- Interaction Complete ---")
+                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                            return
                         response = (
                             f"Your motherboard is {board}."
                             if board
@@ -838,6 +1041,21 @@ class ArgoPipeline:
                             )
                             if gpu_name:
                                 response += f" Your GPU is {gpu_name}."
+                            if wants_specs and profile:
+                                drives = profile.get("storage_drives") or []
+                                if drives:
+                                    drive_bits = []
+                                    for d in drives:
+                                        name = d.get("model") or "Drive"
+                                        size = d.get("size_gb")
+                                        iface = d.get("interface")
+                                        detail = []
+                                        if size:
+                                            detail.append(f"{size}GB")
+                                        if iface:
+                                            detail.append(iface)
+                                        drive_bits.append(f"{name} ({', '.join(detail)})" if detail else name)
+                                    response += " Storage: " + "; ".join(drive_bits) + "."
                 elif subintent == "temperature":
                     temps = get_temperature_health()
                     if temps.get("error") == "TEMPERATURE_UNAVAILABLE":

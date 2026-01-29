@@ -1,8 +1,15 @@
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import os
 import platform
 import psutil
+import time
 
 
+# ============================================================================
+# 2) MEMORY SNAPSHOT
+# ============================================================================
 def get_memory_info():
     mem = psutil.virtual_memory()
     total_gb = round(mem.total / (1024**3), 1)
@@ -10,6 +17,9 @@ def get_memory_info():
     return total_gb, used_pct
 
 
+# ============================================================================
+# 3) TEMPERATURE SENSORS
+# ============================================================================
 def get_temperatures():
     temps = {}
     try:
@@ -39,6 +49,9 @@ def get_temperatures():
     return temps or None
 
 
+# ============================================================================
+# 4) TEMPERATURE HEALTH WRAPPER
+# ============================================================================
 def get_temperature_health():
     temps = get_temperatures() or {}
     if temps is None:
@@ -46,6 +59,9 @@ def get_temperature_health():
     return temps
 
 
+# ============================================================================
+# 5) SYSTEM HEALTH SNAPSHOT
+# ============================================================================
 def get_system_health():
     cpu = psutil.cpu_percent(interval=0.5)
     mem = psutil.virtual_memory()
@@ -80,6 +96,88 @@ def get_system_health():
     return health
 
 
+# ============================================================================
+# 5B) UPTIME / NETWORK / BATTERY / FANS
+# ============================================================================
+def get_uptime_seconds() -> float:
+    try:
+        return max(0.0, time.time() - psutil.boot_time())
+    except Exception:
+        return 0.0
+
+
+def get_network_info():
+    info = []
+    try:
+        stats = psutil.net_if_stats()
+        addrs = psutil.net_if_addrs()
+        for name, st in stats.items():
+            if not st.isup:
+                continue
+            ipv4 = None
+            for addr in addrs.get(name, []):
+                if getattr(addr, "family", None) == getattr(psutil, "AF_LINK", None):
+                    continue
+                if str(addr.family).endswith("AF_INET"):
+                    ipv4 = addr.address
+                    break
+            info.append({
+                "name": name,
+                "speed_mbps": st.speed,
+                "ip": ipv4,
+            })
+    except Exception:
+        pass
+    return info
+
+
+def get_battery_info():
+    try:
+        batt = psutil.sensors_battery()
+        if batt is None:
+            return None
+        return {
+            "percent": batt.percent,
+            "plugged": batt.power_plugged,
+        }
+    except Exception:
+        return None
+
+
+def get_fan_info():
+    try:
+        fans = psutil.sensors_fans()
+        if not fans:
+            return None
+        out = []
+        for group, entries in fans.items():
+            for entry in entries:
+                if entry.current is None:
+                    continue
+                out.append({
+                    "label": entry.label or group,
+                    "rpm": entry.current,
+                })
+        return out or None
+    except Exception:
+        return None
+
+
+def get_system_full_report():
+    """Aggregate full system snapshot for deterministic reporting."""
+    return {
+        "health": get_system_health(),
+        "disks": get_disk_info(),
+        "uptime_seconds": get_uptime_seconds(),
+        "network": get_network_info(),
+        "battery": get_battery_info(),
+        "fans": get_fan_info(),
+    }
+
+
+# ============================================================================
+# 6) DISK INVENTORY (PER-MOUNT)
+# ============================================================================
 def get_disk_info():
     disks = {}
     try:

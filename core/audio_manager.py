@@ -10,6 +10,9 @@ Responsibilities:
 - Handle forceful playback stopping for barge-in
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 import sounddevice as sd
 import numpy as np
 import threading
@@ -25,6 +28,9 @@ except Exception:
     def log_event(event: str, stage: str = "", interaction_id: str = ""):
         pass
 
+# ============================================================================
+# 2) INPUT CONSTANTS
+# ============================================================================
 # Input Constants
 INPUT_SAMPLE_RATE = 16000
 BLOCK_SIZE = 512
@@ -32,10 +38,16 @@ CHANNELS = 1
 INPUT_DTYPE = 'float32'
 PRE_ROLL_SECONDS = 0.5
 
+# ============================================================================
+# 3) OUTPUT CONSTANTS (PIPER DEFAULT)
+# ============================================================================
 # Output Constants (Piper default)
 OUTPUT_SAMPLE_RATE = 22050
 OUTPUT_DTYPE = 'int16'
 
+# ============================================================================
+# 4) AUDIO MANAGER
+# ============================================================================
 class AudioManager:
     def __init__(self, input_device_index=None, output_device_index=None, on_owner_change=None):
         self.logger = logging.getLogger("ARGO.Audio")

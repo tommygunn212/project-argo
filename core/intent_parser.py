@@ -13,6 +13,9 @@ Does NOT:
 - Call external services (completely local)
 """
 
+# ============================================================================
+# 1) IMPORTS
+# ============================================================================
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -20,6 +23,9 @@ from typing import Optional, List, Tuple
 import re
 import logging
 
+# ============================================================================
+# 2) KEYWORD BANKS (MUSIC)
+# ============================================================================
 MUSIC_FILLER_WORDS = {
     "play", "me", "a", "the", "some", "good", "song", "music", "from",
     "can", "you", "please", "could", "would", "just"
@@ -35,6 +41,9 @@ GENERIC_PLAY_PHRASES = {
     "surprise me",
 }
 
+# ============================================================================
+# 3) KEYWORD BANKS (SYSTEM)
+# ============================================================================
 SYSTEM_HEALTH_TRIGGERS = [
     "system health",
     "computer health",
@@ -51,6 +60,18 @@ SYSTEM_HEALTH_TRIGGERS = [
     "system cpu health",
     "disk space",
     "free space",
+]
+FULL_SYSTEM_PHRASES = [
+    "full system",
+    "full status",
+    "full report",
+    "complete status",
+    "everything",
+    "all system info",
+    "all system information",
+    "all computer info",
+    "all computer information",
+    "everything about my computer",
 ]
 
 SYSTEM_KEYWORDS = {
@@ -148,6 +169,9 @@ SYSTEM_NORMALIZE = {
     "disk": "disk space",
 }
 
+# ============================================================================
+# 4) KEYWORD BANKS (TEMPERATURE)
+# ============================================================================
 TEMP_KEYWORDS = [
     "temperature",
     "temp",
@@ -173,6 +197,9 @@ DISK_QUERY_PHRASES = [
 ]
 
 
+# ============================================================================
+# 5) DETECTORS / NORMALIZERS
+# ============================================================================
 def detect_system_health(text: str) -> bool:
     t = text.lower()
     return any(p in t for p in SYSTEM_HEALTH_TRIGGERS)
@@ -202,6 +229,9 @@ def is_system_keyword(text: str) -> bool:
     return t in SYSTEM_KEYWORDS or detect_disk_query(t)
 
 
+# ============================================================================
+# 6) INTENT TYPES
+# ============================================================================
 class IntentType(Enum):
     """Supported intent classifications."""
     GREETING = "greeting"
@@ -219,6 +249,9 @@ class IntentType(Enum):
     UNKNOWN = "unknown"
 
 
+# ============================================================================
+# 7) INTENT STRUCTURE
+# ============================================================================
 @dataclass
 class Intent:
     """
@@ -262,6 +295,9 @@ class Intent:
         )
 
 
+# ============================================================================
+# 8) INTENT PARSER INTERFACE
+# ============================================================================
 class IntentParser(ABC):
     """
     Base class for intent parsers.
@@ -286,6 +322,9 @@ class IntentParser(ABC):
         pass
 
 
+# ============================================================================
+# 9) RULE-BASED PARSER
+# ============================================================================
 class RuleBasedIntentParser(IntentParser):
     """
     Simple rule-based intent parser.
@@ -611,12 +650,14 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.25: SYSTEM_HEALTH keywords (hard deterministic, no LLM)
-        if detect_system_health(text_lower):
+        if detect_system_health(text_lower) or any(p in text_lower for p in FULL_SYSTEM_PHRASES):
+            subintent = "full" if any(p in text_lower for p in FULL_SYSTEM_PHRASES) else None
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
                 raw_text=text_original,
                 serious_mode=serious_mode,
+                subintent=subintent,
             )
 
         # Rule 0.5: DEVELOP keywords (high priority - developer context)
