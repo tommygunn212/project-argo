@@ -10,6 +10,17 @@
 **Web UI:** http://localhost:8000  
 **WebSocket:** ws://localhost:8001/ws
 
+**Version:** see [core/version.py](core/version.py)
+
+---
+
+## Versioning
+
+- This project uses Semantic Versioning.
+- v1.0.0 is the initial public release.
+- v1.5.0 marks architectural hardening and runtime stability.
+- v2.0.0 is reserved for installer and onboarding.
+
 ---
 
 ## Architecture Overview

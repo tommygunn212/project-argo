@@ -34,6 +34,7 @@ from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
 from core.instrumentation import log_event
 from system_profile import get_system_profile, get_gpu_profile
+from core.version import CURRENT_VERSION, CURRENT_MILESTONE
 from core.config import (
     get_config,
     get_config_hash,
@@ -73,6 +74,8 @@ ws_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(messa
 root_logger.addHandler(ws_handler)
 
 logger = logging.getLogger("ARGO.Main")
+
+logger.info("[SYSTEM] ARGO version %s (%s)", CURRENT_VERSION, CURRENT_MILESTONE)
 
 # Load static system profile once
 SYSTEM_PROFILE = get_system_profile()
