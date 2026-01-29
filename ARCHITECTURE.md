@@ -1,5 +1,17 @@
 # ARGO Architecture
 
+## Current Runtime Summary (Jan 2026)
+
+The current runtime is **VAD-only** and runs from main.py with the UI debugger as the primary control surface.
+
+- Always-listening VAD pipeline (no wake word)
+- Whisper STT, Ollama LLM, Piper TTS
+- Deterministic system health + hardware queries (no LLM)
+- Local music index (data/music_index.json) with deterministic resolution
+- Optional OpenRGB lighting control via command executor
+
+Note: Several sections below describe legacy wake-word and Edge-TTS/LiveKit designs kept for historical reference.
+
 ## System Overview
 
 ARGO is a 7-layer voice system designed for predictability, debuggability, and control.
@@ -13,6 +25,8 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 - **Runtime overrides** (global + next-interaction) are non-persistent and UI-controlled.
 - **Timeline events** capture STT/LLM/TTS/State/UI activity for deterministic replay.
 - **System health & disk queries** are deterministic and never routed to the LLM.
+- **Local music index** supports deterministic resolution without Jellyfin.
+- **Lighting control** is supported via OpenRGB command execution.
 
 ```
 ┌─────────────────────────────────────────────────────────┐

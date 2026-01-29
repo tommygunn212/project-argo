@@ -6,6 +6,7 @@
 - **Wake word removed by design** — ARGO is VAD‑only (always listening).
 - **UI debugger is required** — it is the primary visibility surface.
 - **Local‑first** — no cloud dependencies for speech or TTS.
+- **Deterministic system facts** — system health/specs never call the LLM.
 
 **Web UI:** http://localhost:8000  
 **WebSocket:** ws://localhost:8001/ws
@@ -44,6 +45,7 @@ Audio → VAD → STT → LLM → TTS
 - **Python:** 3.10+ (3.11 recommended)
 - **Ollama** running locally (LLM)
 - **Piper** installed or callable via `python -m piper`
+- **OpenRGB** (optional, for lighting control)
 
 ### Setup
 ```powershell
@@ -71,19 +73,48 @@ python main.py
 
 ---
 
-## Music Indexing Lifecycle
+## Music Indexing (Local-First)
 
-- SQLite DB is created by Jellyfin ingest.
-- ARGO runs without it.
-- Music commands are disabled until indexed.
-- Re-ingest required if schema version changes.
+ARGO supports a local JSON music index for fast, deterministic playback.
+
+- Index path: data/music_index.json
+- Build it with: scripts/rebuild_music_index.py
+- Enable local mode with: MUSIC_SOURCE=local
+
+Jellyfin ingest is optional and no longer required for music commands.
+
+---
+
+## Audio Device Configuration
+
+Set device indices in config.json:
+
+```json
+{
+    "audio": {
+        "input_device_index": 35,
+        "output_device_index": 34
+    }
+}
+```
+
+---
+
+## Lighting Control (OpenRGB)
+
+Lighting commands target OpenRGB devices when these are set:
+
+- OPENRGB_EXE=path\to\OpenRGB.exe
+- OPENRGB_DEVICES=0,1
+
+OpenRGB server must be running.
 
 ---
 
 ## System Health & Hardware (Deterministic)
 
 These queries are **deterministic** and **never call the LLM**:
-- CPU, RAM, GPU, OS, motherboard identity
+- CPU, memory, GPU, OS, motherboard identity
 - Disk health and free space (including per-drive queries)
 
 Examples:
@@ -101,6 +132,8 @@ Highlights:
 - System health/hardware queries now return immediate, numeric answers
 - Disk queries are deterministic and never fall back to the LLM
 - Music playback preempts safely and resolves with stricter matching
+- Local music index available for fast playback without Jellyfin
+- OpenRGB lighting control supported via deterministic commands
 
 ---
 
@@ -128,6 +161,7 @@ Highlights:
 - Wake word detection removed
 - Always‑listening VAD pipeline
 - UI debugger + WebSocket observability as core runtime components
+- Deterministic system health/specs and local music indexing
 
 ---
 

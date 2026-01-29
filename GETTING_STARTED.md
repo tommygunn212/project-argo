@@ -13,6 +13,7 @@ This guide walks you through setting up and running the current ARGO pipeline. T
 - **RAM:** 8GB+ recommended
 - **Microphone:** Any USB audio device
 - **Speakers:** Any audio output device
+- **OpenRGB:** Optional, for lighting control
 
 ---
 
@@ -45,6 +46,17 @@ curl http://localhost:11434/api/tags
 Verify your microphone and speakers work:
 ```powershell
 python -c "import sounddevice as sd; print(sd.query_devices())"
+```
+
+Set device indices in config.json:
+
+```json
+{
+	"audio": {
+		"input_device_index": 35,
+		"output_device_index": 34
+	}
+}
 ```
 
 ---
@@ -104,7 +116,7 @@ python main.py
 ## System Health & Disk Queries (Deterministic)
 
 The following are deterministic and never call the LLM:
-- CPU, RAM, GPU, OS, motherboard
+- CPU, memory, GPU, OS, motherboard
 - Drive usage and free space
 
 Examples:
@@ -117,6 +129,19 @@ Examples:
 ## Milestone: Music + System Health Hardening (Jan 2026)
 
 **Why:** predictable system facts and stable music control under load.
+
+Local music indexing is available via scripts/rebuild_music_index.py and MUSIC_SOURCE=local.
+
+---
+
+## Lighting Control (Optional)
+
+Lighting commands target OpenRGB devices when these are set:
+
+- OPENRGB_EXE=path\to\OpenRGB.exe
+- OPENRGB_DEVICES=0,1
+
+OpenRGB server must be running.
 
 ---
 
