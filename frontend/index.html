@@ -57,6 +57,13 @@
                 title: "Alan Voice Model Missing",
                 description: "The 'Alan' voice files are not in audio/piper/voices/.",
                 steps: ["Download 'en_GB-alan-low.onnx' & '.json'", "Place in audio/piper/voices/"]
+            },
+            ALBA_VOICE_SETUP: {
+                id: 'ALBA_VOICE_SETUP',
+                level: 'INFO',
+                title: "Alba Voice Model Missing",
+                description: "The 'Alba' voice files are not in audio/piper/voices/.",
+                steps: ["Download 'en_GB-alba-medium.onnx'", "Place in audio/piper/voices/"]
             }
         };
 
@@ -352,6 +359,7 @@
                         <div className="flex gap-3">
                             <button onClick={() => changeVoice('lessac')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'lessac' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>LESSAC (US)</button>
                             <button onClick={() => changeVoice('alan')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alan' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALAN (GB)</button>
+                            <button onClick={() => changeVoice('alba')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alba' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALBA (GB)</button>
                         </div>
 
                         {/* Start/Stop Controls */}

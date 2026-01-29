@@ -38,6 +38,9 @@ from core.startup_checks import check_ollama
 from core.policy import LLM_TIMEOUT_SECONDS, LLM_WATCHDOG_SECONDS, WATCHDOG_FALLBACK_RESPONSE
 from core.watchdog import Watchdog
 from core.output_sink import get_output_sink
+from core.intent_parser import IntentType
+from system_health import get_temperature_health, get_disk_info
+from system_profile import get_system_profile, get_gpu_profile
 from core.instrumentation import log_event
 
 # Minimal stop-word list for semantic overlap guard
@@ -189,6 +192,94 @@ class LLMResponseGenerator(ResponseGenerator):
         """
         if intent is None:
             raise ValueError("intent is None")
+
+        if intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_INFO}:
+            subintent = getattr(intent, "subintent", None)
+            raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
+            if subintent == "disk" or "drive" in raw_text_lower or "disk" in raw_text_lower:
+                disks = get_disk_info()
+                if not disks:
+                    return "Hardware information unavailable."
+                drive_match = re.search(r"\b([a-z])\s*drive\b", raw_text_lower)
+                if not drive_match:
+                    drive_match = re.search(r"\b([a-z]):\b", raw_text_lower)
+                if drive_match:
+                    letter = drive_match.group(1).upper()
+                    key = f"{letter}:"
+                    info = disks.get(key) or disks.get(letter)
+                    if info:
+                        return (
+                            f"{letter} drive is {info['percent']} percent full, "
+                            f"with {info['free_gb']} gigabytes free."
+                        )
+                    return "Hardware information unavailable."
+                if "fullest" in raw_text_lower or "most used" in raw_text_lower:
+                    disk, info = max(disks.items(), key=lambda x: x[1]["percent"])
+                    return f"{disk} is the fullest drive at {info['percent']} percent used."
+                if "most free" in raw_text_lower or "most space" in raw_text_lower:
+                    disk, info = max(disks.items(), key=lambda x: x[1]["free_gb"])
+                    return f"{disk} has the most free space at {info['free_gb']} gigabytes free."
+                total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
+                return f"You have {total_free} gigabytes free across {len(disks)} drives."
+            if subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
+                profile = get_system_profile()
+                gpus = get_gpu_profile()
+                if subintent == "memory":
+                    ram_gb = profile.get("ram_gb") if profile else None
+                    return (
+                        f"Your system has {ram_gb} gigabytes of memory."
+                        if ram_gb is not None
+                        else "Hardware information unavailable."
+                    )
+                if subintent == "cpu":
+                    cpu_name = profile.get("cpu") if profile else None
+                    return (
+                        f"Your CPU is a {cpu_name}."
+                        if cpu_name
+                        else "Hardware information unavailable."
+                    )
+                if subintent == "gpu":
+                    if gpus:
+                        return f"Your GPU is {gpus[0].get('name')}."
+                    return "No GPU detected."
+                if subintent == "os":
+                    os_name = profile.get("os") if profile else None
+                    return (
+                        f"You are running {os_name}."
+                        if os_name
+                        else "Hardware information unavailable."
+                    )
+                if subintent == "motherboard":
+                    board = profile.get("motherboard") if profile else None
+                    return (
+                        f"Your motherboard is {board}."
+                        if board
+                        else "Hardware information unavailable."
+                    )
+                cpu_name = profile.get("cpu") if profile else None
+                ram_gb = profile.get("ram_gb") if profile else None
+                gpu_name = gpus[0].get("name") if gpus else None
+                if not cpu_name or ram_gb is None:
+                    return "Hardware information unavailable."
+                summary = f"Your CPU is a {cpu_name}. You have {ram_gb} gigabytes of memory."
+                if gpu_name:
+                    summary += f" Your GPU is {gpu_name}."
+                return summary
+
+        if intent.intent_type == IntentType.SYSTEM_HEALTH and getattr(intent, "subintent", None) == "temperature":
+            temps = get_temperature_health()
+            if temps.get("error") == "TEMPERATURE_UNAVAILABLE":
+                return "Temperature sensors are not available on this system."
+            parts = []
+            cpu_temp = temps.get("cpu")
+            gpu_temp = temps.get("gpu")
+            if cpu_temp is not None:
+                parts.append(f"CPU temperature is {cpu_temp} degrees.")
+            if gpu_temp is not None:
+                parts.append(f"GPU temperature is {gpu_temp} degrees.")
+            if not parts:
+                return "Temperature sensors are not available on this system."
+            return " ".join(parts) + " Normal."
 
         if not self.enabled:
             self.logger.info("LLM offline: skipping generation")

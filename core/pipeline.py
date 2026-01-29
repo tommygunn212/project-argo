@@ -23,9 +23,17 @@ from pathlib import Path
 
 from core.instrumentation import log_event
 from core.config import get_runtime_overrides, get_config
-from core.intent_parser import RuleBasedIntentParser, IntentType
+from core.intent_parser import RuleBasedIntentParser, IntentType, normalize_system_text, is_system_keyword
 from core.music_player import get_music_player
 from core.music_status import query_music_status
+from system_health import (
+    get_system_health,
+    get_memory_info,
+    get_temperatures,
+    get_temperature_health,
+    get_disk_info,
+)
+from system_profile import get_system_profile, get_gpu_profile
 
 class ArgoPipeline:
     def __init__(self, audio_manager, websocket_broadcast):
@@ -44,6 +52,7 @@ class ArgoPipeline:
             self._config = None
         self._intent_parser = RuleBasedIntentParser()
         self._last_stt_metrics = None
+        self._low_conf_notice_given = False
         self._serious_mode_keywords = {
             "help", "urgent", "emergency", "panic", "stuck", "broken", "crash",
             "error", "fail", "failure", "frustrated", "angry", "upset",
@@ -73,7 +82,8 @@ class ArgoPipeline:
         # Default voice
         self.voices = {
             "lessac": "audio/piper/voices/en_US-lessac-medium.onnx",
-            "alan": "audio/piper/voices/en_GB-alan-medium.onnx"
+            "alan": "audio/piper/voices/en_GB-alan-medium.onnx",
+            "alba": "audio/piper/voices/en_GB-alba-medium.onnx"
         }
         self.current_voice_key = "lessac"
         self.piper_model_path = self.voices["lessac"]
@@ -85,15 +95,22 @@ class ArgoPipeline:
         """Switch the TTS voice model."""
         if voice_key in self.voices:
             new_path = self.voices[voice_key]
-            if os.path.exists(new_path):
+            config_path = f"{new_path}.json"
+            if os.path.exists(new_path) and os.path.exists(config_path):
                 self.current_voice_key = voice_key
                 self.piper_model_path = new_path
                 self.logger.info(f"Voice switched to {voice_key}: {new_path}")
                 self.broadcast("log", f"System: Voice profile switched to {voice_key.upper()}")
                 return True
             else:
-                self.logger.error(f"Voice file missing: {new_path}")
-                self.broadcast("log", f"ERROR: Voice file for {voice_key.upper()} not found at {new_path}")
+                missing = []
+                if not os.path.exists(new_path):
+                    missing.append(new_path)
+                if not os.path.exists(config_path):
+                    missing.append(config_path)
+                missing_str = ", ".join(missing)
+                self.logger.error(f"Voice files missing: {missing_str}")
+                self.broadcast("log", f"ERROR: Voice files missing for {voice_key.upper()}: {missing_str}")
                 return False
         return False
 
@@ -439,6 +456,51 @@ class ArgoPipeline:
                 return value
         return 5
 
+    def _format_system_health(self, health: dict) -> str:
+        return (
+            f"CPU at {health.get('cpu_percent')} percent. "
+            f"Memory at {health.get('ram_percent')} percent. "
+            f"Disk {health.get('disk_percent')} percent full."
+        )
+
+    def _format_system_memory_info(self, total_gb: float, used_pct: float, temps: dict) -> str:
+        text = (
+            f"Your system has {total_gb} gigabytes of memory installed. "
+            f"Currently using about {used_pct} percent."
+        )
+        cpu_temp = temps.get("cpu")
+        gpu_temp = temps.get("gpu")
+        if cpu_temp is not None:
+            text += f" CPU temperature is {cpu_temp} degrees."
+        if gpu_temp is not None:
+            text += f" GPU temperature is {gpu_temp} degrees."
+        return text
+
+    def _format_temperature_response(self, temps: dict) -> str:
+        parts = []
+        cpu_temp = temps.get("cpu")
+        gpu_temp = temps.get("gpu")
+        if cpu_temp is not None:
+            parts.append(f"CPU temperature is {cpu_temp} degrees.")
+        if gpu_temp is not None:
+            parts.append(f"GPU temperature is {gpu_temp} degrees.")
+        if not parts:
+            return "Temperature sensors are not available on this system."
+        return " ".join(parts) + " Normal."
+
+    def _strip_disallowed_phrases(self, text: str) -> str:
+        if not text:
+            return text
+        phrases = [
+            "I'm sorry",
+            "I cannot provide",
+            "you may want to consult",
+        ]
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        filtered = [s for s in sentences if not any(p.lower() in s.lower() for p in phrases)]
+        cleaned = " ".join(filtered).strip()
+        return cleaned
+
     def speak(self, text, interaction_id: str = ""):
         if not self.runtime_overrides.get("tts_enabled", True):
             self.logger.info("[TTS] Disabled by runtime override")
@@ -559,16 +621,22 @@ class ArgoPipeline:
                 self.logger.warning("No speech recognized.")
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                 return
+            user_text = normalize_system_text(user_text)
             stt_conf = 0.0
             try:
                 stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
             except Exception:
                 stt_conf = 0.0
-            if stt_conf < 0.15 or not user_text.strip():
-                if re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
+            if stt_conf < 0.35 or not user_text.strip():
+                if is_system_keyword(user_text):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
+                elif re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
-                else:
+                elif stt_conf < 0.15 or not user_text.strip():
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
+                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
+                        self.speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=interaction_id)
+                        self._low_conf_notice_given = True
                     self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                     return
 
@@ -645,6 +713,8 @@ class ArgoPipeline:
                         return
                     if title:
                         playback_started = music_player.play_by_song(title, None)
+                        if not playback_started and not artist:
+                            playback_started = music_player.play_by_artist(title, None)
                     if not playback_started and artist:
                         playback_started = music_player.play_by_artist(artist, None)
                     if not playback_started and intent.keyword:
@@ -688,8 +758,170 @@ class ArgoPipeline:
                 self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
                 return
 
+            if intent and intent.intent_type == IntentType.SYSTEM_HEALTH:
+                subintent = getattr(intent, "subintent", None)
+                raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
+                if subintent == "disk" or "drive" in raw_text_lower or "disk" in raw_text_lower:
+                    disks = get_disk_info()
+                    if not disks:
+                        response = "Hardware information unavailable."
+                    else:
+                        drive_match = re.search(r"\b([a-z])\s*drive\b", raw_text_lower)
+                        if not drive_match:
+                            drive_match = re.search(r"\b([a-z]):\b", raw_text_lower)
+                        if drive_match:
+                            letter = drive_match.group(1).upper()
+                            key = f"{letter}:"
+                            info = disks.get(key) or disks.get(letter)
+                            if info:
+                                response = (
+                                    f"{letter} drive is {info['percent']} percent full, "
+                                    f"with {info['free_gb']} gigabytes free."
+                                )
+                            else:
+                                response = "Hardware information unavailable."
+                        elif "fullest" in raw_text_lower or "most used" in raw_text_lower:
+                            disk, info = max(disks.items(), key=lambda x: x[1]["percent"])
+                            response = f"{disk} is the fullest drive at {info['percent']} percent used."
+                        elif "most free" in raw_text_lower or "most space" in raw_text_lower:
+                            disk, info = max(disks.items(), key=lambda x: x[1]["free_gb"])
+                            response = f"{disk} has the most free space at {info['free_gb']} gigabytes free."
+                        else:
+                            total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
+                            response = f"You have {total_free} gigabytes free across {len(disks)} drives."
+                elif subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
+                    profile = get_system_profile()
+                    gpus = get_gpu_profile()
+                    if subintent == "memory":
+                        ram_gb = profile.get("ram_gb") if profile else None
+                        response = (
+                            f"Your system has {ram_gb} gigabytes of memory."
+                            if ram_gb is not None
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "cpu":
+                        cpu_name = profile.get("cpu") if profile else None
+                        response = (
+                            f"Your CPU is a {cpu_name}."
+                            if cpu_name
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "gpu":
+                        if gpus:
+                            response = f"Your GPU is {gpus[0].get('name')}."
+                        else:
+                            response = "No GPU detected."
+                    elif subintent == "os":
+                        os_name = profile.get("os") if profile else None
+                        response = (
+                            f"You are running {os_name}."
+                            if os_name
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "motherboard":
+                        board = profile.get("motherboard") if profile else None
+                        response = (
+                            f"Your motherboard is {board}."
+                            if board
+                            else "Hardware information unavailable."
+                        )
+                    else:
+                        cpu_name = profile.get("cpu") if profile else None
+                        ram_gb = profile.get("ram_gb") if profile else None
+                        gpu_name = gpus[0].get("name") if gpus else None
+                        if not cpu_name or ram_gb is None:
+                            response = "Hardware information unavailable."
+                        else:
+                            response = (
+                                f"Your CPU is a {cpu_name}. "
+                                f"You have {ram_gb} gigabytes of memory."
+                            )
+                            if gpu_name:
+                                response += f" Your GPU is {gpu_name}."
+                elif subintent == "temperature":
+                    temps = get_temperature_health()
+                    if temps.get("error") == "TEMPERATURE_UNAVAILABLE":
+                        response = "Temperature sensors are not available on this system."
+                    else:
+                        response = self._format_temperature_response(temps)
+                else:
+                    health = get_system_health()
+                    self.logger.info(
+                        "[SYSTEM] cpu=%s ram=%s disk=%s",
+                        health.get("cpu_percent"),
+                        health.get("ram_percent"),
+                        health.get("disk_percent"),
+                    )
+                    response = self._format_system_health(health)
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+
+            if intent and intent.intent_type == IntentType.SYSTEM_INFO:
+                profile = get_system_profile()
+                gpus = get_gpu_profile()
+                subintent = getattr(intent, "subintent", None)
+                if subintent == "memory":
+                    ram_gb = profile.get("ram_gb") if profile else None
+                    response = (
+                        f"Your system has {ram_gb} gigabytes of memory."
+                        if ram_gb is not None
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "cpu":
+                    cpu_name = profile.get("cpu") if profile else None
+                    response = (
+                        f"Your CPU is a {cpu_name}."
+                        if cpu_name
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "gpu":
+                    if gpus:
+                        response = f"Your GPU is {gpus[0].get('name')}."
+                    else:
+                        response = "No GPU detected."
+                elif subintent == "os":
+                    os_name = profile.get("os") if profile else None
+                    response = (
+                        f"You are running {os_name}."
+                        if os_name
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "motherboard":
+                    board = profile.get("motherboard") if profile else None
+                    response = (
+                        f"Your motherboard is {board}."
+                        if board
+                        else "Hardware information unavailable."
+                    )
+                else:
+                    response = "Hardware information unavailable."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+
             self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
             ai_text = self.generate_response(user_text, interaction_id=interaction_id)
+            ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
+            ai_text = self._strip_disallowed_phrases(ai_text)
             if not ai_text.strip():
                 self.logger.warning("[LLM] Empty response")
                 self.broadcast("log", "Argo: [No response]")

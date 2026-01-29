@@ -64,6 +64,15 @@ Centralized safety policies and watchdogs were added to prevent hangs and silent
 
 See also: [TODO / Next Steps](TODO.md)
 
+## Milestone: Music + System Health Hardening (January 28, 2026)
+
+**Why:** keep system facts deterministic and reduce LLM dependency for system state.
+
+Highlights:
+- Hardware identity and disk usage are now deterministic (no LLM)
+- Disk queries support per-drive usage and “fullest/most free” queries
+- Music control hardened for preemption and safe stops
+
 ## Music Resolver (January 22, 2026)
 
 Human music requests are now resolved via a strict cascade:

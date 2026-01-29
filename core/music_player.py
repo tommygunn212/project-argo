@@ -643,6 +643,20 @@ class MusicPlayer:
                 intent=f"play {keyword}",
             )
 
+            if not tracks and fields.get("artist"):
+                tracks = self._db.query_tracks_artist_like(
+                    fields.get("artist"),
+                    limit=200,
+                    intent=f"play {keyword}",
+                )
+
+            if not tracks and fields.get("song"):
+                tracks = self._db.query_tracks_soft_title(
+                    fields.get("song"),
+                    limit=200,
+                    intent=f"play {keyword}",
+                )
+
             if not tracks:
                 logger.info(f"music_unresolved_phrase = \"{keyword}\"")
                 if output_sink:

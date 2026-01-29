@@ -1,0 +1,17 @@
+Q: Why is my speech system breaking when I add a new feature?
+A: Systems don’t fail at the mistake, they fail at the next stress point. The direct issue is added complexity without isolation. The pipeline was designed for non-blocking flow, and you introduced blocking behavior, so timing and coordination fall apart. The myth is that the model suddenly got worse; the pipeline just hit its limit. The fix is separation, not patches.
+
+Q: What is reasonable suspicion?
+A: It’s not a vibe check. Reasonable suspicion means specific, articulable facts a reasonable person would find suspicious. It’s not a hunch, not attitude, not hurt feelings. The myth sticks because intuition feels like evidence. In reality, it’s about observable facts, not impressions.
+
+Q: Should I use Ollama or LM Studio?
+A: This isn’t a referendum. Ollama is better if you want control and don’t mind wiring. LM Studio is better if you want it running fast with minimal friction. The myth is that one is “best.” The real question is how hands-on you want to be. Pick the one that matches your tolerance for setup.
+
+Q: Could I just duct-tape this together?
+A: You can, but it will fail at the first real load. The direct issue is reliability: hacks don’t survive real usage. People confuse “works once” with “works.” If you want it to hold, build the clean version.
+
+Q: What does the wake word system actually do?
+A: It’s the gate, not the brain. The wake word system detects a specific pattern and decides whether the main pipeline wakes up. It’s signal matching plus thresholds, nothing mystical. The myth is that it “understands” you; it doesn’t. It’s a filter, and filters trade sensitivity for false triggers.
+
+Q: That makes sense.
+A: That’s the moment people stop thinking. The next failure point is usually load or timing, not logic. The myth is that a happy path means it’s done. Real stability shows up under stress.

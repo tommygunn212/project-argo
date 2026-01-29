@@ -12,6 +12,7 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 - **Barge-in** force-releases audio, forces state to `LISTENING`, and safely terminates Piper.
 - **Runtime overrides** (global + next-interaction) are non-persistent and UI-controlled.
 - **Timeline events** capture STT/LLM/TTS/State/UI activity for deterministic replay.
+- **System health & disk queries** are deterministic and never routed to the LLM.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -180,7 +181,7 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 temperature = 0.7          # Moderate creativity
 max_tokens = 100          # Bounded responses
 ollama_endpoint = "http://localhost:11434"
-model = "argo:latest"     # Qwen via Ollama
+model = "qwen:latest"     # Qwen via Ollama
 ```
 
 **Why Isolated?**

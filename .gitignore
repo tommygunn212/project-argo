@@ -16,6 +16,7 @@ config.json
 .env
 .env.local
 .env.*.local
+config.json 2.template.txt
 
 # Runtime / generated state
 runtime/
@@ -23,6 +24,7 @@ orchestrator/
 memory/
 .hf_cache/
 gem_test/
+data/*.db
 
 # Temporary files
 temp/
@@ -32,6 +34,9 @@ audio/debug/
 *.jpg
 temp_piper/
 piper-master.zip
+monitors/*.zip
+voices/*.zip
+voices/
 
 # IDE / OS
 .vscode/

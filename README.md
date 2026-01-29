@@ -47,7 +47,7 @@ ollama serve
 ```
 Ensure the model is available:
 ```powershell
-ollama pull qwen2:latest
+ollama pull qwen:latest
 ```
 
 ### Run ARGO
@@ -66,6 +66,30 @@ python main.py
 - ARGO runs without it.
 - Music commands are disabled until indexed.
 - Re-ingest required if schema version changes.
+
+---
+
+## System Health & Hardware (Deterministic)
+
+These queries are **deterministic** and **never call the LLM**:
+- CPU, RAM, GPU, OS, motherboard identity
+- Disk health and free space (including per-drive queries)
+
+Examples:
+- “How full is my D drive?”
+- “Which drive has the most free space?”
+- “What drive is the fullest?”
+
+---
+
+## Milestone: Music + System Health Hardening (Jan 2026)
+
+**Why:** Reduce LLM dependency for system facts and make music control predictable under load.
+
+Highlights:
+- System health/hardware queries now return immediate, numeric answers
+- Disk queries are deterministic and never fall back to the LLM
+- Music playback preempts safely and resolves with stricter matching
 
 ---
 

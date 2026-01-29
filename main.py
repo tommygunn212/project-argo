@@ -33,6 +33,7 @@ from core.startup_checks import check_ollama
 from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
 from core.instrumentation import log_event
+from system_profile import get_system_profile, get_gpu_profile
 from core.config import (
     get_config,
     get_config_hash,
@@ -72,6 +73,11 @@ ws_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(messa
 root_logger.addHandler(ws_handler)
 
 logger = logging.getLogger("ARGO.Main")
+
+# Load static system profile once
+SYSTEM_PROFILE = get_system_profile()
+GPU_PROFILE = get_gpu_profile()
+logger.info("[SYSTEM] Hardware profile loaded")
 
 # Hardware Config
 config = get_config()
@@ -199,7 +205,8 @@ def _handle_control(command):
             except Exception:
                 pass
         if pipeline_ref:
-            pipeline_ref.transition_state("LISTENING", source="ui")
+            if pipeline_ref.current_state in {"IDLE", "LISTENING"}:
+                pipeline_ref.transition_state("LISTENING", source="ui")
     elif cmd == "SERVER_STOP":
         log_event("UI_CMD_STOP_SERVER", stage="ui")
         log_event("CONTROL_SERVER_STOP", stage="control")

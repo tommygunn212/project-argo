@@ -43,13 +43,23 @@ Nothing more.
 
 ---
 
+## Deterministic Bypasses (No LLM)
+
+The generator returns immediate, deterministic responses for:
+- System health queries (CPU/RAM/GPU/OS/motherboard)
+- Disk usage queries (per-drive, fullest, most free)
+
+These never call the LLM.
+
+---
+
 ## Implementation: LLMResponseGenerator
 
 ### Model Configuration
 
 ```python
 # Hardcoded for predictability
-Model: argo:latest (Qwen via Ollama, local endpoint)
+Model: qwen:latest (Qwen via Ollama, local endpoint)
 Temperature: 0.7 (deterministic but creative)
 Max tokens: 100 (keep responses brief)
 Streaming: False (single response, not streaming)
@@ -176,7 +186,7 @@ Creates 4 fake Intent objects → generates responses → prints results → exi
 
 [Test 2] Intent: question
        Text: 'what's the weather today?'
-       [OK] Response: 'I'm sorry, I don't have access to current weather...'
+    [OK] Response: 'I don’t have access to live weather data.'
 
 [Test 3] Intent: command
        Text: 'play some music'
@@ -184,7 +194,7 @@ Creates 4 fake Intent objects → generates responses → prints results → exi
 
 [Test 4] Intent: unknown
        Text: 'xyzabc foobar'
-       [OK] Response: '"Can you please clarify what 'xyzabc foobar' means?"'
+    [OK] Response: 'Can you clarify that?'
 ```
 
 ---
@@ -248,7 +258,7 @@ That's real engineering.
 
 | Choice | Value | Rationale |
 |--------|-------|-----------|
-| LLM | Qwen (argo:latest) | Local, 783ms baseline |
+| LLM | Qwen (qwen:latest) | Local, 783ms baseline |
 | Transport | Ollama HTTP | Standard local LLM interface |
 | Temperature | 0.7 | Balanced (deterministic but creative) |
 | Max tokens | 100 | Keep responses brief |

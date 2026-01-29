@@ -33,7 +33,7 @@ ollama serve
 
 Pull the model:
 ```powershell
-ollama pull qwen2:latest
+ollama pull qwen:latest
 ```
 
 Verify it’s running:
@@ -98,6 +98,25 @@ python main.py
 - ARGO continuously listens via VAD.
 - When speech is detected, it transcribes, generates a response, and speaks it.
 - The UI debugger shows live logs, model names, and latency metrics.
+
+---
+
+## System Health & Disk Queries (Deterministic)
+
+The following are deterministic and never call the LLM:
+- CPU, RAM, GPU, OS, motherboard
+- Drive usage and free space
+
+Examples:
+- “How full is my D drive?”
+- “Which drive has the most free space?”
+- “What drive is the fullest?”
+
+---
+
+## Milestone: Music + System Health Hardening (Jan 2026)
+
+**Why:** predictable system facts and stable music control under load.
 
 ---
 

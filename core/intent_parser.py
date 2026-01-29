@@ -21,7 +21,8 @@ import re
 import logging
 
 MUSIC_FILLER_WORDS = {
-    "play", "me", "a", "the", "some", "good", "song", "music", "from"
+    "play", "me", "a", "the", "some", "good", "song", "music", "from",
+    "can", "you", "please", "could", "would", "just"
 }
 MUSIC_MODIFIER_WORDS = {"good", "best", "random", "favorite", "favourite"}
 GENERIC_PLAY_PHRASES = {
@@ -33,6 +34,172 @@ GENERIC_PLAY_PHRASES = {
     "play something",
     "surprise me",
 }
+
+SYSTEM_HEALTH_TRIGGERS = [
+    "system health",
+    "computer health",
+    "system status",
+    "computer status",
+    "how's my system",
+    "hows my system",
+    "how is my system",
+    "how is my system doing",
+    "system check",
+    "gpu health",
+    "cpu health",
+    "system gpu health",
+    "system cpu health",
+    "disk space",
+    "free space",
+]
+
+SYSTEM_KEYWORDS = {
+    "how much memory do i have",
+    "total memory",
+    "installed memory",
+    "ram size",
+    "what cpu do i have",
+    "cpu model",
+    "cpu name",
+    "what processor do i have",
+    "processor model",
+    "processor name",
+    "what gpu do i have",
+    "gpu model",
+    "gpu name",
+    "graphics card",
+    "video card",
+    "graphics",
+    "system specs",
+    "hardware",
+    "operating system",
+    "os version",
+    "windows version",
+    "what os",
+    "what operating system",
+    "gpu health",
+    "cpu health",
+    "system health",
+    "system status",
+    "computer status",
+    "disk space",
+    "free space",
+    "memory usage",
+    "how much space do i have",
+    "which drive has the most free space",
+    "what drive is the fullest",
+}
+
+HARDWARE_KEYWORDS = [
+    "memory", "ram", "cpu", "processor",
+    "gpu", "graphics", "video card",
+    "system specs", "hardware",
+    "motherboard", "mainboard",
+]
+
+SYSTEM_MEMORY_QUERIES = [
+    "how much memory do i have",
+    "total memory",
+    "installed memory",
+    "ram size",
+    "memory usage",
+]
+
+SYSTEM_CPU_QUERIES = [
+    "what cpu do i have",
+    "cpu model",
+    "cpu name",
+    "what processor do i have",
+    "processor model",
+    "processor name",
+]
+
+SYSTEM_GPU_QUERIES = [
+    "what gpu do i have",
+    "gpu model",
+    "gpu name",
+    "graphics card",
+    "video card",
+    "graphics",
+]
+
+SYSTEM_OS_QUERIES = [
+    "operating system",
+    "os version",
+    "windows version",
+    "what os",
+    "what operating system",
+    "what system am i running",
+    "what system am i on",
+    "what os am i running",
+    "which os",
+    "which operating system",
+]
+
+SYSTEM_MOTHERBOARD_QUERIES = [
+    "what motherboard",
+    "motherboard",
+    "mainboard",
+]
+
+SYSTEM_NORMALIZE = {
+    "gpu health": "system gpu health",
+    "cpu health": "system cpu health",
+    "disk": "disk space",
+}
+
+TEMP_KEYWORDS = [
+    "temperature",
+    "temp",
+    "hot",
+    "overheating",
+    "heat",
+    "thermal",
+    "thermals",
+]
+
+DISK_QUERY_PHRASES = [
+    "drive",
+    "drives",
+    "disk",
+    "disks",
+    "free space",
+    "disk space",
+    "storage",
+    "fullest",
+    "most free",
+    "most space",
+    "how much space",
+]
+
+
+def detect_system_health(text: str) -> bool:
+    t = text.lower()
+    return any(p in t for p in SYSTEM_HEALTH_TRIGGERS)
+
+
+def detect_temperature_query(text: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in TEMP_KEYWORDS)
+
+
+def detect_disk_query(text: str) -> bool:
+    t = text.lower()
+    if re.search(r"\b[a-z]\s*drive\b", t):
+        return True
+    if re.search(r"\b[a-z]:\b", t):
+        return True
+    return any(k in t for k in DISK_QUERY_PHRASES)
+
+
+def normalize_system_text(text: str) -> str:
+    t = text.lower().strip()
+    return SYSTEM_NORMALIZE.get(t, t)
+
+
+def is_system_keyword(text: str) -> bool:
+    t = text.lower().strip()
+    return t in SYSTEM_KEYWORDS or detect_disk_query(t)
 
 
 class IntentType(Enum):
@@ -46,6 +213,8 @@ class IntentType(Enum):
     MUSIC_NEXT = "music_next"
     MUSIC_STATUS = "music_status"
     SLEEP = "sleep"
+    SYSTEM_HEALTH = "system_health"
+    SYSTEM_INFO = "system_info"
     DEVELOP = "develop"
     UNKNOWN = "unknown"
 
@@ -75,6 +244,7 @@ class Intent:
     is_generic_play: bool = False
     serious_mode: bool = False
     unresolved: bool = False
+    subintent: Optional[str] = None
     explicit_genre: bool = False
 
     def __str__(self) -> str:
@@ -85,9 +255,10 @@ class Intent:
         modifiers_str = f", modifiers={self.modifiers}" if self.modifiers else ""
         generic_str = ", generic_play=true" if self.is_generic_play else ""
         serious_str = ", serious_mode=true" if self.serious_mode else ""
+        subintent_str = f", subintent={self.subintent}" if self.subintent else ""
         return (
             f"Intent({self.intent_type.value}, confidence={self.confidence:.2f}"
-            f"{keyword_str}{artist_str}{title_str}{modifiers_str}{generic_str}{serious_str}, text='{self.raw_text[:50]}')"
+            f"{keyword_str}{artist_str}{title_str}{modifiers_str}{generic_str}{serious_str}{subintent_str}, text='{self.raw_text[:50]}')"
         )
 
 
@@ -358,7 +529,7 @@ class RuleBasedIntentParser(IntentParser):
             raise ValueError("text is empty")
 
         text_original = text.strip()
-        text_lower = text_original.lower()
+        text_lower = normalize_system_text(text_original.lower())
 
         # Phonetic fixes for common mishears
         phonetic_fixes = {
@@ -391,6 +562,58 @@ class RuleBasedIntentParser(IntentParser):
         ):
             return Intent(
                 intent_type=IntentType.SLEEP,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # Rule 0.05: SYSTEM_HEALTH temperature queries (hard deterministic)
+        if detect_temperature_query(text_lower):
+            return Intent(
+                intent_type=IntentType.SYSTEM_HEALTH,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+                subintent="temperature",
+            )
+
+        # Rule 0.06: SYSTEM_HEALTH disk queries (hard deterministic)
+        if detect_disk_query(text_lower):
+            return Intent(
+                intent_type=IntentType.SYSTEM_HEALTH,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+                subintent="disk",
+            )
+
+        # Rule 0.1: SYSTEM_HEALTH hardware queries (hard deterministic)
+        if any(k in text_lower for k in HARDWARE_KEYWORDS) or any(q in text_lower for q in SYSTEM_OS_QUERIES):
+            subintent = None
+            if any(q in text_lower for q in SYSTEM_MEMORY_QUERIES):
+                subintent = "memory"
+            elif any(q in text_lower for q in SYSTEM_CPU_QUERIES):
+                subintent = "cpu"
+            elif any(q in text_lower for q in SYSTEM_GPU_QUERIES):
+                subintent = "gpu"
+            elif any(q in text_lower for q in SYSTEM_OS_QUERIES):
+                subintent = "os"
+            elif any(q in text_lower for q in SYSTEM_MOTHERBOARD_QUERIES):
+                subintent = "motherboard"
+            else:
+                subintent = "hardware"
+            return Intent(
+                intent_type=IntentType.SYSTEM_HEALTH,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+                subintent=subintent,
+            )
+
+        # Rule 0.25: SYSTEM_HEALTH keywords (hard deterministic, no LLM)
+        if detect_system_health(text_lower):
+            return Intent(
+                intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
                 raw_text=text_original,
                 serious_mode=serious_mode,
@@ -567,6 +790,10 @@ class RuleBasedIntentParser(IntentParser):
 
     def _strip_music_anchors(self, text_original: str) -> str:
         anchors = [
+            "can you play",
+            "could you play",
+            "would you play",
+            "please play",
             "play",
             "playing",
             "played",
@@ -667,6 +894,10 @@ class RuleBasedIntentParser(IntentParser):
         play_index = -1
 
         anchor_phrases = [
+            "can you play",
+            "could you play",
+            "would you play",
+            "please play",
             "play",
             "playing",
             "played",
@@ -696,7 +927,7 @@ class RuleBasedIntentParser(IntentParser):
             
             if keyword_words:
                 # Remove common filler words
-                filler_words = {"music", "some", "song", "a", "for", "me"}
+                filler_words = {"music", "some", "song", "a", "for", "me", "can", "you", "please", "could", "would", "just"}
                 keyword_words = [w for w in keyword_words if w not in filler_words]
                 
                 if keyword_words:

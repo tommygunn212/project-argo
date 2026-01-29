@@ -52,6 +52,8 @@ MUSIC        # Music playback requests
 MUSIC_STOP   # Stop music
 MUSIC_NEXT   # Next/skip music
 MUSIC_STATUS # What's playing
+SYSTEM_HEALTH # Deterministic system health/disk queries
+SYSTEM_INFO  # Deterministic hardware identity (cpu/ram/gpu/os)
 UNKNOWN      # Unclassified, low confidence
 ```
 
@@ -69,6 +71,7 @@ class Intent:
 
 | Rule | Pattern | Intent | Confidence |
 |------|---------|--------|------------|
+| 0 | System health / disk / hardware keywords | SYSTEM_HEALTH | 1.00 (certain) |
 | 1 | Music STOP keywords | MUSIC_STOP | 1.00 (certain) |
 | 2 | Music NEXT keywords | MUSIC_NEXT | 1.00 (certain) |
 | 3 | Music STATUS keywords | MUSIC_STATUS | 1.00 (certain) |

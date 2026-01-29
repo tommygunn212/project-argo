@@ -69,7 +69,7 @@ import warnings
 # Suppress sounddevice Windows cffi warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 
-from core.intent_parser import Intent, IntentType
+from core.intent_parser import Intent, IntentType, normalize_system_text, is_system_keyword
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 from core.policy import (
@@ -83,6 +83,14 @@ from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
 from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
+from system_health import (
+    get_system_health,
+    get_memory_info,
+    get_temperatures,
+    get_temperature_health,
+    get_disk_info,
+)
+from system_profile import get_system_profile, get_gpu_profile
 
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
@@ -242,6 +250,7 @@ class Coordinator:
         self.generator = response_generator
         self.sink = output_sink
         self.logger = logger
+        self._low_conf_notice_given = False
 
         # Runtime overrides (non-persistent)
         self.runtime_overrides = get_runtime_overrides()
@@ -989,15 +998,25 @@ class Coordinator:
                     stt_conf = float(stt_metrics.get("confidence", 0.0))
                 except Exception:
                     stt_conf = 0.0
-            if stt_conf < 0.15 or not text.strip():
-                if re.search(r"\bcount\b", text, flags=re.IGNORECASE):
+            normalized_text = normalize_system_text(text)
+            if normalized_text != text:
+                text = normalized_text
+            if stt_conf < 0.35 or not text.strip():
+                if is_system_keyword(text):
+                    self.logger.info(
+                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but whitelisted system intent: {text}"
+                    )
+                elif re.search(r"\bcount\b", text, flags=re.IGNORECASE):
                     self.logger.info(
                         f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but count detected; continuing"
                     )
-                else:
+                elif stt_conf < 0.15 or not text.strip():
                     self.logger.info(
                         f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
                     )
+                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
+                        self._safe_speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=self.interaction_id)
+                        self._low_conf_notice_given = True
                     self.interaction_count -= 1
                     return False
 
@@ -1117,6 +1136,177 @@ class Coordinator:
             if intent.intent_type == IntentType.COUNT:
                 self.logger.info(f"[Iteration {self.interaction_count}] Count command detected")
                 response_text = self._build_count_response(text)
+                try:
+                    self._safe_speak(response_text, interaction_id=self.interaction_id)
+                    output_produced = True
+                except Exception:
+                    pass
+                self._last_utterance_time = time.time()
+                self.current_probe.mark("llm_end")
+                self.current_probe.mark("tts_start")
+                self.current_probe.mark("tts_end")
+                self.current_probe.log_summary()
+                self.latency_stats.add_probe(self.current_probe)
+                _finalize_response_watchdog()
+                return True
+
+            if intent.intent_type == IntentType.SYSTEM_HEALTH:
+                self.logger.info(f"[Iteration {self.interaction_count}] System health command detected")
+                subintent = getattr(intent, "subintent", None)
+                raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
+                bypass_llm = False
+                if "drive" in raw_text_lower or "disk" in raw_text_lower:
+                    bypass_llm = True
+                    if subintent is None:
+                        subintent = "disk"
+                if bypass_llm:
+                    self.logger.info("[SYSTEM] Disk query detected; bypassing LLM")
+                if subintent == "disk" or "drive" in raw_text_lower or "disk" in raw_text_lower:
+                    disks = get_disk_info()
+                    if not disks:
+                        response_text = "Hardware information unavailable."
+                    else:
+                        drive_match = re.search(r"\b([a-z])\s*drive\b", raw_text_lower)
+                        if not drive_match:
+                            drive_match = re.search(r"\b([a-z]):\b", raw_text_lower)
+                        if drive_match:
+                            letter = drive_match.group(1).upper()
+                            key = f"{letter}:"
+                            info = disks.get(key) or disks.get(letter)
+                            if info:
+                                response_text = (
+                                    f"{letter} drive is {info['percent']} percent full, "
+                                    f"with {info['free_gb']} gigabytes free."
+                                )
+                            else:
+                                response_text = "Hardware information unavailable."
+                        elif "fullest" in raw_text_lower or "most used" in raw_text_lower:
+                            disk, info = max(disks.items(), key=lambda x: x[1]["percent"])
+                            response_text = f"{disk} is the fullest drive at {info['percent']} percent used."
+                        elif "most free" in raw_text_lower or "most space" in raw_text_lower:
+                            disk, info = max(disks.items(), key=lambda x: x[1]["free_gb"])
+                            response_text = f"{disk} has the most free space at {info['free_gb']} gigabytes free."
+                        else:
+                            total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
+                            response_text = f"You have {total_free} gigabytes free across {len(disks)} drives."
+                elif subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
+                    profile = get_system_profile()
+                    gpus = get_gpu_profile()
+                    if subintent == "memory":
+                        ram_gb = profile.get("ram_gb") if profile else None
+                        response_text = (
+                            f"Your system has {ram_gb} gigabytes of memory."
+                            if ram_gb is not None
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "cpu":
+                        cpu_name = profile.get("cpu") if profile else None
+                        response_text = (
+                            f"Your CPU is a {cpu_name}."
+                            if cpu_name
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "gpu":
+                        if gpus:
+                            response_text = f"Your GPU is {gpus[0].get('name')}."
+                        else:
+                            response_text = "No GPU detected."
+                    elif subintent == "os":
+                        os_name = profile.get("os") if profile else None
+                        response_text = (
+                            f"You are running {os_name}."
+                            if os_name
+                            else "Hardware information unavailable."
+                        )
+                    elif subintent == "motherboard":
+                        board = profile.get("motherboard") if profile else None
+                        response_text = (
+                            f"Your motherboard is {board}."
+                            if board
+                            else "Hardware information unavailable."
+                        )
+                    else:
+                        cpu_name = profile.get("cpu") if profile else None
+                        ram_gb = profile.get("ram_gb") if profile else None
+                        gpu_name = gpus[0].get("name") if gpus else None
+                        if not cpu_name or ram_gb is None:
+                            response_text = "Hardware information unavailable."
+                        else:
+                            response_text = (
+                                f"Your CPU is a {cpu_name}. "
+                                f"You have {ram_gb} gigabytes of memory."
+                            )
+                            if gpu_name:
+                                response_text += f" Your GPU is {gpu_name}."
+                elif subintent == "temperature":
+                    temps = get_temperature_health()
+                    if temps.get("error") == "TEMPERATURE_UNAVAILABLE":
+                        response_text = "Temperature sensors are not available on this system."
+                    else:
+                        response_text = self._format_temperature_response(temps)
+                else:
+                    health = get_system_health()
+                    self.logger.info(
+                        "[SYSTEM] cpu=%s ram=%s disk=%s",
+                        health.get("cpu_percent"),
+                        health.get("ram_percent"),
+                        health.get("disk_percent"),
+                    )
+                    response_text = self._format_system_health(health)
+                try:
+                    self._safe_speak(response_text, interaction_id=self.interaction_id)
+                    output_produced = True
+                except Exception:
+                    pass
+                self._last_utterance_time = time.time()
+                self.current_probe.mark("llm_end")
+                self.current_probe.mark("tts_start")
+                self.current_probe.mark("tts_end")
+                self.current_probe.log_summary()
+                self.latency_stats.add_probe(self.current_probe)
+                _finalize_response_watchdog()
+                return True
+
+            if intent.intent_type == IntentType.SYSTEM_INFO:
+                self.logger.info(f"[Iteration {self.interaction_count}] System profile command detected")
+                profile = get_system_profile()
+                gpus = get_gpu_profile()
+                subintent = getattr(intent, "subintent", None)
+                if subintent == "memory":
+                    ram_gb = profile.get("ram_gb") if profile else None
+                    response_text = (
+                        f"Your system has {ram_gb} gigabytes of memory."
+                        if ram_gb is not None
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "cpu":
+                    cpu_name = profile.get("cpu") if profile else None
+                    response_text = (
+                        f"Your CPU is a {cpu_name}."
+                        if cpu_name
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "gpu":
+                    if gpus:
+                        response_text = f"Your GPU is {gpus[0].get('name')}."
+                    else:
+                        response_text = "No GPU detected."
+                elif subintent == "os":
+                    os_name = profile.get("os") if profile else None
+                    response_text = (
+                        f"You are running {os_name}."
+                        if os_name
+                        else "Hardware information unavailable."
+                    )
+                elif subintent == "motherboard":
+                    board = profile.get("motherboard") if profile else None
+                    response_text = (
+                        f"Your motherboard is {board}."
+                        if board
+                        else "Hardware information unavailable."
+                    )
+                else:
+                    response_text = "Hardware information unavailable."
                 try:
                     self._safe_speak(response_text, interaction_id=self.interaction_id)
                     output_produced = True
@@ -1297,6 +1487,10 @@ class Coordinator:
                         playback_started = music_player.play_by_song(title, None)
                         if playback_started:
                             self.logger.info(f"[Iteration {self.interaction_count}] Music route: SONG match")
+                        elif not artist:
+                            playback_started = music_player.play_by_artist(title, None)
+                            if playback_started:
+                                self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST fallback (title-only)")
 
                 if not playback_started and artist:
                     self.logger.info(f"[Iteration {self.interaction_count}] Music artist: '{artist}'")
@@ -2068,6 +2262,38 @@ class Coordinator:
             if re.search(rf"\b{word}\b", text, flags=re.IGNORECASE):
                 return value
         return 5
+
+    def _format_system_health(self, health: dict) -> str:
+        return (
+            f"CPU at {health.get('cpu_percent')} percent. "
+            f"Memory at {health.get('ram_percent')} percent. "
+            f"Disk {health.get('disk_percent')} percent full."
+        )
+
+    def _format_system_memory_info(self, total_gb: float, used_pct: float, temps: dict) -> str:
+        text = (
+            f"Your system has {total_gb} gigabytes of memory installed. "
+            f"Currently using about {used_pct} percent."
+        )
+        cpu_temp = temps.get("cpu")
+        gpu_temp = temps.get("gpu")
+        if cpu_temp is not None:
+            text += f" CPU temperature is {cpu_temp} degrees."
+        if gpu_temp is not None:
+            text += f" GPU temperature is {gpu_temp} degrees."
+        return text
+
+    def _format_temperature_response(self, temps: dict) -> str:
+        parts = []
+        cpu_temp = temps.get("cpu")
+        gpu_temp = temps.get("gpu")
+        if cpu_temp is not None:
+            parts.append(f"CPU temperature is {cpu_temp} degrees.")
+        if gpu_temp is not None:
+            parts.append(f"GPU temperature is {gpu_temp} degrees.")
+        if not parts:
+            return "Temperature sensors are not available on this system."
+        return " ".join(parts) + " Normal."
 
     def _safe_speak(self, text: str, interaction_id: Optional[str] = None) -> None:
         if not text or not text.strip():
