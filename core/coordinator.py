@@ -217,9 +217,9 @@ class Coordinator:
     AUDIO_SAMPLE_RATE = 16000  # Hz
     MAX_RECORDING_DURATION = 15.0  # seconds max
     MIN_RECORDING_DURATION = 0.9  # Minimum record duration
-    SILENCE_DURATION = 1.8  # Seconds of silence to stop recording
+    SILENCE_DURATION = 2.2  # Seconds of silence to stop recording
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration
-    SILENCE_TIMEOUT_SECONDS = 1.8  # Seconds of silence to stop recording
+    SILENCE_TIMEOUT_SECONDS = 2.2  # Seconds of silence to stop recording
     SILENCE_THRESHOLD = 250  # Audio level below this = silence (RMS absolute)
     RMS_SPEECH_THRESHOLD = 0.0005  # RMS normalized level (0-1) to START silence timer — LOWERED to 0.0005 for weak Brio signal
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context

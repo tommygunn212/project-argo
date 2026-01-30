@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_fixes():
     """Test the two critical fixes."""
@@ -18,7 +19,7 @@ def test_fixes():
     print("CRITICAL BUG FIXES TEST")
     print("="*80 + "\n")
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     # TEST 1: Year as integer from LLM
     print("TEST 1: Safe handling of integer year values")
@@ -33,7 +34,7 @@ def test_fixes():
         assert result == 1990, f"Expected 1990, got {result}"
     except TypeError as e:
         print(f"✗ FAILED: {e}")
-        return False
+        assert False
     
     # Also test string versions
     result = player._normalize_year_from_llm("1990")
@@ -78,7 +79,7 @@ def test_fixes():
             print(f"✓ '{keyword}' → artist='{extracted_artist}'")
         else:
             print(f"✗ '{keyword}' → got '{extracted_artist}', expected '{expected_artist}'")
-            return False
+            assert False
     
     print()
     
@@ -103,13 +104,12 @@ def test_fixes():
             print(f"   {i}. {track['artist']} - {track['song']}")
     else:
         print(f"✗ FAILED: No tracks found (would be stripped to 'guns roses')")
-        return False
+        assert False
     
     print("\n" + "="*80)
     print("✅ ALL FIXES VERIFIED")
     print("="*80 + "\n")
-    return True
+    return
 
 if __name__ == "__main__":
-    success = test_fixes()
-    sys.exit(0 if success else 1)
+    test_fixes()

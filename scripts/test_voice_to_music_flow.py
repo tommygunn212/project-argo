@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 from core.intent_parser import RuleBasedIntentParser, IntentType
 
 def test_voice_to_music_flow():
@@ -23,7 +24,7 @@ def test_voice_to_music_flow():
     
     # Initialize components
     parser = RuleBasedIntentParser()
-    music_player = MusicPlayer()
+    music_player = MusicPlayer(provider=MockJellyfinProvider())
     
     if not music_player.jellyfin_provider:
         print("✗ Jellyfin provider not initialized")

@@ -3,10 +3,12 @@
 Test WebSocket connection to ARGO backend
 """
 import asyncio
+import pytest
 import websockets
 import json
 import sys
 
+@pytest.mark.asyncio
 async def test_websocket():
     uri = "ws://localhost:8001/ws"
     

@@ -9,15 +9,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+import pytest
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 
-player = MusicPlayer()
+player = MusicPlayer(provider=MockJellyfinProvider())
 
 # Skip test if Jellyfin is not available
 if not player.jellyfin_provider:
-    print("[SKIP] Jellyfin provider not available. Skipping cascading fallback robustness test.")
-    sys.exit(0)
+    pytest.skip("Jellyfin provider not available. Skipping cascading fallback robustness test.", allow_module_level=True)
 
 print("\n" + "="*80)
 print("CASCADING FALLBACK ROBUSTNESS TEST")

@@ -207,9 +207,9 @@ class TestPiperOutputSink(unittest.TestCase):
         await self.sink.stop()
         
         # Event loop should still be responsive
-        start = time.time()
-        await asyncio.sleep(0.01)
-        elapsed = time.time() - start
+        start = time.perf_counter()
+        await asyncio.to_thread(time.sleep, 0.01)
+        elapsed = time.perf_counter() - start
         
         # Should be responsive (not stuck)
         self.assertGreater(elapsed, 0.005)

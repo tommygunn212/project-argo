@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_cascading_fallback():
     """Test cascading fallback with Guns and Roses example."""
@@ -26,7 +27,7 @@ def test_cascading_fallback():
     print("CASCADING FALLBACK SEARCH TEST")
     print("="*80 + "\n")
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     # Simulate what the LLM might hallucinate
     print("Scenario: User says 'Play Guns and Roses'")
@@ -74,7 +75,7 @@ def test_cascading_fallback():
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']} ({track.get('year', 'N/A')})")
         print()
-        return True
+        return
     else:
         print("[!] Not found in relaxed mode either\n")
     
@@ -91,7 +92,7 @@ def test_cascading_fallback():
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']} ({track.get('year', 'N/A')})")
         print()
-        return True
+        return
     else:
         print("[FAIL] Not found\n")
     
@@ -106,15 +107,14 @@ def test_cascading_fallback():
         for i, track in enumerate(tracks[:3], 1):
             print(f"   {i}. {track['artist']} - {track['song']}")
         print()
-        return True
+        return
     else:
         print("[FAIL] Not found\n")
     
     print("="*80)
     print("[OK] CASCADING FALLBACK LOGIC TEST COMPLETE")
     print("="*80 + "\n")
-    return True
+    return
 
 if __name__ == "__main__":
-    success = test_cascading_fallback()
-    sys.exit(0 if success else 1)
+    test_cascading_fallback()

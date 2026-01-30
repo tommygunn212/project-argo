@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
-player = MusicPlayer()
+player = MusicPlayer(provider=MockJellyfinProvider())
 result = player._parse_music_keyword("give me some pink floyd")
 print("Result:", result)
 print("Artist:", repr(result.get("artist")))

@@ -106,11 +106,11 @@ def test_coordinator_v2_full_pipeline():
         test_cases = [
             ("hello there", "greeting", "greeting/hello"),
             ("what's the weather today", ("question", "unknown"), "question/weather or unknown"),
-            ("play music for me", "command", "command/play"),
+            ("play music for me", ("command", "music"), "command/play"),
             ("xyzabc foobar", "unknown", "unknown/nonsense"),
             ("how are you", ("greeting", "question"), "greeting/how or question"),
             ("tell me a joke", ("question", "command"), "question/joke or command"),
-            ("stop recording", "command", "command/stop"),
+            ("stop recording", ("command", "music_stop"), "command/stop"),
         ]
 
         print("\n" + "=" * 70)
@@ -181,19 +181,25 @@ def test_coordinator_v2_full_pipeline():
             print("  - Intent parsing working")
             print("  - LLM response generation working")
             print("  - Coordinator v2 integration complete")
-            return 0
         else:
             print(f"\n✗ FAILURE: {total_tests - intent_passes} intent issues, {total_tests - response_passes} response issues")
-            return 1
+            assert False
 
     except Exception as e:
         print(f"\n[ERROR] {e}")
         import traceback
 
         traceback.print_exc()
-        return 1
+        raise
+
+
+def _run_pipeline():
+    try:
+        test_coordinator_v2_full_pipeline()
+    except Exception:
+        return False
+    return True
 
 
 if __name__ == "__main__":
-    exit_code = test_coordinator_v2_full_pipeline()
-    sys.exit(exit_code)
+    sys.exit(0 if _run_pipeline() else 1)

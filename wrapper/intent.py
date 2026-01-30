@@ -150,6 +150,8 @@ class IntentArtifact:
         self.confidence = 0.0
         self.status = "proposed"
         self.requires_confirmation = True
+        self.requires_execution = False
+        self.approved = False
     
     def to_dict(self) -> Dict:
         """Convert artifact to dictionary for logging."""
@@ -162,7 +164,9 @@ class IntentArtifact:
             "parsed_intent": self.parsed_intent,
             "confidence": self.confidence,
             "status": self.status,
-            "requires_confirmation": self.requires_confirmation
+            "requires_confirmation": self.requires_confirmation,
+            "requires_execution": self.requires_execution,
+            "approved": self.approved,
         }
     
     def to_json(self) -> str:
@@ -387,6 +391,8 @@ def create_intent_artifact(
     parser = CommandParser()
     artifact.parsed_intent = parser.parse(raw_text)
     artifact.confidence = artifact.parsed_intent.get("confidence", 0.0)
+    verb = (artifact.parsed_intent.get("verb") or "").lower()
+    artifact.requires_execution = verb in {"save", "write", "open"}
     
     logger.info(
         f"[{artifact.id}] Created IntentArtifact from {source_type} source. "
@@ -395,6 +401,13 @@ def create_intent_artifact(
     )
     
     return artifact
+
+
+def execute_intent(artifact: IntentArtifact):
+    """Execution guard: approved intents only; no side effects here."""
+    if getattr(artifact, "requires_execution", False) and not getattr(artifact, "approved", False):
+        return
+    return
 
 
 # ============================================================================
@@ -429,6 +442,7 @@ class IntentStorage:
         artifact = self.retrieve(artifact_id)
         if artifact:
             artifact.status = "approved"
+            artifact.approved = True
             logger.info(f"Approved artifact: {artifact_id}")
     
     def reject(self, artifact_id: str):

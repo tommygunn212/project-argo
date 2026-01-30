@@ -47,7 +47,7 @@ def test_interruption_1():
     print("[Note] STOP command latency is measured in core/state_machine.py")
     print("[Status] State machine tested: SPEAKING -> LISTENING transition works")
     print("[Result] STOP latency: <50ms (verified by state machine implementation)")
-    return True
+    return
 
 def test_interruption_2():
     """Tier 2 Test 2: Interrupt second response"""
@@ -60,7 +60,7 @@ def test_interruption_2():
     print()
     print("[Status] STOP command latency verified in state machine")
     print("[Result] PASS (state transition <50ms)")
-    return True
+    return
 
 def test_interruption_3():
     """Tier 2 Test 3: Interrupt third response"""
@@ -73,6 +73,14 @@ def test_interruption_3():
     print()
     print("[Status] STOP command latency verified in state machine")
     print("[Result] PASS (state transition <50ms)")
+    return
+
+
+def _run_test(test_fn):
+    try:
+        test_fn()
+    except AssertionError:
+        return False
     return True
 
 if __name__ == "__main__":
@@ -85,9 +93,9 @@ if __name__ == "__main__":
     
     # Run tests
     try:
-        results.append(("Interruption 1", test_interruption_1()))
-        results.append(("Interruption 2", test_interruption_2()))
-        results.append(("Interruption 3", test_interruption_3()))
+        results.append(("Interruption 1", _run_test(test_interruption_1)))
+        results.append(("Interruption 2", _run_test(test_interruption_2)))
+        results.append(("Interruption 3", _run_test(test_interruption_3)))
     except Exception as e:
         print(f"\n[ERROR] {e}")
         sys.exit(1)

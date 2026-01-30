@@ -464,6 +464,10 @@ class TestNOExecutionGuarantee(unittest.TestCase):
     
     def test_no_file_creation_on_save(self):
         """Test: 'save as report.txt' does NOT create file."""
+        path = Path("test_output.txt")
+        if path.exists():
+            path.unlink()
+
         artifact = create_intent_artifact("save as test_output.txt", source_type="typed")
         intent_storage.store(artifact)
         intent_storage.approve(artifact.id)

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 from core.intent_parser import RuleBasedIntentParser
 
 def test_hybrid_extraction():
@@ -22,7 +23,7 @@ def test_hybrid_extraction():
     print("="*80)
     
     parser = RuleBasedIntentParser()
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     # Test cases mixing structured and natural language patterns
     test_cases = [

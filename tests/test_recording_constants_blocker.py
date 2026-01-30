@@ -89,7 +89,7 @@ def test_constants():
             print(f"  ❌ Coordinator instantiation failed: {e}")
             import traceback
             traceback.print_exc()
-            return False
+            raise
         
         print("\n" + "=" * 70)
         print("✅ ALL TESTS PASSED - BLOCKER FIXED")
@@ -103,14 +103,17 @@ def test_constants():
         print("  3. Minimum {0}s enforced ✓".format(Coordinator.MIN_RECORDING_DURATION))
         print("  4. No AttributeError crash ✓")
         
-        return True
+        return
         
     except Exception as e:
         print(f"\n❌ TEST FAILED: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
 if __name__ == "__main__":
-    success = test_constants()
-    sys.exit(0 if success else 1)
+    try:
+        test_constants()
+    except Exception:
+        sys.exit(1)
+    sys.exit(0)

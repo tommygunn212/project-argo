@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_hallucination_scenario():
     """
@@ -34,7 +35,7 @@ def test_hallucination_scenario():
     print("HALLUCINATION FIX DEMONSTRATION")
     print("="*80 + "\n")
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     # Simulate a realistic hallucination scenario
     print("SCENARIO: User says 'Play Guns and Roses'")
@@ -102,8 +103,7 @@ def test_hallucination_scenario():
     print("\n" + "="*80)
     print("✅ CASCADING FALLBACK SUCCESSFULLY HANDLES HALLUCINATION")
     print("="*80 + "\n")
-    return True
+    return
 
 if __name__ == "__main__":
-    success = test_hallucination_scenario()
-    sys.exit(0 if success else 1)
+    test_hallucination_scenario()

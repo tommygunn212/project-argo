@@ -323,6 +323,10 @@
                     <div className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xl">
                         <div>
                             <h1 className="text-2xl font-black text-blue-400 tracking-tight">ARGO <span className="text-slate-600 font-mono text-sm">TROUBLESHOOTER v2.6</span></h1>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500 font-semibold uppercase tracking-widest">
+                                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-800 text-blue-300">A</span>
+                                <span>Architect — Tommy Gunn</span>
+                            </div>
                             <div className="flex items-center gap-2 mt-1">
                                 <div className={`w-2 h-2 rounded-full ${ws.current?.readyState === 1 ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
                                 <span className="text-xs text-slate-500 font-mono uppercase">{ws.current?.readyState === 1 ? 'Online' : 'Offline'}</span>

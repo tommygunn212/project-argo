@@ -299,19 +299,25 @@ def test_coordinator_v3_loop():
             print("  - Loop exits on stop keyword correctly")
             print("  - Each turn is independent (no memory)")
             print("  - Coordinator v3 loop is bounded and controlled")
-            return 0
         else:
             print(f"\n✗ FAILURE: Some tests failed")
-            return 1
+            assert False
 
     except Exception as e:
         print(f"\n[ERROR] {e}")
         import traceback
 
         traceback.print_exc()
-        return 1
+        raise
+
+
+def _run_loop():
+    try:
+        test_coordinator_v3_loop()
+    except Exception:
+        return False
+    return True
 
 
 if __name__ == "__main__":
-    exit_code = test_coordinator_v3_loop()
-    sys.exit(exit_code)
+    sys.exit(0 if _run_loop() else 1)

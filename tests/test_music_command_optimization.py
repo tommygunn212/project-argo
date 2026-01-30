@@ -13,6 +13,7 @@ Validates 8-part music command improvements:
 
 import sys
 from pathlib import Path
+import pytest
 
 # Add workspace to path
 workspace_root = Path(__file__).parent
@@ -57,7 +58,7 @@ def test_keyword_normalization():
             failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_llm_bypass():
@@ -88,7 +89,7 @@ def test_llm_bypass():
             print(f"    '{command}' -> Expected: {expected_intent.value}, Got: {intent.intent_type.value}")
     
     print(f"\n  Result: {passed}/{len(music_intents)} music intents recognized")
-    return passed == len(music_intents)
+    assert passed == len(music_intents)
 
 
 def test_genre_synonym_mapping():
@@ -125,7 +126,7 @@ def test_genre_synonym_mapping():
             failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_adjacent_genre_fallback():
@@ -158,7 +159,7 @@ def test_adjacent_genre_fallback():
             failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_genre_normalization_in_adjacency():
@@ -189,7 +190,7 @@ def test_genre_normalization_in_adjacency():
             failed += 1
     
     print(f"\n  Result: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_music_player_integration():
@@ -203,7 +204,7 @@ def test_music_player_integration():
     
     if not player or not player.index:
         print("  [SKIP] Music player not initialized")
-        return True
+        pytest.skip("Music player not initialized")
     
     # Test that normalize_genre works with actual music index
     print(f"  Music index loaded: {len(index.tracks)} tracks")
@@ -217,7 +218,6 @@ def test_music_player_integration():
     print(f"  Sample genres in index: {sorted(list(available_genres)[:5])}")
     
     print("  [PASS] Music player initialized and index loaded")
-    return True
 
 
 def test_no_random_fallback_in_play_by_genre():
@@ -230,17 +230,24 @@ def test_no_random_fallback_in_play_by_genre():
     
     if not player or not player.index:
         print("  [SKIP] Music player not initialized")
-        return True
+        pytest.skip("Music player not initialized")
     
     # Test that play_by_genre with invalid genre and no adjacent doesn't play random
     result = player.play_by_genre("xyznonexistentgenrexyz", None)
     
     if result is False:
         print("  [PASS] play_by_genre returns False for invalid genre (no random fallback)")
-        return True
     else:
         print("  [FAIL] play_by_genre returned True for invalid genre")
+        assert False
+
+
+def _run_test(test_fn):
+    try:
+        test_fn()
+    except AssertionError:
         return False
+    return True
 
 
 def main():
@@ -262,7 +269,7 @@ def main():
     results = []
     for name, test_func in tests:
         try:
-            result = test_func()
+            result = _run_test(test_func)
             results.append((name, result))
         except Exception as e:
             print(f"  [ERROR] {e}")

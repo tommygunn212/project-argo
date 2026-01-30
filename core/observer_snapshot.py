@@ -67,7 +67,7 @@ class ObserverSnapshot:
         )
 
 
-def get_snapshot(coordinator) -> ObserverSnapshot:
+def get_snapshot_from_coordinator(coordinator) -> ObserverSnapshot:
     """
     Extract read-only snapshot from Coordinator.
     
@@ -165,3 +165,26 @@ def get_snapshot(coordinator) -> ObserverSnapshot:
         session_memory_summary=memory_summary,
         latency_stats_summary=latency_summary,
     )
+
+
+def get_observer_snapshot() -> Dict[str, str]:
+    """
+    Lightweight observer snapshot for CLI usage (read-only, no coordinator).
+    """
+    return {
+        "ITERATION STATE": "No active coordinator. Read-only observer snapshot.",
+        "LAST INTERACTION": "No interaction data available.",
+        "SESSION MEMORY": "Memory unavailable in observer-only mode.",
+        "LATENCY STATISTICS": "No latency data available.",
+    }
+
+
+def get_snapshot(coordinator=None):
+    """Public observer snapshot API.
+
+    If a coordinator is provided, return an ObserverSnapshot extracted
+    from live state. Otherwise return a CLI-friendly read-only snapshot.
+    """
+    if coordinator is None:
+        return get_observer_snapshot()
+    return get_snapshot_from_coordinator(coordinator)

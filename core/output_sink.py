@@ -39,6 +39,7 @@ import os
 import asyncio
 import subprocess
 import sys
+import shutil
 from abc import ABC, abstractmethod
 from typing import Optional, Callable
 import queue
@@ -211,17 +212,19 @@ _audio_disabled_warning_issued = False
 def get_output_sink() -> OutputSink:
     global _output_sink, _audio_disabled_warning_issued
     if _output_sink is None:
-        if VOICE_ENABLED and PIPER_ENABLED:
+        explicit_sink = os.getenv("OUTPUT_SINK", "").strip().lower()
+        if not VOICE_ENABLED or not PIPER_ENABLED or explicit_sink != "piper":
+            if not _audio_disabled_warning_issued:
+                print("\n[WARNING] Audio output is disabled by environment flags. ARGO will respond silently.\nTo enable voice output, set VOICE_ENABLED=true and PIPER_ENABLED=true\n", file=sys.stderr)
+                _audio_disabled_warning_issued = True
+            _output_sink = SilentOutputSink()
+        else:
+            # Only initialize Piper when explicitly enabled
             try:
                 _output_sink = PiperOutputSink()
             except Exception as e:
                 print(f"⚠ Failed to initialize PiperOutputSink: {e}", file=sys.stderr)
                 _output_sink = SilentOutputSink()
-        else:
-            if not _audio_disabled_warning_issued:
-                print("\n[WARNING] Audio output is disabled by environment flags. ARGO will respond silently.\nTo enable voice output, set VOICE_ENABLED=true and PIPER_ENABLED=true\n", file=sys.stderr)
-                _audio_disabled_warning_issued = True
-            _output_sink = SilentOutputSink()
     return _output_sink
 
 def set_output_sink(sink: OutputSink) -> None:
@@ -307,11 +310,13 @@ class PiperOutputSink(OutputSink):
         self._piper_process: Optional[subprocess.Popen] = None
         self._playback_lock = threading.Lock()
         self._is_playing = False
+        self._sd_stream = None
         self._on_sentence_dequeued: Optional[Callable[[], None]] = None
         self._on_idle: Optional[Callable[[], None]] = None
         self._on_playback_start: Optional[Callable[[], None]] = None
         self._on_playback_complete: Optional[Callable[[], None]] = None
         self._pending_text: str = ""
+        self._playback_task = None
         
         # HARDENING STEP 2: Interaction ID for zombie callback filtering
         self._interaction_id: Optional[int] = None
@@ -322,6 +327,51 @@ class PiperOutputSink(OutputSink):
         
         if self._profiling_enabled:
             print(f"[DEBUG] PiperOutputSink: Worker thread started", file=sys.stderr)
+
+    def _safe_close_process_pipes(self, proc: subprocess.Popen) -> None:
+        for pipe in (getattr(proc, "stdin", None), getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
+            try:
+                if pipe:
+                    pipe.close()
+            except Exception:
+                pass
+
+    def _safe_kill_process(self, proc: subprocess.Popen) -> None:
+        if not proc:
+            return
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.1)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=0.1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            self._safe_close_process_pipes(proc)
+
+    def _abort_audio_output(self) -> None:
+        try:
+            if self._sd_stream:
+                try:
+                    self._sd_stream.abort()
+                except Exception:
+                    pass
+                try:
+                    self._sd_stream.close()
+                except Exception:
+                    pass
+        finally:
+            self._sd_stream = None
+        try:
+            import sounddevice
+            sounddevice.stop()
+        except Exception:
+            pass
     
     def _worker(self):
         """
@@ -432,10 +482,18 @@ class PiperOutputSink(OutputSink):
                     stderr=subprocess.PIPE,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
+                self._piper_process = piper_process
                 
                 # Send text to stdin
-                piper_process.stdin.write(sentence.encode("utf-8"))
-                piper_process.stdin.close()
+                try:
+                    piper_process.stdin.write(sentence.encode("utf-8"))
+                except (BrokenPipeError, ValueError, OSError):
+                    return
+                finally:
+                    try:
+                        piper_process.stdin.close()
+                    except Exception:
+                        pass
                 
                 if self._profiling_enabled:
                     print(f"[PIPER_PROFILING] piper process started, text sent")
@@ -452,20 +510,14 @@ class PiperOutputSink(OutputSink):
         except subprocess.TimeoutExpired:
             print(f"[AUDIO_ERROR] Piper subprocess timeout", file=sys.stderr)
             if piper_process:
-                piper_process.kill()
+                self._safe_kill_process(piper_process)
         except Exception as e:
             print(f"[AUDIO_ERROR] Play sentence error: {type(e).__name__}: {e}", file=sys.stderr)
             if piper_process:
-                try:
-                    piper_process.terminate()
-                except:
-                    pass
+                self._safe_kill_process(piper_process)
         finally:
             if piper_process:
-                try:
-                    piper_process.terminate()
-                except Exception:
-                    pass
+                self._safe_kill_process(piper_process)
             self._piper_process = None
             
             # Log total duration
@@ -517,7 +569,10 @@ class PiperOutputSink(OutputSink):
             def producer():
                 nonlocal queued_frames, total_frames
                 while True:
-                    data = process.stdout.read(CHUNK_BYTES)
+                    try:
+                        data = process.stdout.read(CHUNK_BYTES)
+                    except (ValueError, OSError):
+                        break
                     if not data:
                         break
                     audio_queue.put(data)
@@ -530,6 +585,8 @@ class PiperOutputSink(OutputSink):
 
             def callback(outdata, frames, time_info, status):
                 nonlocal queued_frames
+                if self._stop_event.is_set():
+                    raise sounddevice.CallbackStop()
                 if status and self._profiling_enabled:
                     print(f"[AUDIO_STATUS] {status}", file=sys.stderr)
                 out = np.zeros(frames, dtype=np.float32)
@@ -585,16 +642,22 @@ class PiperOutputSink(OutputSink):
                 dtype='float32',
                 blocksize=BLOCK_FRAMES,
                 callback=callback,
-            ):
+            ) as stream:
+                self._sd_stream = stream
                 while not producer_done.is_set() or not audio_queue.empty():
+                    if self._stop_event.is_set():
+                        break
                     time.sleep(0.01)
 
             if self._profiling_enabled:
                 print(f"[PIPER_PROFILING] playback_complete")
 
             # Hardware drain
-            sounddevice.wait()
-            time.sleep(0.05)
+            try:
+                sounddevice.wait()
+                time.sleep(0.05)
+            except Exception:
+                pass
 
             return total_frames / SAMPLE_RATE if total_frames else 0
         
@@ -604,8 +667,10 @@ class PiperOutputSink(OutputSink):
                 import traceback
                 traceback.print_exc()
             return 0
+        finally:
+            self._sd_stream = None
     
-    def send(self, text: str) -> None:
+    def _send_sync(self, text: str) -> None:
         """
         Send text for audio playback (non-blocking, queue-based).
         
@@ -634,6 +699,23 @@ class PiperOutputSink(OutputSink):
                 self.text_queue.put(sentence)
                 if self._profiling_enabled:
                     print(f"[DEBUG] Queued sentence: {sentence[:50]}...", file=sys.stderr)
+
+    async def send(self, text: str) -> bool:
+        """
+        Async send wrapper (non-blocking). Returns immediately.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            if self._playback_task and hasattr(self._playback_task, "cancel"):
+                try:
+                    self._playback_task.cancel()
+                except Exception:
+                    pass
+            self._playback_task = loop.run_in_executor(None, self._send_sync, text)
+        except RuntimeError:
+            # No running loop; run sync
+            self._send_sync(text)
+        return True
 
     def set_playback_hooks(
         self,
@@ -683,7 +765,7 @@ class PiperOutputSink(OutputSink):
         self._interaction_id = interaction_id
         # INSTRUMENTATION: Log TTS start
         log_event(f"TTS START (interaction_id={interaction_id})")
-        self.send(text)
+        self._send_sync(text)
         
         # FORCE_BLOCKING_TTS: Wait for all audio to be played (testing mode)
         if FORCE_BLOCKING_TTS:
@@ -737,11 +819,19 @@ class PiperOutputSink(OutputSink):
         # Kill Piper immediately
         if self._piper_process:
             try:
-                self._piper_process.kill()
-            except:
+                self._safe_kill_process(self._piper_process)
+            except Exception:
                 pass
             finally:
                 self._piper_process = None
+
+        # Abort audio output immediately (sounddevice)
+        self._abort_audio_output()
+        try:
+            if self._playback_task and hasattr(self._playback_task, "cancel"):
+                self._playback_task.cancel()
+        except Exception:
+            pass
         
         # Signal not playing
         self._is_playing = False
@@ -773,18 +863,19 @@ class PiperOutputSink(OutputSink):
         # BRUTAL: Kill Piper process immediately (no timeout, no mercy)
         if self._piper_process:
             try:
-                # First try terminate
-                self._piper_process.terminate()
-                try:
-                    self._piper_process.wait(timeout=0.1)  # Very short grace period
-                except:
-                    # Force kill if terminate didn't work
-                    self._piper_process.kill()
-                    self._piper_process.wait(timeout=0.1)
-            except:
-                pass  # Already dead
+                self._safe_kill_process(self._piper_process)
+            except Exception:
+                pass
             finally:
                 self._piper_process = None
+
+        # Abort audio output immediately (sounddevice)
+        self._abort_audio_output()
+        try:
+            if self._playback_task and hasattr(self._playback_task, "cancel"):
+                self._playback_task.cancel()
+        except Exception:
+            pass
         
         # Stop music if playing
         try:
@@ -801,6 +892,10 @@ class PiperOutputSink(OutputSink):
 # ============================================================================
 # EDGE-TTS IMPLEMENTATION (TASK 18: CLOUD TTS)
 # ============================================================================
+
+class EdgeTTSLiveKitOutputSink(SilentOutputSink):
+    """Lightweight stub for LiveKit output (tests only)."""
+    pass
 
 class EdgeTTSOutputSink(OutputSink):
     """

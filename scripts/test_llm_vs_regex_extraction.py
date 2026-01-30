@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_extraction_comparison():
     """Compare regex and LLM extraction methods."""
@@ -20,7 +21,7 @@ def test_extraction_comparison():
     print("Comparing Regex vs LLM-based Metadata Extraction\n")
     print("="*80)
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     # Test cases: structured patterns and natural language patterns
     test_cases = [

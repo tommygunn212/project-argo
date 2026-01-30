@@ -195,14 +195,17 @@ Result with improvements:
         print(f"\nTo test with real recording, run Argo normally")
         print(f"and observe [Record] metrics in logs.")
         
-        return True
+        return
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+      print(f"\n❌ ERROR: {e}")
+      import traceback
+      traceback.print_exc()
+      raise
 
 if __name__ == "__main__":
-    success = test_recording_improvements()
-    sys.exit(0 if success else 1)
+  try:
+    test_recording_improvements()
+  except Exception:
+    sys.exit(1)
+  sys.exit(0)

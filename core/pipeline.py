@@ -612,13 +612,13 @@ class ArgoPipeline:
         self.stop_signal.clear()
         self.is_speaking = True
         self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
-        
+
         piper_exe = shutil.which("piper")
         if piper_exe:
             cmd = [piper_exe, "--model", self.piper_model_path, "--output-raw"]
         else:
             cmd = [sys.executable, "-m", "piper", "--model", self.piper_model_path, "--output-raw"]
-        
+
         try:
             try:
                 self.audio.acquire_audio("TTS", interaction_id=interaction_id)
@@ -634,12 +634,31 @@ class ArgoPipeline:
             )
             try:
                 if self.tts_process.stdout:
-                    os.set_blocking(self.tts_process.stdout.fileno(), False)
+                    # Use os.set_blocking if available, else fallback for cross-platform
+                    try:
+                        set_blocking = getattr(os, "set_blocking", None)
+                        if set_blocking:
+                            set_blocking(self.tts_process.stdout.fileno(), False)
+                        else:
+                            if sys.platform != "win32":
+                                try:
+                                    import fcntl
+                                    getfl = getattr(fcntl, "F_GETFL", None)
+                                    setfl = getattr(fcntl, "F_SETFL", None)
+                                    nonblock = getattr(os, "O_NONBLOCK", 0)
+                                    if getfl is not None and setfl is not None:
+                                        flags = fcntl.fcntl(self.tts_process.stdout.fileno(), getfl)
+                                        if nonblock:
+                                            fcntl.fcntl(self.tts_process.stdout.fileno(), setfl, flags | nonblock)
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        self.logger.warning(f"[TTS] Could not set non-blocking mode: {e}")
             except Exception:
                 pass
             if self.tts_process.stdin:
                 try:
-                    self.tts_process.stdin.write(text.encode('utf-8'))
+                    self.tts_process.stdin.write((text or "").encode('utf-8'))
                 except BrokenPipeError:
                     self.logger.warning("[TTS] Piper stdin broken pipe during write")
                 finally:
@@ -665,13 +684,20 @@ class ArgoPipeline:
                         data = self.tts_process.stdout.read(4096)
                 except BlockingIOError:
                     data = b""
+                except Exception as e:
+                    self.logger.error(f"[TTS] Exception during audio read: {e}")
+                    break
                 if data:
-                    self.audio.play_chunk(np.frombuffer(data, dtype='int16'))
+                    try:
+                        self.audio.play_chunk(np.frombuffer(data, dtype='int16'))
+                    except Exception as e:
+                        self.logger.error(f"[TTS] Exception during play_chunk: {e}")
+                        break
                 else:
                     if self.tts_process.poll() is not None:
                         break
                     time.sleep(0.01)
-            
+
             try:
                 self.tts_process.wait()
             except Exception:
@@ -684,9 +710,139 @@ class ArgoPipeline:
                     self.tts_process.stdout.close()
             except Exception:
                 pass
-            self.audio.release_audio("TTS", interaction_id=interaction_id)
+            try:
+                self.audio.release_audio("TTS", interaction_id=interaction_id)
+            except Exception as e:
+                self.logger.error(f"[TTS] Exception during audio.release_audio: {e}")
             self.is_speaking = False
             self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
+
+
+    def _classify_canonical_topic(self, user_text):
+        """
+        Deterministically classify user_text into canonical topic buckets.
+        Returns (topic, matched_keywords) or (None, set())
+        """
+        from core.intent_parser import (
+            detect_system_health,
+            detect_disk_query,
+            detect_temperature_query,
+            HARDWARE_KEYWORDS,
+            SYSTEM_OS_QUERIES,
+            SYSTEM_MEMORY_QUERIES,
+            SYSTEM_CPU_QUERIES,
+            SYSTEM_GPU_QUERIES,
+            SYSTEM_MOTHERBOARD_QUERIES,
+        )
+        text = user_text.lower() if user_text else ""
+        tokens = set(re.findall(r"\w+", text))
+
+        # SYSTEM_HEALTH short-circuit (must be evaluated before SELF_IDENTITY)
+        health_matches = set()
+        if detect_system_health(text):
+            health_matches.add("system_health")
+        if detect_disk_query(text):
+            health_matches.add("disk")
+        if detect_temperature_query(text):
+            health_matches.add("temperature")
+        for kw in HARDWARE_KEYWORDS:
+            if kw in text:
+                health_matches.add(kw)
+        for q in SYSTEM_OS_QUERIES:
+            if q in text:
+                health_matches.add(q)
+        for q in SYSTEM_MEMORY_QUERIES:
+            if q in text:
+                health_matches.add(q)
+        for q in SYSTEM_CPU_QUERIES:
+            if q in text:
+                health_matches.add(q)
+        for q in SYSTEM_GPU_QUERIES:
+            if q in text:
+                health_matches.add(q)
+        for q in SYSTEM_MOTHERBOARD_QUERIES:
+            if q in text:
+                health_matches.add(q)
+        if tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"}:
+            health_matches |= (tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"})
+        if health_matches:
+            return "SYSTEM_HEALTH", health_matches
+
+        # COUNT short-circuit (numeric/utility before other canonical topics)
+        count_number_tokens = {
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+            "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+        }
+        if ("count" in tokens and ("to" in tokens or tokens & count_number_tokens or re.search(r"\b\d+\b", text))):
+            return "COUNT", {"count"}
+        topic_keywords = {
+            "LAW": {"law", "laws", "rule", "rules", "constraint", "constraints", "policy", "policies", "govern", "governing"},
+            "GATES": {"gate", "gates", "permission", "permissions", "barrier", "barriers", "check", "checks"},
+            # Removed 'system' from ARCHITECTURE keywords to allow 'system health' etc. to route to normal logic
+            "ARCHITECTURE": {"architecture", "design", "pipeline", "structure", "modules", "components", "layout", "engine"},
+            "SELF_IDENTITY": {"identity", "yourself", "argo", "agent", "assistant", "name"},
+            "CAPABILITIES": {"capability", "capabilities", "can", "able", "features", "do", "function", "functions", "limit", "limits", "limitation", "limitations", "cannot", "not", "support", "supported"},
+            "CODEBASE_STATS": set(),
+        }
+        # Priority order: LAW, GATES, ARCHITECTURE
+        for topic in ["LAW", "GATES", "ARCHITECTURE"]:
+            keywords = topic_keywords[topic]
+            matched = tokens & keywords
+            if matched:
+                return topic, matched
+
+        # CODEBASE_STATS explicit phrase matching only (avoid count-only triggers)
+        codebase_phrases = {
+            "codebase",
+            "code base",
+            "codebase stats",
+            "repo stats",
+            "repository stats",
+            "workspace stats",
+            "project stats",
+            "workspace size",
+            "repo size",
+            "repository size",
+            "lines of code",
+            "python files",
+            "file count",
+            "files in workspace",
+            "files in the workspace",
+        }
+        matched_codebase = {p for p in codebase_phrases if p in text}
+        if matched_codebase:
+            return "CODEBASE_STATS", matched_codebase
+
+        # CAPABILITIES before SELF_IDENTITY fallback
+        keywords = topic_keywords["CAPABILITIES"]
+        matched = tokens & keywords
+        if matched:
+            return "CAPABILITIES", matched
+
+        # SELF_IDENTITY fallback (tightened)
+        keywords = topic_keywords["SELF_IDENTITY"]
+        matched = tokens & keywords
+        identity_phrases = {
+            "who are you",
+            "what are you",
+            "who is argo",
+            "what is argo",
+            "what is your name",
+            "what's your name",
+            "whats your name",
+            "tell me about yourself",
+            "tell me about you",
+            "identify yourself",
+            "who am i talking to",
+            "who am i speaking to",
+        }
+        if any(p in text for p in identity_phrases):
+            return "SELF_IDENTITY", {p for p in identity_phrases if p in text}
+        identity_specific = tokens & {"argo", "yourself", "identity", "assistant", "agent", "name"}
+        question_cue = tokens & {"who", "what"}
+        if identity_specific and question_cue:
+            return "SELF_IDENTITY", (identity_specific | question_cue)
+        return None, set()
 
     def run_interaction(self, audio_data, interaction_id: str = "", replay_mode: bool = False, overrides: dict | None = None):
         # THREAD SAFETY: Prevent overlapping runs which can crash models
@@ -722,6 +878,53 @@ class ArgoPipeline:
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                 return
             user_text = normalize_system_text(user_text)
+
+            # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
+            from core.canonical_answers import get_canonical_answer
+            topic, matched = self._classify_canonical_topic(user_text)
+            if topic == "SYSTEM_HEALTH":
+                self.logger.info(f"[CANONICAL] SYSTEM_HEALTH matched keywords: {sorted(matched)} | LLM BYPASSED")
+                topic = None
+            if topic == "COUNT":
+                response = self._build_count_response(user_text)
+                self.logger.info(f"[CANONICAL] Intercepted topic: COUNT | Matched: {sorted(matched)} | LLM BYPASSED")
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+            if topic:
+                answer = get_canonical_answer(topic)
+                self.logger.info(f"[CANONICAL] Intercepted topic: {topic} | Matched: {sorted(matched)} | LLM BYPASSED")
+                self.broadcast("log", f"Argo: {answer}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(answer or "")
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+
+            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
+            user_text_lower = user_text.lower()
+            if any(term in user_text_lower for term in stop_terms):
+                music_player = get_music_player()
+                if music_player.is_playing():
+                    self.logger.info("[ARGO] Active music detected")
+                    music_player.stop()
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
             stt_conf = 0.0
             try:
                 stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
@@ -732,6 +935,8 @@ class ArgoPipeline:
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
                 elif re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
+                elif any(term in user_text_lower for term in stop_terms):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but stop intent detected; continuing")
                 elif stt_conf < 0.15 or not user_text.strip():
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
                     if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
@@ -742,20 +947,49 @@ class ArgoPipeline:
 
             self.broadcast("log", f"User: {user_text}")
 
+
             intent = None
             try:
                 intent = self._intent_parser.parse(user_text)
             except Exception:
                 intent = None
 
-            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
-            user_text_lower = user_text.lower()
-            if any(term in user_text_lower for term in stop_terms):
-                music_player = get_music_player()
-                if music_player.is_playing():
-                    self.logger.info("[ARGO] Active music detected")
-                    music_player.stop()
+            # --- MUSIC VOLUME CONTROL (voice) ---
+            # Recognize patterns like 'music volume 75%', 'set volume to 50%', 'volume up', 'volume down'
+            from core.music_player import set_volume_percent, adjust_volume_percent, get_volume_percent
+            volume_patterns = [
+                (r"(?:music )?volume (\d{1,3})%", lambda m: set_volume_percent(int(m.group(1)))),
+                (r"set volume to (\d{1,3})%", lambda m: set_volume_percent(int(m.group(1)))),
+                (r"volume up (\d{1,3})%", lambda m: adjust_volume_percent(int(m.group(1)))),
+                (r"volume down (\d{1,3})%", lambda m: adjust_volume_percent(-int(m.group(1)))),
+                (r"volume up", lambda m: adjust_volume_percent(10)),
+                (r"volume down", lambda m: adjust_volume_percent(-10)),
+                (r"what is the volume", lambda m: None),
+                (r"current volume", lambda m: None),
+            ]
+            user_text_lower = user_text.lower().strip()
+            for pat, action in volume_patterns:
+                m = re.fullmatch(pat, user_text_lower)
+                if m:
+                    if pat in ["what is the volume", "current volume"]:
+                        vol = get_volume_percent()
+                        response = f"Music volume: {vol}%"
+                    else:
+                        action(m)
+                        vol = get_volume_percent()
+                        response = f"Music volume set to {vol}%"
+                    self.logger.info(f"[ARGO] {response}")
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
                     self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
                     return
 
             if intent and intent.intent_type in {
@@ -801,11 +1035,11 @@ class ArgoPipeline:
                     return
 
                 else:
-                    artist = intent.artist
-                    title = intent.title
+                    artist = getattr(intent, "artist", None)
+                    title = getattr(intent, "title", None)
                     do_not_try_genre_lookup = bool(title)
                     explicit_genre = bool(getattr(intent, "explicit_genre", False))
-                    if getattr(intent, "is_generic_play", False) and not artist and not title and not intent.keyword:
+                    if getattr(intent, "is_generic_play", False) and not artist and not title and not getattr(intent, "keyword", None):
                         playback_started = music_player.play_random(None)
                         if not playback_started:
                             error_message = "Your music library is empty or unavailable."
@@ -817,7 +1051,7 @@ class ArgoPipeline:
                             playback_started = music_player.play_by_artist(title, None)
                     if not playback_started and artist:
                         playback_started = music_player.play_by_artist(artist, None)
-                    if not playback_started and intent.keyword:
+                    if not playback_started and getattr(intent, "keyword", None):
                         keyword = intent.keyword
                         if explicit_genre and not do_not_try_genre_lookup:
                             playback_started = music_player.play_by_genre(keyword, None)
@@ -825,7 +1059,7 @@ class ArgoPipeline:
                             playback_started = music_player.play_by_keyword(keyword, None)
                         if not playback_started:
                             error_message = f"No music found for '{keyword}'."
-                    if not playback_started and not artist and not title and not intent.keyword:
+                    if not playback_started and not artist and not title and not getattr(intent, "keyword", None):
                         playback_started = music_player.play_random(None)
                         if not playback_started:
                             error_message = "No music available."

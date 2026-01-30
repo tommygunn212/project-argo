@@ -7,6 +7,7 @@ RULE: No delay in FAST mode. All delays from latency_controller. First token nev
 
 import pytest
 import asyncio
+import inspect
 from unittest.mock import patch, MagicMock
 from runtime.latency_controller import (
     LatencyController,
@@ -149,7 +150,8 @@ class TestStatusEmission:
         controller = LatencyController()
         
         # Simulate long operation
-        controller._start_time = asyncio.get_event_loop().time() - 4.0
+        import time
+        controller._start_time = time.monotonic() - 4.0
         
         assert controller.should_emit_status() is True
     
@@ -228,7 +230,8 @@ class TestBudgetExceedance:
         controller = LatencyController(profile=LatencyProfile.FAST)
         
         # Simulate operation taking longer than budget
-        controller._start_time = asyncio.get_event_loop().time() - 7.0
+        import time
+        controller._start_time = time.monotonic() - 7.0
         
         report = controller.report()
         assert report["exceeded_budget"] is True

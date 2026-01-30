@@ -75,7 +75,7 @@ def test_intent_parsing():
         print(f"  [{status}] '{text}' -> {intent.intent_type.value} (confidence={intent.confidence})")
     
     print(f"\nResult: {passed} passed, {failed} failed\n")
-    return failed == 0
+    assert failed == 0
 
 
 def test_playback_state():
@@ -95,7 +95,7 @@ def test_playback_state():
         print("    [PASS] Artist mode set correctly")
     else:
         print("    [FAIL] Artist mode not set correctly")
-        return False
+        assert False
     
     # Test genre mode
     print("  Testing genre mode:")
@@ -105,7 +105,7 @@ def test_playback_state():
         print("    [PASS] Genre mode set correctly")
     else:
         print("    [FAIL] Genre mode not set correctly")
-        return False
+        assert False
     
     # Test random mode
     print("  Testing random mode:")
@@ -115,7 +115,7 @@ def test_playback_state():
         print("    [PASS] Random mode set correctly")
     else:
         print("    [FAIL] Random mode not set correctly")
-        return False
+        assert False
     
     # Test reset
     print("  Testing reset:")
@@ -125,10 +125,10 @@ def test_playback_state():
         print("    [PASS] State reset correctly")
     else:
         print("    [FAIL] State not reset correctly")
-        return False
+        assert False
     
     print()
-    return True
+    return
 
 
 def test_music_player_next():
@@ -150,7 +150,7 @@ def test_music_player_next():
         print("    [PASS] NEXT returns False when no playback state")
     else:
         print("    [FAIL] NEXT should return False with no playback state")
-        return False
+        assert False
     
     # Test playback state after artist play
     print("  Testing playback state after artist play:")
@@ -158,7 +158,7 @@ def test_music_player_next():
         print("    [PASS] Playback state properly managed")
     else:
         print("    [FAIL] Playback state not cleared")
-        return False
+        assert False
     
     # Test playback state after genre play
     print("  Testing playback state after genre play:")
@@ -167,10 +167,10 @@ def test_music_player_next():
         print("    [PASS] Genre mode state set correctly")
     else:
         print("    [FAIL] Genre mode state not set")
-        return False
+        assert False
     
     print()
-    return True
+    return
 
 
 def test_stop_command():
@@ -198,10 +198,10 @@ def test_stop_command():
         print("    [PASS] Playback state reset by stop()")
     else:
         print("    [FAIL] Playback state not reset by stop()")
-        return False
+        assert False
     
     print()
-    return True
+    return
 
 
 def test_mode_continuation():
@@ -219,7 +219,7 @@ def test_mode_continuation():
         print("    [PASS] Artist mode continues")
     else:
         print("    [FAIL] Artist mode not continued")
-        return False
+        assert False
     
     # Test genre mode continuation
     print("  Testing genre mode continuation:")
@@ -228,7 +228,7 @@ def test_mode_continuation():
         print("    [PASS] Genre mode continues")
     else:
         print("    [FAIL] Genre mode not continued")
-        return False
+        assert False
     
     # Test random mode continuation
     print("  Testing random mode continuation:")
@@ -237,9 +237,17 @@ def test_mode_continuation():
         print("    [PASS] Random mode continues")
     else:
         print("    [FAIL] Random mode not continued")
-        return False
+        assert False
     
     print()
+    return
+
+
+def _run_test(test_fn):
+    try:
+        test_fn()
+    except AssertionError:
+        return False
     return True
 
 
@@ -250,11 +258,11 @@ if __name__ == "__main__":
     
     results = []
     
-    results.append(("Intent Parsing", test_intent_parsing()))
-    results.append(("Playback State", test_playback_state()))
-    results.append(("Music Player NEXT", test_music_player_next()))
-    results.append(("STOP Command", test_stop_command()))
-    results.append(("Mode Continuation", test_mode_continuation()))
+    results.append(("Intent Parsing", _run_test(test_intent_parsing)))
+    results.append(("Playback State", _run_test(test_playback_state)))
+    results.append(("Music Player NEXT", _run_test(test_music_player_next)))
+    results.append(("STOP Command", _run_test(test_stop_command)))
+    results.append(("Mode Continuation", _run_test(test_mode_continuation)))
     
     print("=" * 60)
     print("TEST SUMMARY")

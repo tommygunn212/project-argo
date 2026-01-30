@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 from core.intent_parser import RuleBasedIntentParser
 
 def test_integration():
@@ -22,7 +23,7 @@ def test_integration():
     print("="*80 + "\n")
     
     parser = RuleBasedIntentParser()
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     test_cases = [
         ("can you play guns and roses", "Band with 'and' in name"),
@@ -101,8 +102,7 @@ def test_integration():
     print("="*80)
     print("✅ INTEGRATION TEST COMPLETE")
     print("="*80 + "\n")
-    return True
+    return
 
 if __name__ == "__main__":
-    success = test_integration()
-    sys.exit(0 if success else 1)
+    test_integration()

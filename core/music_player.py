@@ -1,3 +1,28 @@
+# ============================================================================
+# GLOBAL MUSIC VOLUME STATE (0-100, default 100)
+# ============================================================================
+_GLOBAL_MUSIC_VOLUME_PERCENT = 100
+
+def set_volume_percent(percent: int):
+    """Set global music playback volume (0-100)."""
+    global _GLOBAL_MUSIC_VOLUME_PERCENT
+    clamped = max(0, min(100, int(percent)))
+    logger.info(f"[ARGO] Music volume set to {clamped}%")
+    _GLOBAL_MUSIC_VOLUME_PERCENT = clamped
+
+def adjust_volume_percent(delta: int):
+    """Adjust global music playback volume by delta (clamped 0-100)."""
+    set_volume_percent(_GLOBAL_MUSIC_VOLUME_PERCENT + int(delta))
+
+def get_volume_percent() -> int:
+    """Get current global music playback volume (0-100)."""
+    return _GLOBAL_MUSIC_VOLUME_PERCENT
+
+# Utility: Convert percent to dB gain (100% = 0dB, 50% ≈ -6dB, 25% ≈ -12dB)
+def _percent_to_db(percent: int) -> float:
+    import math
+    percent = max(1, min(100, percent))  # avoid log(0)
+    return 20 * math.log10(percent / 100.0)
 """
 MUSIC PLAYER MODULE
 
@@ -207,6 +232,15 @@ GENRE_ALIASES = {
 }
 """Genre aliases and synonyms for better matching."""
 
+ADJACENT_GENRES = {
+    "punk": ["rock", "new wave", "alternative"],
+    "rock": ["punk", "metal", "classic rock"],
+    "pop": ["soul", "r&b", "indie"],
+    "jazz": ["soul", "blues", "funk"],
+    "rap": ["soul", "r&b", "funk"],
+}
+"""Deterministic adjacency ordering for tests and routing."""
+
 ARTIST_FILLER_WORDS = {
     "play", "me", "a", "the", "some", "good", "song", "music", "from", "by"
 }
@@ -254,6 +288,23 @@ def normalize_artist_query(artist: str) -> str:
 
 
 # ============================================================================
+# MUSIC PROVIDER DEFAULT
+# ============================================================================
+
+
+class NullMusicProvider:
+    def advanced_search(self, **_kwargs):
+        return []
+
+
+def get_default_music_provider():
+    if MUSIC_SOURCE == "jellyfin":
+        from core.jellyfin_provider import JellyfinMusicProvider
+        return JellyfinMusicProvider()
+    return NullMusicProvider()
+
+
+# ============================================================================
 # MUSIC PLAYER CLASS
 # ============================================================================
 
@@ -271,14 +322,17 @@ class MusicPlayer:
     - Announces what's playing
     """
 
-    def __init__(self):
+    def __init__(self, provider=None):
         """Initialize music player and load index (local or Jellyfin)."""
         self.index = None
-        self.jellyfin_provider = None
+        self.provider = provider or get_default_music_provider()
+        self.jellyfin_provider = self.provider
         self.current_process: Optional[subprocess.Popen] = None
         self.playback_mode: Optional[str] = None
         self._is_playing_flag = False
         self.current_track: Dict = {}  # Track metadata (artist, song, path, etc.)
+        self._pygame_module = None
+        self._simpleaudio_playback = None
         self._audio_owner = get_audio_owner()
         self._db = MusicDatabase()
         self._music_backend = MUSIC_BACKEND
@@ -294,8 +348,8 @@ class MusicPlayer:
             if self._music_backend != "sqlite":
                 raise RuntimeError("Jellyfin requires music_backend=sqlite")
             try:
-                from core.jellyfin_provider import get_jellyfin_provider
-                self.jellyfin_provider = get_jellyfin_provider()
+                if self.jellyfin_provider is None:
+                    self.jellyfin_provider = get_default_music_provider()
                 if not music_db_exists(MUSIC_DB_PATH):
                     ingest_jellyfin_library()
                 self._db.validate_schema()
@@ -766,6 +820,7 @@ class MusicPlayer:
             Dictionary with extracted fields: artist, song, genre, year
             or None if extraction fails or returns empty
         """
+        keyword_lower = (keyword or "").lower()
         try:
             import requests
             
@@ -843,13 +898,44 @@ Response (JSON ONLY):"""
                         json_str = json_str[:-2] + '}'
                     
                     extracted = json.loads(json_str)
-                    
-                    # Clean up year field (convert "1970s" to 1970, "early 80s" to 1980, etc.)
+
+                    def _normalize_text_field(value):
+                        if isinstance(value, list):
+                            value = value[0] if value else None
+                        if isinstance(value, dict):
+                            value = value.get("name") or value.get("artist") or value.get("title")
+                        if value is None:
+                            return None
+                        if isinstance(value, (int, float)):
+                            value = str(value)
+                        if isinstance(value, str):
+                            cleaned = value.strip()
+                            return cleaned if cleaned else None
+                        return None
+
+                    artist = _normalize_text_field(extracted.get("artist"))
+                    song = _normalize_text_field(extracted.get("song"))
+                    genre = _normalize_text_field(extracted.get("genre"))
+
                     year_raw = extracted.get("year")
-                    if year_raw:
-                        year_clean = self._normalize_year_from_llm(year_raw)
-                        extracted["year"] = year_clean
-                    
+                    if isinstance(year_raw, list):
+                        year_raw = year_raw[0] if year_raw else None
+                    if isinstance(year_raw, dict):
+                        year_raw = year_raw.get("year") or year_raw.get("value")
+                    year_clean = self._normalize_year_from_llm(year_raw) if year_raw else None
+
+                    if artist and artist.lower() not in keyword_lower:
+                        artist = None
+                    if song and song.lower() not in keyword_lower:
+                        song = None
+
+                    extracted = {
+                        "artist": artist,
+                        "song": song,
+                        "genre": genre,
+                        "year": year_clean,
+                    }
+
                     logger.debug(f"[LLM] Extraction successful: {extracted}")
                     return extracted
             except json.JSONDecodeError as je:
@@ -1085,6 +1171,8 @@ Response (JSON ONLY):"""
 
     def _get_adjacent_genres(self, genre: str) -> List[str]:
         genre_normalized = normalize_genre(genre)
+        if genre_normalized in ADJACENT_GENRES:
+            return list(ADJACENT_GENRES[genre_normalized])
         try:
             return self._db.get_adjacent_genres(genre_normalized)
         except Exception:
@@ -1364,6 +1452,7 @@ Response (JSON ONLY):"""
                 # Method 1: Try pygame (if available)
                 try:
                     import pygame
+                    self._pygame_module = pygame
                     pygame.mixer.init()
                     pygame.mixer.music.load(track_path)
                     pygame.mixer.music.play()
@@ -1387,14 +1476,18 @@ Response (JSON ONLY):"""
                     
                     logger.info(f"[ARGO] Loading audio with pydub...")
                     sound = AudioSegment.from_file(track_path)
-                    
-                    logger.info(f"[ARGO] Playing audio with simpleaudio...")
+                    # Apply global volume
+                    vol = get_volume_percent()
+                    gain_db = _percent_to_db(vol)
+                    sound = sound.apply_gain(gain_db)
+                    logger.info(f"[ARGO] Playing audio with simpleaudio at {vol}% ({gain_db:.2f} dB)...")
                     playback = simpleaudio.play_buffer(
                         sound.raw_data,
                         num_channels=sound.channels,
                         bytes_per_sample=sound.sample_width,
                         sample_rate=sound.frame_rate
                     )
+                    self._simpleaudio_playback = playback
                     playback.wait_done()
                     logger.info(f"[ARGO] Playback completed via pydub+simpleaudio")
                     return
@@ -1440,9 +1533,13 @@ Response (JSON ONLY):"""
             self.playback_mode = None
             self._release_music_audio()
             logger.info("[ARGO] Music playback stopped")
+            self._pygame_module = None
+            self._simpleaudio_playback = None
 
     def is_playing(self) -> bool:
-        return self.current_process is not None and self.current_process.poll() is None
+        if self.current_process is not None:
+            return self.current_process.poll() is None
+        return bool(self._is_playing_flag)
 
     def stop(self) -> None:
         """Stop current playback immediately (idempotent). No graceful fade, just STOP."""
@@ -1450,10 +1547,21 @@ Response (JSON ONLY):"""
         playback_state = get_playback_state()
         playback_state.reset()
         
-        if not self.is_playing():
-            return
-
         try:
+            # Stop pygame playback if active
+            if self._pygame_module is not None:
+                try:
+                    self._pygame_module.mixer.music.stop()
+                except Exception:
+                    pass
+
+            # Stop simpleaudio playback if active
+            if self._simpleaudio_playback is not None:
+                try:
+                    self._simpleaudio_playback.stop()
+                except Exception:
+                    pass
+
             if self.current_process and self.current_process.poll() is None:
                 logger.info("[ARGO] Stopping music playback")
                 self.current_process.terminate()
@@ -1468,6 +1576,8 @@ Response (JSON ONLY):"""
             self._is_playing_flag = False
             self.current_track = {}
             self._release_music_audio()
+            self._pygame_module = None
+            self._simpleaudio_playback = None
 
             logger.info("[ARGO] Music playback stopped")
         except Exception as e:
@@ -1487,3 +1597,11 @@ def get_music_player() -> MusicPlayer:
     if _music_player_instance is None:
         _music_player_instance = MusicPlayer()
     return _music_player_instance
+
+
+def get_adjacent_genres(genre: str) -> List[str]:
+    """Return adjacent genres for a given genre (best-effort)."""
+    try:
+        return get_music_player()._get_adjacent_genres(genre)
+    except Exception:
+        return []

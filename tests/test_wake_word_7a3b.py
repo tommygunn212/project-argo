@@ -21,6 +21,9 @@ Non-Negotiable Constraints (from design):
 Implementation Checklist:
 """
 
+import pytest
+pytest.skip("Wake word deprecated", allow_module_level=True)
+
 import sys
 import os
 import time

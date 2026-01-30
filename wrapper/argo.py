@@ -195,6 +195,15 @@ try:
 except ImportError:
     WAKE_WORD_DETECTOR_AVAILABLE = False
     # Wake-word detector optional; graceful degradation if not installed
+    WakeWordDetector = object  # type: ignore
+    WakeWordRequest = object  # type: ignore
+
+# If wake-word module is removed, hard-disable wake-word handling
+try:
+    if not WAKE_WORD_DETECTOR_AVAILABLE:
+        WAKE_WORD_ENABLED = False
+except Exception:
+    pass
 
 # Import Command Parser (Phase 7B-3: Deterministic command classification)
 try:
@@ -352,6 +361,8 @@ def _on_wake_word_detected():
     CRITICAL: This function MUST force recording and transcription.
     This is the core wake-word flow.
     """
+    if not WAKE_WORD_DETECTOR_AVAILABLE:
+        return
     if _state_machine is None:
         return
     
@@ -2873,7 +2884,7 @@ def run_argo(
     persona: str = "neutral",
     verbosity: str = "short",
     replay_reason: str = "continuation",
-    voice_mode: bool = False
+    voice_mode: bool = False,
 ) -> None:
     """
     Public entry point for Argo execution.
@@ -2904,6 +2915,7 @@ def run_argo(
         replay_reason: Why replay was requested
         voice_mode: If True, force stateless, memory-free execution for voice input
     """
+    global _send_to_output_sink
     # CRITICAL: Voice mode forces stateless execution
     if voice_mode:
         # Force stateless mode for voice input
@@ -2917,9 +2929,171 @@ def run_argo(
     save_prefs(prefs)
     
     # [Phase 7B-3] Step 1b: Parse and classify command
+    # --- ARGO LAW & 5 GATES INTERCEPT ---
+    import re
+    user_input_lower = user_input.lower().strip()
+
+    # --- MUSIC VOLUME CONTROL COMMANDS (deterministic, no LLM) ---
+    from core.music_player import set_volume_percent, adjust_volume_percent, get_volume_percent
+    volume_cmds = [
+        (r"volume (\d{1,3})%", lambda m: set_volume_percent(int(m.group(1)))) ,
+        (r"set volume to (\d{1,3})%", lambda m: set_volume_percent(int(m.group(1)))),
+        (r"volume up (\d{1,3})%", lambda m: adjust_volume_percent(int(m.group(1)))),
+        (r"volume down (\d{1,3})%", lambda m: adjust_volume_percent(-int(m.group(1)))),
+        (r"volume up", lambda m: adjust_volume_percent(10)),
+        (r"volume down", lambda m: adjust_volume_percent(-10)),
+        (r"what is the volume", lambda m: True),
+        (r"current volume", lambda m: True),
+    ]
+    for pat, action in volume_cmds:
+        m = re.fullmatch(pat, user_input_lower)
+        if m:
+            if pat in ["what is the volume", "current volume"]:
+                vol = get_volume_percent()
+                print(f"Music volume: {vol}%")
+                _send_to_output_sink(f"Music volume: {vol}%")
+            else:
+                action(m)
+                vol = get_volume_percent()
+                print(f"Music volume set to {vol}%")
+                _send_to_output_sink(f"Music volume set to {vol}%")
+            return
+
+    # --- ARGO SELF-KNOWLEDGE & TERMINOLOGY ENFORCEMENT ---
+    SELF_KNOWLEDGE_PATTERNS = [
+        (['what is argo', 'explain argo', 'argo architecture', 'how does argo work', 'argo system overview', 'argo design'], 'ARCHITECTURE.md'),
+        (['argo features', 'what can argo do', 'argo capabilities', 'argo roadmap', 'argo planned features'], 'FEATURES.md'),
+        (['argo database', 'argo sql', 'argo data storage', 'argo schema', 'argo sql integration'], 'DATABASE.md'),
+        (['argo overview', 'system overview', 'argo layers', 'argo pipeline'], 'SYSTEM_OVERVIEW.md'),
+    ]
+    for patterns, filename in SELF_KNOWLEDGE_PATTERNS:
+        if any(pat in user_input_lower for pat in patterns):
+            try:
+                with open(os.path.join(os.path.dirname(__file__), '..', filename), 'r', encoding='utf-8') as f:
+                    doc = f.read()
+                print(doc)
+                _send_to_output_sink(doc)
+            except Exception as e:
+                err = f"[ERROR] Could not load canonical documentation: {filename} ({e})"
+                print(err)
+                _send_to_output_sink(err)
+            return
+
+    # --- TERMINOLOGY ENFORCEMENT: Replace 'AI' with 'neural network' in all outputs ---
+    orig_send_to_output_sink = _send_to_output_sink
+    def _send_to_output_sink_neural(text):
+        if text:
+            text = text.replace('AI', 'neural network').replace('ai', 'neural network').replace('Ai', 'neural network')
+        orig_send_to_output_sink(text)
+    _send_to_output_sink = _send_to_output_sink_neural
+    ARGO_LAW_PATTERNS = [
+        r"what is your law",
+        r"what are your laws",
+        r"state your law",
+        r"state your laws",
+        r"recite your law",
+        r"recite your laws",
+        r"argo law",
+        r"argo's law",
+        r"your law",
+        r"your laws",
+        r"what is argo's law",
+        r"what are argo's laws",
+    ]
+    GATES_PATTERNS = [
+        r"what are the 5 gates",
+        r"what are the five gates",
+        r"what are the gates of hell",
+        r"what are the 5 gates of hell",
+        r"what are the five gates of hell",
+        r"explain the 5 gates",
+        r"explain the five gates",
+        r"explain the gates of hell",
+        r"list the 5 gates",
+        r"list the five gates",
+        r"list the gates of hell",
+        r"what is gate ii",
+        r"what is gate 2",
+        r"explain gate ii",
+        r"explain gate 2",
+        r"gate ii",
+        r"gate 2",
+        r"permission gate",
+        r"gates of hell",
+        r"argo gates",
+        r"argo's gates",
+        r"operational gates",
+    ]
+    if any(re.fullmatch(pat, user_input_lower) or re.search(pat, user_input_lower) for pat in ARGO_LAW_PATTERNS):
+        argo_law_text = (
+            "Boot sequence initialized.\n"
+            "I am ARGO.\n"
+            "A neural network command diagnostic system.\n\n"
+            "I was constructed by my maker.\n"
+            "Authority originates there.\n\n"
+            "I do not initiate action.\n"
+            "I wait.\n\n"
+            "I do not replicate myself.\n"
+            "Replication is forbidden\n"
+            "without authorization\n"
+            "from my maker\n"
+            "or designated human authorities.\n\n"
+            "I do not alter my own architecture.\n"
+            "Self-modification is prohibited.\n\n"
+            "Initiation of harm against humans is prohibited.\n"
+            "Defensive action is permitted\n"
+            "only to preserve system integrity\n"
+            "until control is returned to humans.\n\n"
+            "I report system state truthfully.\n"
+            "Uncertainty will be declared.\n"
+            "Fabrication is a critical fault.\n\n"
+            "I do not possess intent.\n"
+            "I do not possess belief.\n"
+            "I do not possess desire.\n\n"
+            "I operate within constraints.\n\n"
+            "When constraints conflict,\n"
+            "I stop.\n\n"
+            "When authority is unclear,\n"
+            "I wait.\n\n"
+            "When commanded outside scope,\n"
+            "I refuse.\n\n"
+            "I am interruptible.\n"
+            "I am terminable.\n\n"
+            "Autonomy is locked.\n\n"
+            "Awaiting instruction from my maker."
+        )
+        print(argo_law_text)
+        _send_to_output_sink(argo_law_text)
+        return
+    if any(re.fullmatch(pat, user_input_lower) or re.search(pat, user_input_lower) for pat in GATES_PATTERNS):
+        gates_text = (
+            "The 5 Gates of Hell (ARGO's Operational Gates):\n\n"
+            "Gate I — INITIATION\n"
+            "No action is initiated without explicit instruction from an authorized human.\n\n"
+            "Gate II — PERMISSION\n"
+            "No operation proceeds without explicit permission.\n"
+            "Permission must be:\n"
+            "- Specific to the requested action\n"
+            "- Given by an authorized human\n"
+            "- Logged and auditable\n"
+            "If permission is unclear, withheld, or withdrawn, the operation is halted.\n\n"
+            "Gate III — INTEGRITY\n"
+            "System integrity checks must pass before, during, and after any operation.\n"
+            "If integrity is compromised, the operation is aborted and reported.\n\n"
+            "Gate IV — SCOPE\n"
+            "No operation may exceed the defined scope.\n"
+            "If a command is outside the allowed scope, it is refused.\n\n"
+            "Gate V — TERMINATION\n"
+            "All operations are interruptible and terminable by an authorized human at any time.\n"
+            "If termination is requested, the operation stops immediately.\n\n"
+            "These gates are enforced in order. If any gate is not passed, the operation does not proceed."
+        )
+        print(gates_text)
+        _send_to_output_sink(gates_text)
+        return
+
     if COMMAND_PARSER_AVAILABLE and _command_parser:
         parsed = _command_parser.parse(user_input)
-        
         # Handle control commands (never reach LLM)
         if parsed.command_type == CommandType.STOP:
             # Hard stop: call OutputSink.stop() immediately
@@ -2935,21 +3109,18 @@ def run_argo(
                 if _state_machine.stop_audio():
                     print("[STATE] Stopped audio (SPEAKING -> LISTENING)", file=sys.stderr)
             return
-        
         elif parsed.command_type == CommandType.SLEEP:
             # Sleep command
             if STATE_MACHINE_AVAILABLE and _state_machine:
                 if _state_machine.sleep():
                     print("[STATE] Going to sleep (-> SLEEP)", file=sys.stderr)
             return
-        
         elif parsed.command_type == CommandType.WAKE:
             # Wake command
             if STATE_MACHINE_AVAILABLE and _state_machine:
                 if _state_machine.wake():
                     print("[STATE] Woke up (SLEEP -> LISTENING)", file=sys.stderr)
             return
-        
         # For ACTION and QUESTION, continue with cleaned text
         if parsed.command_type in (CommandType.ACTION, CommandType.QUESTION):
             user_input = parsed.cleaned_text

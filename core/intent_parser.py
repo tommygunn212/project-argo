@@ -28,7 +28,7 @@ import logging
 # ============================================================================
 MUSIC_FILLER_WORDS = {
     "play", "me", "a", "the", "some", "good", "song", "music", "from",
-    "can", "you", "please", "could", "would", "just"
+    "can", "you", "please", "could", "would", "just", "something"
 }
 MUSIC_MODIFIER_WORDS = {"good", "best", "random", "favorite", "favourite"}
 GENERIC_PLAY_PHRASES = {
@@ -708,18 +708,26 @@ class RuleBasedIntentParser(IntentParser):
                 serious_mode=serious_mode,
             )
 
+        normalized_phrase = " ".join(re.findall(r"[a-z0-9']+", text_lower)).strip()
+
         # Rule 4: Music intent (disambiguated)
         # Only trigger if music-specific terms are present (play/music/song) and no tech keywords
         music_terms = {"music", "song", "artist", "album"}
         has_play = "play" in text_lower
         has_music_term = any(term in text_lower for term in music_terms)
         has_genre_play = any(f"play {genre}" in text_lower for genre in self.music_genres)
-        if (has_play or has_music_term) and not any(keyword in text_lower for keyword in self.tech_keywords):
+        is_generic_play_phrase = normalized_phrase in GENERIC_PLAY_PHRASES
+        if (has_play or has_music_term or is_generic_play_phrase) and not any(keyword in text_lower for keyword in self.tech_keywords):
             artist, title, modifiers = self._extract_music_components(text_original, text_lower)
             keyword = title or artist or self._extract_music_keyword(text_lower)
+            if keyword:
+                keyword = keyword.lower()
             is_generic_play = False
+            if is_generic_play_phrase:
+                artist = None
+                title = None
+                keyword = None
             if not artist and not title and not keyword:
-                normalized_phrase = " ".join(re.findall(r"[a-z0-9']+", text_lower)).strip()
                 is_generic_play = normalized_phrase in GENERIC_PLAY_PHRASES
             self.logger.debug(
                 "[INTENT] artist=\"%s\" title=%s modifiers=%s",

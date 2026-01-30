@@ -56,7 +56,7 @@ def test_intent_parsing():
         print(f"  [{status}] '{text}' -> {intent.intent_type.value} ({keyword_str})")
     
     print(f"\nResult: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_music_index():
@@ -86,7 +86,7 @@ def test_music_index():
         tracks = index.filter_by_keyword(keyword)
         print(f"    {keyword}: {len(tracks)} tracks")
     
-    return True
+    return
 
 
 def test_music_player():
@@ -119,7 +119,7 @@ def test_music_player():
         print(f"  [{status}] {method}")
     
     print(f"\nResult: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
 
 
 def test_pipeline_integration():
@@ -170,7 +170,15 @@ def test_pipeline_integration():
             failed += 1
     
     print(f"\nResult: {passed} passed, {failed} failed")
-    return failed == 0
+    assert failed == 0
+
+
+def _run_test(test_fn):
+    try:
+        test_fn()
+    except AssertionError:
+        return False
+    return True
 
 
 def main():
@@ -182,10 +190,10 @@ def main():
     results = []
     
     try:
-        results.append(("Intent Parsing", test_intent_parsing()))
-        results.append(("Music Index", test_music_index()))
-        results.append(("Music Player", test_music_player()))
-        results.append(("Pipeline Integration", test_pipeline_integration()))
+        results.append(("Intent Parsing", _run_test(test_intent_parsing)))
+        results.append(("Music Index", _run_test(test_music_index)))
+        results.append(("Music Player", _run_test(test_music_player)))
+        results.append(("Pipeline Integration", _run_test(test_pipeline_integration)))
         
     except Exception as e:
         print(f"\nFATAL ERROR: {e}")

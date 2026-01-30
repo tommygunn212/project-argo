@@ -10,11 +10,12 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_no_hallucination():
     """Ensure LLM extraction doesn't guess artist/song names."""
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     print("Testing LLM Extraction - NO HALLUCINATION\n")
     print("="*80)

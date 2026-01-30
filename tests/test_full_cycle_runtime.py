@@ -45,6 +45,10 @@ class MockOutputSink:
         """Mock send (async)"""
         self.send_calls.append({"text": text, "voice": voice})
         self.is_playing = True
+
+    def speak(self, text):
+        """Mock speak (sync wrapper)."""
+        self.send(text)
     
     def stop(self):
         """Mock stop (immediate)"""

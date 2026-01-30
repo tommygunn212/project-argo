@@ -208,6 +208,11 @@ class LLMResponseGenerator(ResponseGenerator):
         if intent is None:
             raise ValueError("intent is None")
 
+        raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
+        for keyword in ("stop", "goodbye", "quit", "exit"):
+            if keyword in raw_text_lower:
+                return "Goodbye." if keyword in {"goodbye", "quit", "exit"} else "Stopping."
+
         if intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_INFO}:
             subintent = getattr(intent, "subintent", None)
             raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()

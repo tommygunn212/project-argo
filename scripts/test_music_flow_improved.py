@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 from core.intent_parser import RuleBasedIntentParser
 
 def test_music_search_flow():
@@ -19,7 +20,7 @@ def test_music_search_flow():
     print("="*80)
     
     parser = RuleBasedIntentParser()
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     test_cases = [
         ("can you play rock music from the 80s", "Structured genre + year"),

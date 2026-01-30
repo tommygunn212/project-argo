@@ -14,13 +14,17 @@ Pure transport test.
 
 import asyncio
 import logging
-from livekit import api
+import pytest
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 # Configuration
+try:
+    from livekit import api
+except Exception:
+    pytest.skip("livekit API not available", allow_module_level=True)
 LIVEKIT_URL = "ws://localhost:7880"
 LIVEKIT_API_KEY = "devkey"
 LIVEKIT_API_SECRET = "secretsecretsecretsecretsecretsecretsecretsecret"

@@ -53,7 +53,6 @@ def test_latency_probe():
     assert summary["total"] > 0, "Total duration should be positive"
     
     print("✅ Probe test passed\n")
-    return True
 
 def test_latency_stats():
     """Test stats aggregation."""
@@ -104,7 +103,6 @@ def test_latency_stats():
     assert total_stats["avg"] >= total_stats["min"], "Avg should be >= min"
     
     print("✅ Stats test passed\n")
-    return True
 
 if __name__ == "__main__":
     try:

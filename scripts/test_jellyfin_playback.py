@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 from core.jellyfin_provider import get_jellyfin_provider
 import time
 
@@ -19,7 +20,7 @@ print("JELLYFIN PLAYBACK TEST")
 print("="*80 + "\n")
 
 jellyfin = get_jellyfin_provider()
-player = MusicPlayer()
+player = MusicPlayer(provider=MockJellyfinProvider())
 
 # Search for Elton John
 print("Searching for Elton John...")

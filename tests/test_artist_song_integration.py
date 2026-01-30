@@ -43,7 +43,6 @@ def test_artist_extraction():
         print(f"  {i:2}. {artist[:40]:40} ({count:3} tracks)")
     
     print("\nRESULT: PASS")
-    return True
 
 
 def test_song_extraction():
@@ -66,7 +65,6 @@ def test_song_extraction():
         print(f"  {i}. {filename[:45]:45} -> '{song[:30]}'")
     
     print("\nRESULT: PASS")
-    return True
 
 
 def test_artist_filtering():
@@ -80,7 +78,7 @@ def test_artist_filtering():
 
     if getattr(index, "is_empty", None) and index.is_empty():
         print("No music available (index empty)")
-        return True
+        return
     
     # Get an artist with tracks
     artist_counts = {}
@@ -91,7 +89,7 @@ def test_artist_filtering():
     
     if not artist_counts:
         print("No artists found")
-        return False
+        assert False
     
     # Test artist with most tracks
     test_artist = max(artist_counts.items(), key=lambda x: x[1])[0]
@@ -107,10 +105,9 @@ def test_artist_filtering():
         for track in artist_tracks[:3]:
             print(f"  - {track.get('song', '?')}")
         print("RESULT: PASS")
-        return True
     else:
         print("RESULT: FAIL - No tracks found")
-        return False
+        assert False
 
 
 def test_song_filtering():
@@ -123,7 +120,7 @@ def test_song_filtering():
 
     if getattr(index, "is_empty", None) and index.is_empty():
         print("No music available (index empty)")
-        return True
+        return
     
     # Find a unique song
     song_counts = {}
@@ -149,10 +146,9 @@ def test_song_filtering():
     if song_tracks:
         print(f"Sample track: {os.path.basename(song_tracks[0]['path'])}")
         print("RESULT: PASS")
-        return True
     else:
         print("RESULT: FAIL - No tracks found")
-        return False
+        assert False
 
 
 def test_priority_routing():
@@ -166,7 +162,7 @@ def test_priority_routing():
 
     if getattr(index, "is_empty", None) and index.is_empty():
         print("No music available (index empty)")
-        return True
+        return
     
     # Get an artist name
     artists = [t.get("artist") for t in index.tracks if t.get("artist")]
@@ -174,7 +170,7 @@ def test_priority_routing():
     
     if not test_artist:
         print("No artist available for testing")
-        return False
+        assert False
     
     print(f"\nTesting keyword: '{test_artist}'")
     print("Expected routing: artist filter")
@@ -196,7 +192,6 @@ def test_priority_routing():
         print(f"  -> Priority: KEYWORD")
     
     print("RESULT: PASS")
-    return True
 
 
 def test_announcements():
@@ -240,7 +235,7 @@ def test_announcements():
             passed += 1
     
     print(f"\nResult: {passed}/{len(test_cases)} passed")
-    return passed == len(test_cases)
+    assert passed == len(test_cases)
 
 
 def test_intent_routing():
@@ -275,6 +270,13 @@ def test_intent_routing():
         print(f"  '{command:30}' -> {keyword_str:20} {expected_str}")
     
     print("RESULT: PASS")
+
+
+def _run_test(test_fn):
+    try:
+        test_fn()
+    except AssertionError:
+        return False
     return True
 
 
@@ -287,13 +289,13 @@ def main():
     results = []
     
     try:
-        results.append(("Artist Extraction", test_artist_extraction()))
-        results.append(("Song Extraction", test_song_extraction()))
-        results.append(("Artist Filtering", test_artist_filtering()))
-        results.append(("Song Filtering", test_song_filtering()))
-        results.append(("Priority Routing", test_priority_routing()))
-        results.append(("Announcements", test_announcements()))
-        results.append(("Intent Routing", test_intent_routing()))
+        results.append(("Artist Extraction", _run_test(test_artist_extraction)))
+        results.append(("Song Extraction", _run_test(test_song_extraction)))
+        results.append(("Artist Filtering", _run_test(test_artist_filtering)))
+        results.append(("Song Filtering", _run_test(test_song_filtering)))
+        results.append(("Priority Routing", _run_test(test_priority_routing)))
+        results.append(("Announcements", _run_test(test_announcements)))
+        results.append(("Intent Routing", _run_test(test_intent_routing)))
         
     except Exception as e:
         print(f"\n\nFATAL ERROR: {e}")

@@ -3,6 +3,8 @@
 Test FastAPI app to verify server infrastructure
 """
 
+import pytest
+fastapi = pytest.importorskip("fastapi", reason="fastapi not installed")
 from fastapi import FastAPI
 import uvicorn
 

@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
-player = MusicPlayer()
+player = MusicPlayer(provider=MockJellyfinProvider())
 
 print("\n" + "="*80)
 print("HALLUCINATION FIX VERIFICATION")

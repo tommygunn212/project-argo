@@ -8,11 +8,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_keyword_parsing():
     """Test keyword parsing for year, genre, and artist extraction."""
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     
     test_cases = [
         # (keyword, expected_year, expected_genre, expected_artist)

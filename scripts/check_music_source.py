@@ -10,12 +10,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 print("=" * 70)
 print("MUSIC PLAYER SOURCE CHECK")
 print("=" * 70)
 
-player = MusicPlayer()
+player = MusicPlayer(provider=MockJellyfinProvider())
 print(f"Music source: {os.getenv('MUSIC_SOURCE')}")
 print(f"Using Jellyfin: {player.jellyfin_provider is not None}")
 

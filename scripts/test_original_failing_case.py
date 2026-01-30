@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from core.music_player import MusicPlayer
+from mock_jellyfin_provider import MockJellyfinProvider
 
 def test_original_failing_case():
     """
@@ -32,7 +33,7 @@ def test_original_failing_case():
     print("\nTesting with IMPROVED prompt...")
     print("="*80 + "\n")
     
-    player = MusicPlayer()
+    player = MusicPlayer(provider=MockJellyfinProvider())
     keyword = "rock music from the 80s"
     
     print(f"Keyword: '{keyword}'")
@@ -59,16 +60,14 @@ def test_original_failing_case():
     artist = extracted.get("artist", "")
     if artist and ("Guns" in artist or "Roses" in artist):
         print(f"  ✗ FAIL: Artist is '{artist}' (hallucinated!)")
-        return False
-    else:
-        print(f"  ✓ PASS: No Guns N' Roses hallucination")
+    assert not (artist and ("Guns" in artist or "Roses" in artist))
+    print(f"  ✓ PASS: No Guns N' Roses hallucination")
     
     song = extracted.get("song", "")
     if song and any(x in song.lower() for x in ["sweet", "child", "mine"]):
         print(f"  ✗ FAIL: Song is '{song}' (hallucinated!)")
-        return False
-    else:
-        print(f"  ✓ PASS: No 'Sweet Child O' Mine' hallucination")
+    assert not (song and any(x in song.lower() for x in ["sweet", "child", "mine"]))
+    print(f"  ✓ PASS: No 'Sweet Child O' Mine' hallucination")
     
     # Search Jellyfin
     print(f"\nJellyfin Search:")
@@ -81,16 +80,14 @@ def test_original_failing_case():
     
     if len(tracks) == 0:
         print(f"  ✗ FAIL: 0 matches (would trigger random fallback)")
-        return False
-    else:
-        print(f"  ✓ PASS: Found matches (no random fallback needed)")
-        for i, track in enumerate(tracks[:3], 1):
-            print(f"      {i}. {track['artist']} - {track['song']}")
+    assert len(tracks) > 0
+    print(f"  ✓ PASS: Found matches (no random fallback needed)")
+    for i, track in enumerate(tracks[:3], 1):
+        print(f"      {i}. {track['artist']} - {track['song']}")
     
     print(f"\n" + "="*80)
     print("RESULT: ✅ FIXED - Hallucination prevented, proper tracks found")
-    return True
+    return None
 
 if __name__ == "__main__":
-    success = test_original_failing_case()
-    sys.exit(0 if success else 1)
+    test_original_failing_case()
