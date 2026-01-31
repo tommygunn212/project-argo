@@ -296,6 +296,10 @@ class NullMusicProvider:
     def advanced_search(self, **_kwargs):
         return []
 
+    def get_play_url(self, _jellyfin_id: str) -> Optional[str]:
+        logger.warning("[ARGO] Jellyfin provider not configured; cannot play requested track.")
+        return None
+
 
 def get_default_music_provider():
     if MUSIC_SOURCE == "jellyfin":
@@ -1329,7 +1333,16 @@ Response (JSON ONLY):"""
                 return False
             
             # Get streaming URL from Jellyfin
+            if not self.jellyfin_provider:
+                logger.error("[ARGO] Jellyfin provider unavailable; cannot play track.")
+                self._release_music_audio()
+                return False
+
             stream_url = self.jellyfin_provider.get_play_url(jellyfin_id)
+            if not stream_url:
+                logger.error("[ARGO] Jellyfin did not return a stream URL; playback aborted.")
+                self._release_music_audio()
+                return False
             
             # Announce what's playing
             if output_sink and announcement:

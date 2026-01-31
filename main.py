@@ -36,16 +36,7 @@ try:
 except Exception:
     pass
 
-# Ensure Piper binary is on PATH (clean startup)
-local_piper_dir = os.path.join(repo_root, "audio", "piper")
-system_piper_dir = "C:\\piper"
-path_prefixes = []
-if os.path.isdir(local_piper_dir):
-    path_prefixes.append(local_piper_dir)
-if os.path.isdir(system_piper_dir):
-    path_prefixes.append(system_piper_dir)
-if path_prefixes:
-    os.environ["PATH"] = os.pathsep.join(path_prefixes) + os.pathsep + os.environ.get("PATH", "")
+ 
 
 # ============================================================================
 # 3) CORE IMPORTS
@@ -192,6 +183,25 @@ async def websocket_handler(websocket):
         await websocket.send(json.dumps({"type": "runtime_overrides", "payload": get_runtime_overrides()}))
         await websocket.send(json.dumps({"type": "audio_owner", "payload": {"owner": "UNKNOWN", "contested": False}}))
         await websocket.send(json.dumps({"type": "db_status", "payload": get_db_status(MUSIC_DB_PATH)}))
+
+        # Sync model info for late-joining UIs (avoid "Unknown")
+        if pipeline_ref:
+            try:
+                stt_name = getattr(pipeline_ref, "stt_model_name", "unknown")
+                if stt_name and stt_name != "unknown":
+                    await websocket.send(json.dumps({"type": "log", "payload": f"Loading Whisper Model: {stt_name}..."}))
+                if getattr(pipeline_ref, "stt_model", None) is not None:
+                    await websocket.send(json.dumps({"type": "log", "payload": "STT model warmed up"}))
+
+                llm_name = getattr(pipeline_ref, "llm_model_name", "unknown")
+                if llm_name and llm_name != "unknown":
+                    await websocket.send(json.dumps({"type": "log", "payload": "LLM model warmed up"}))
+
+                voice_key = getattr(pipeline_ref, "current_voice_key", None)
+                if voice_key:
+                    await websocket.send(json.dumps({"type": "log", "payload": f"Voice switched to {voice_key}"}))
+            except Exception:
+                pass
 
         async for message in websocket:
             try:
@@ -512,6 +522,10 @@ def main_loop():
             pipeline.stop_signal.set()
             audio.force_release_audio("BARGE_IN", interaction_id=pipeline.current_interaction_id)
             audio.stop_playback() # Kill audio immediately
+            try:
+                pipeline.stop_tts()
+            except Exception:
+                pass
             pipeline.is_speaking = False
             try:
                 pipeline.force_state("LISTENING", interaction_id=pipeline.current_interaction_id, source="BARGE_IN")

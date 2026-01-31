@@ -84,6 +84,8 @@ class AudioManager:
         self.output_stream = None
         self._input_device_index = input_device_index
         self._output_device_index = output_device_index
+        self._output_lock = threading.Lock()
+        self._stop_playback_event = threading.Event()
 
 
     def _select_input_device(self, preferred_index):
@@ -186,24 +188,41 @@ class AudioManager:
 
         self.logger.info(f"Audio Manager Starting...")
         try:
-            resolved_input = self._select_input_device(self._input_device_index)
-            if resolved_input != self._input_device_index:
-                self.logger.warning(
-                    f"[AUDIO] Input device fallback: {self._input_device_index} -> {resolved_input}"
-                )
-                self._input_device_index = resolved_input
+            preferred_input = self._input_device_index
 
-            # 1. Input Stream
-            self.input_stream = sd.InputStream(
-                device=self._input_device_index,
-                channels=CHANNELS,
-                samplerate=INPUT_SAMPLE_RATE,
-                callback=self._audio_callback,
-                blocksize=BLOCK_SIZE,
-                dtype=INPUT_DTYPE
-            )
-            self.input_stream.start()
-            self.running = True
+            def _attempt_start_input(device_index, label):
+                if device_index is None:
+                    return False
+                try:
+                    self.input_stream = sd.InputStream(
+                        device=device_index,
+                        channels=CHANNELS,
+                        samplerate=INPUT_SAMPLE_RATE,
+                        callback=self._audio_callback,
+                        blocksize=BLOCK_SIZE,
+                        dtype=INPUT_DTYPE
+                    )
+                    self.input_stream.start()
+                    self.running = True
+                    self._input_device_index = device_index
+                    self.logger.info(f"[AUDIO] Input device active ({label}): {device_index}")
+                    return True
+                except Exception as e:
+                    self.logger.warning(f"[AUDIO] Input device failed ({label}={device_index}): {e}")
+                    self.input_stream = None
+                    return False
+
+            if _attempt_start_input(preferred_input, "preferred"):
+                return
+
+            resolved_input = self._select_input_device(None if preferred_input is not None else preferred_input)
+            if resolved_input != preferred_input:
+                self.logger.warning(
+                    f"[AUDIO] Input device fallback: {preferred_input} -> {resolved_input}"
+                )
+
+            if not _attempt_start_input(resolved_input, "fallback"):
+                raise RuntimeError("No usable input device found")
         except Exception as e:
             self.logger.critical(f"Audio Input Init Failed: {e}")
             raise
@@ -225,6 +244,7 @@ class AudioManager:
                     dtype=OUTPUT_DTYPE
                 )
                 self.output_stream.start()
+                self._stop_playback_event.clear()
             except Exception as e:
                 self.logger.error(f"Failed to start output stream: {e}")
 
@@ -254,24 +274,31 @@ class AudioManager:
 
     def play_chunk(self, data):
         """Play raw PCM audio. Blocking write to stream."""
-        self._ensure_output_stream()
-        if self.output_stream:
-            try:
-                self.output_stream.write(data)
-            except Exception as e:
-                self.logger.error(f"Write error: {e}")
+        if self._stop_playback_event.is_set():
+            return
+        with self._output_lock:
+            if self._stop_playback_event.is_set():
+                return
+            self._ensure_output_stream()
+            if self.output_stream and getattr(self.output_stream, "active", False):
+                try:
+                    self.output_stream.write(data)
+                except Exception as e:
+                    self.logger.error(f"Write error: {e}")
 
     def stop_playback(self):
         """Forcefully stop playback by killing the stream."""
-        if self.output_stream:
-            try:
-                # Abort drops buffers immediately
-                self.output_stream.abort() 
-                self.output_stream.close()
-            except Exception as e:
-                self.logger.error(f"Stop playback error: {e}")
-            finally:
-                self.output_stream = None
+        self._stop_playback_event.set()
+        with self._output_lock:
+            if self.output_stream:
+                try:
+                    if getattr(self.output_stream, "active", False):
+                        self.output_stream.stop()
+                    self.output_stream.close()
+                except Exception as e:
+                    self.logger.error(f"Stop playback error: {e}")
+                finally:
+                    self.output_stream = None
         self.logger.info("Audio playback flushed/stopped.")
 
     def acquire_audio(self, owner: str, interaction_id: str = ""):

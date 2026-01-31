@@ -3,9 +3,9 @@
 Single source of truth for runtime versioning.
 """
 
-CURRENT_VERSION = "1.5.0"
-CURRENT_MILESTONE = "music+system-health-hardening"
-CURRENT_DATE = "2026-01-28"
+CURRENT_VERSION = "1.6.0"
+CURRENT_MILESTONE = "edge-tts+music-stability"
+CURRENT_DATE = "2026-01-30"
 
 VERSION_HISTORY = [
     {
@@ -20,8 +20,13 @@ VERSION_HISTORY = [
     },
     {
         "version": "1.5.0",
-        "date": CURRENT_DATE,
+        "date": "2026-01-28",
         "notes": "Deterministic system health + disk queries; music hardening",
+    },
+    {
+        "version": "1.6.0",
+        "date": CURRENT_DATE,
+        "notes": "Edge TTS integration; barge-in interrupt fixes; Jellyfin stability",
     },
 ]
 

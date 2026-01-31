@@ -1001,174 +1001,78 @@ class EdgeTTSOutputSink(OutputSink):
         """
         if not text or not text.strip():
             return
-        
+
         self._stop_requested = False
-        
+
         try:
             import edge_tts
-            import sounddevice
             import numpy as np
-            import wave
-            import os
-            
-            # Step 1: Synthesize audio from text
-            # CRITICAL: rate/pitch/volume MUST be strings with unit suffixes (% or Hz)
-            # This bypasses known Edge-TTS parameter validator bug that corrupts audio
-            communicate = edge_tts.Communicate(
-                text=text,
-                voice=self.voice,
-                rate="+0%",     # MUST be string ending in %
-                pitch="+0Hz",   # MUST be string ending in Hz
-                volume="+0%"    # MUST be string ending in %
-            )
-            
-            # Collect audio chunks
-            audio_chunks = []
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            async def collect_audio():
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        audio_chunks.append(chunk["data"])
-                    if self._stop_requested:
-                        break
-            
-            try:
-                loop.run_until_complete(collect_audio())
-            finally:
-                loop.close()
-            
-            if not audio_chunks or self._stop_requested:
-                return
-            
-            # Combine audio chunks
-            audio_data = b''.join(audio_chunks)
-            
-            # Step 2: Save WAV file to debug directory
-            debug_dir = "audio/debug"
-            os.makedirs(debug_dir, exist_ok=True)
-            debug_file = os.path.join(debug_dir, "edge_tts_test.wav")
-            
-            try:
-                with wave.open(debug_file, 'wb') as wav_file:
-                    # Edge-TTS outputs 48kHz 16-bit mono audio
-                    wav_file.setnchannels(1)  # Mono from Edge-TTS
-                    wav_file.setsampwidth(2)  # 16-bit
-                    wav_file.setframerate(self.SAMPLE_RATE)
-                    wav_file.writeframes(audio_data)
-                print(f"[Audio] Debug WAV saved: {debug_file}", file=sys.stderr)
-            except Exception as e:
-                print(f"[Audio] Failed to save debug WAV: {e}", file=sys.stderr)
-            
-            # Step 2b: Read WAV header to get actual sample rate (fix playback clock)
-            # Edge-TTS might output at different rate than expected
-            actual_sample_rate = self.SAMPLE_RATE
-            try:
-                with wave.open(debug_file, 'rb') as wav_file:
-                    actual_sample_rate = wav_file.getframerate()
-                    actual_channels = wav_file.getnchannels()
-                    actual_width = wav_file.getsampwidth()
-                    actual_frames = wav_file.getnframes()
-                    print(f"[Audio] WAV Header: {actual_sample_rate}Hz, {actual_channels}ch, {actual_width}bytes/sample, {actual_frames} frames", file=sys.stderr)
-            except Exception as e:
-                print(f"[Audio] Failed to read WAV header: {e}", file=sys.stderr)
-            
-            # Step 3: Convert audio to numpy array for playback
-            audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            duration = len(audio_array) / actual_sample_rate
-            
-            # Step 3b: Add diagnostic logging for audio array quality
-            print(f"[Audio] Array range: [{audio_array.min():.4f}, {audio_array.max():.4f}]", file=sys.stderr)
-            print(f"[Audio] Array shape: {audio_array.shape}, dtype: {audio_array.dtype}", file=sys.stderr)
-            print(f"[Audio] Non-zero samples: {np.count_nonzero(audio_array)}/{len(audio_array)}", file=sys.stderr)
-            
-            # Normalize and apply gain reduction to prevent clipping
-            audio_max = np.max(np.abs(audio_array))
-            if audio_max > 0:
-                # Apply 0.8 gain to prevent clipping in int16 conversion
-                audio_array = audio_array * (0.8 / audio_max)
-                print(f"[Audio] Applied gain: 0.8x (normalized from peak {audio_max:.4f})", file=sys.stderr)
-            
-            # Step 3: Resample Edge-TTS audio to device clock
-            # For simpleaudio, try native 48kHz first (let Windows handle it)
-            print(f"[Audio] Native TTS rate: {actual_sample_rate}Hz, Device rate: {self._device_sample_rate}Hz", file=sys.stderr)
-            
-            # Try playing at native 48kHz - Windows may handle resampling in background
-            # Only resample if vastly different (e.g., 16kHz, 22kHz, 96kHz)
-            if actual_sample_rate < 40000 or actual_sample_rate > 50000:
+            import sounddevice as sd
+            import tempfile
+            from pydub import AudioSegment
+
+            # Synthesize to temp file
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out_path = os.path.join(tmpdir, "edge_tts_output.mp3")
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice=self.voice,
+                    rate="+0%",
+                    pitch="+0Hz",
+                    volume="+0%",
+                )
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    from scipy.signal import resample
-                    original_len = len(audio_array)
-                    print(f"[Audio] Resampling {actual_sample_rate}Hz → {self._device_sample_rate}Hz", file=sys.stderr)
-                    num_samples = int(len(audio_array) * self._device_sample_rate / actual_sample_rate)
-                    audio_array = resample(audio_array, num_samples)
-                    resampled_len = len(audio_array)
-                    print(f"[Audio] Resampled: {original_len} frames → {resampled_len} frames", file=sys.stderr)
-                    actual_sample_rate = self._device_sample_rate
-                except Exception as e:
-                    print(f"[Audio] Resampling failed: {e}, using native rate", file=sys.stderr)
-            else:
-                print(f"[Audio] Rate difference < 5%, playing at native {actual_sample_rate}Hz", file=sys.stderr)
-            
-            # Step 4: Log and play to locked output device (blocking)
-            # Use actual sample rate from WAV header, not hard-coded constant
-            print(f"[Audio] Playing Edge-TTS audio: duration={duration:.2f}s, samplerate={actual_sample_rate}", file=sys.stderr)
-            
-            # Pre-buffer audio to prevent underrun (minimal buffer)
-            import time
-            time.sleep(0.05)  # Minimal buffer for audio device
-            
-            # Step 4: Force correct playback parameters
-            # Try using simpleaudio instead of sounddevice to avoid driver issues
-            try:
-                import simpleaudio as sa
-                # Convert to int16 PCM for simpleaudio
-                audio_int16 = (np.clip(audio_array, -1.0, 1.0) * 32767).astype(np.int16)
-                
-                print(f"[Audio] Playing with simpleaudio: {len(audio_int16)} samples @ {int(actual_sample_rate)}Hz, int16 codec", file=sys.stderr)
-                
-                # Play using simpleaudio (direct Windows audio, no resampling)
-                playback = sa.play_buffer(
-                    audio_int16,
-                    num_channels=1,
-                    bytes_per_sample=2,
-                    sample_rate=int(actual_sample_rate)
-                )
-                playback.wait_done()
-                print(f"[Audio] Playback complete (simpleaudio)", file=sys.stderr)
-            except ImportError:
-                # Fallback to sounddevice if simpleaudio not available
-                print(f"[Audio] simpleaudio not available, using sounddevice", file=sys.stderr)
-                import sounddevice as sd
-                sd.play(
-                    audio_array.astype(np.float32),
-                    samplerate=int(actual_sample_rate),
-                    device=self._audio_device,
-                    blocking=True,
-                    blocksize=2048
-                )
-                sd.wait()
-                print(f"[Audio] Playback complete (sounddevice)", file=sys.stderr)
-            except Exception as e:
-                print(f"[Audio] Playback failed: {e}", file=sys.stderr)
-            
-            # Step 5: Ensure playback clock finishes before returning
-            import time
-            time.sleep(0.05)  # Minimal buffer for device
-            print(f"[Audio] Playback complete", file=sys.stderr)
-            
+                    loop.run_until_complete(communicate.save(out_path))
+                finally:
+                    loop.close()
+
+                if self._stop_requested:
+                    return
+
+                # Decode via pydub (ffmpeg) to get correct sample rate
+                audio = AudioSegment.from_file(out_path)
+                sample_rate = audio.frame_rate
+                channels = audio.channels
+                samples = np.array(audio.get_array_of_samples())
+                if channels > 1:
+                    samples = samples.reshape((-1, channels))
+                samples = samples.astype(np.float32) / (1 << (8 * audio.sample_width - 1))
+
+                # Normalize to prevent clipping
+                peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+                if peak > 0:
+                    samples = samples * (0.8 / peak)
+
+                sd.play(samples, samplerate=sample_rate, blocking=False)
+                import time
+                while True:
+                    if self._stop_requested:
+                        try:
+                            sd.stop()
+                        except Exception:
+                            pass
+                        break
+                    try:
+                        stream = sd.get_stream()
+                        if not stream or not stream.active:
+                            break
+                    except Exception:
+                        break
+                    time.sleep(0.01)
+                try:
+                    sd.wait()
+                except Exception:
+                    pass
         except ImportError as e:
             print(f"[EdgeTTS_ERROR] Missing dependency: {e}", file=sys.stderr)
-            print(f"[EdgeTTS_ERROR] Install with: pip install edge-tts sounddevice numpy", file=sys.stderr)
+            print(f"[EdgeTTS_ERROR] Install with: pip install edge-tts pydub sounddevice numpy", file=sys.stderr)
         except Exception as e:
             print(f"[EdgeTTS_ERROR] speak() failed: {type(e).__name__}: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
-        
-        # Minimal buffer: ensure playback finishes before process swaps to listening
-        import time
-        time.sleep(0.05)
     
     async def send(self, text: str) -> None:
         """
@@ -1181,7 +1085,7 @@ class EdgeTTSOutputSink(OutputSink):
         """
         self.speak(text)
     
-    async def stop(self) -> None:
+    def stop_sync(self) -> None:
         """
         Stop audio playback immediately (idempotent, instant).
         Also stops music playback if active.
@@ -1206,6 +1110,9 @@ class EdgeTTSOutputSink(OutputSink):
             music_player.stop()
         except Exception:
             pass  # Music not playing or not enabled
+
+    async def stop(self) -> None:
+        self.stop_sync()
 
 
 def play_startup_announcement():

@@ -3,7 +3,7 @@
 ARGO Pipeline: STT -> LLM -> TTS
 
 Synchronous, queue-based processing pipeline.
-Uses faster-whisper, ollama, and piper.
+Uses faster-whisper, ollama, and Edge TTS.
 """
 
 # ============================================================================
@@ -85,40 +85,30 @@ class ArgoPipeline:
         # Models
         self.stt_model = None
         self.tts_process = None
+        self.stt_model_name = "unknown"
+        self.llm_model_name = "unknown"
         
-        # Default voice
+        # Default voice (mapped to Edge TTS voices)
         self.voices = {
-            "lessac": "audio/piper/voices/en_US-lessac-medium.onnx",
-            "alan": "audio/piper/voices/en_GB-alan-medium.onnx",
-            "alba": "audio/piper/voices/en_GB-alba-medium.onnx"
+            "lessac": "en-US-AriaNeural",
+            "alan": "en-GB-RyanNeural",
+            "alba": "en-GB-LibbyNeural",
         }
         self.current_voice_key = "lessac"
-        self.piper_model_path = self.voices["lessac"]
-        
-        if not shutil.which("piper"):
-            self.logger.warning("Piper not in PATH (but module callable via 'python -m piper')")
+        self._edge_tts = None
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
         if voice_key in self.voices:
-            new_path = self.voices[voice_key]
-            config_path = f"{new_path}.json"
-            if os.path.exists(new_path) and os.path.exists(config_path):
-                self.current_voice_key = voice_key
-                self.piper_model_path = new_path
-                self.logger.info(f"Voice switched to {voice_key}: {new_path}")
-                self.broadcast("log", f"System: Voice profile switched to {voice_key.upper()}")
-                return True
-            else:
-                missing = []
-                if not os.path.exists(new_path):
-                    missing.append(new_path)
-                if not os.path.exists(config_path):
-                    missing.append(config_path)
-                missing_str = ", ".join(missing)
-                self.logger.error(f"Voice files missing: {missing_str}")
-                self.broadcast("log", f"ERROR: Voice files missing for {voice_key.upper()}: {missing_str}")
-                return False
+            self.current_voice_key = voice_key
+            if self._edge_tts is not None:
+                try:
+                    self._edge_tts.voice = self.voices[voice_key]
+                except Exception:
+                    pass
+            self.logger.info(f"Voice switched to {voice_key}: {self.voices[voice_key]}")
+            self.broadcast("log", f"System: Voice profile switched to {voice_key.upper()}")
+            return True
         return False
 
     def _sanitize_tts_text(self, text: str) -> str:
@@ -147,6 +137,7 @@ class ArgoPipeline:
             os.environ.setdefault("HF_HOME", str(cache_dir))
             os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(cache_dir / "hub"))
 
+            self.stt_model_name = "base.en"
             self.logger.info("Loading Whisper Model: base.en...")
             try:
                 self.stt_model = WhisperModel("base.en", device="cuda", compute_type="float16")
@@ -164,6 +155,7 @@ class ArgoPipeline:
                 model_name = "qwen:latest"
                 if self._config is not None:
                     model_name = self._config.get("llm.model", model_name)
+                self.llm_model_name = model_name
                 client = ollama.Client(host='http://127.0.0.1:11434')
                 client.generate(model=model_name, prompt='hi', stream=False)
                 self.logger.info("LLM model warmed up")
@@ -240,6 +232,14 @@ class ArgoPipeline:
         self.illegal_transition = False
         self.illegal_transition_details = None
         self.transition_state("LISTENING", source="ui")
+
+    def stop_tts(self) -> None:
+        """Force stop Edge TTS playback if active."""
+        try:
+            if self._edge_tts is not None:
+                self._edge_tts.stop_sync()
+        except Exception:
+            pass
 
     def transcribe(self, audio_data, interaction_id: str = ""):
         if self.stt_model is None:
@@ -612,13 +612,6 @@ class ArgoPipeline:
         self.stop_signal.clear()
         self.is_speaking = True
         self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
-
-        piper_exe = shutil.which("piper")
-        if piper_exe:
-            cmd = [piper_exe, "--model", self.piper_model_path, "--output-raw"]
-        else:
-            cmd = [sys.executable, "-m", "piper", "--model", self.piper_model_path, "--output-raw"]
-
         try:
             try:
                 self.audio.acquire_audio("TTS", interaction_id=interaction_id)
@@ -626,90 +619,16 @@ class ArgoPipeline:
                 self.logger.error(f"[TTS] Audio ownership error: {e}")
                 log_event("TTS_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
                 return
-            self.tts_process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            try:
-                if self.tts_process.stdout:
-                    # Use os.set_blocking if available, else fallback for cross-platform
-                    try:
-                        set_blocking = getattr(os, "set_blocking", None)
-                        if set_blocking:
-                            set_blocking(self.tts_process.stdout.fileno(), False)
-                        else:
-                            if sys.platform != "win32":
-                                try:
-                                    import fcntl
-                                    getfl = getattr(fcntl, "F_GETFL", None)
-                                    setfl = getattr(fcntl, "F_SETFL", None)
-                                    nonblock = getattr(os, "O_NONBLOCK", 0)
-                                    if getfl is not None and setfl is not None:
-                                        flags = fcntl.fcntl(self.tts_process.stdout.fileno(), getfl)
-                                        if nonblock:
-                                            fcntl.fcntl(self.tts_process.stdout.fileno(), setfl, flags | nonblock)
-                                except Exception:
-                                    pass
-                    except Exception as e:
-                        self.logger.warning(f"[TTS] Could not set non-blocking mode: {e}")
-            except Exception:
-                pass
-            if self.tts_process.stdin:
-                try:
-                    self.tts_process.stdin.write((text or "").encode('utf-8'))
-                except BrokenPipeError:
-                    self.logger.warning("[TTS] Piper stdin broken pipe during write")
-                finally:
-                    try:
-                        self.tts_process.stdin.close()
-                    except Exception:
-                        pass
 
-            while True:
-                if self.stop_signal.is_set():
-                    try:
-                        self.tts_process.terminate()
-                        self.tts_process.wait(timeout=0.2)
-                    except Exception:
-                        try:
-                            self.tts_process.kill()
-                        except Exception:
-                            pass
-                    break
-                data = b""
-                try:
-                    if self.tts_process.stdout:
-                        data = self.tts_process.stdout.read(4096)
-                except BlockingIOError:
-                    data = b""
-                except Exception as e:
-                    self.logger.error(f"[TTS] Exception during audio read: {e}")
-                    break
-                if data:
-                    try:
-                        self.audio.play_chunk(np.frombuffer(data, dtype='int16'))
-                    except Exception as e:
-                        self.logger.error(f"[TTS] Exception during play_chunk: {e}")
-                        break
-                else:
-                    if self.tts_process.poll() is not None:
-                        break
-                    time.sleep(0.01)
+            if self._edge_tts is None:
+                from core.output_sink import EdgeTTSOutputSink
+                self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
 
-            try:
-                self.tts_process.wait()
-            except Exception:
-                pass
+            # Edge TTS playback (blocking)
+            self._edge_tts.speak(text)
         except Exception as e:
             self.logger.error(f"[TTS] Error: {e}")
         finally:
-            try:
-                if self.tts_process and self.tts_process.stdout:
-                    self.tts_process.stdout.close()
-            except Exception:
-                pass
             try:
                 self.audio.release_audio("TTS", interaction_id=interaction_id)
             except Exception as e:
@@ -875,9 +794,11 @@ class ArgoPipeline:
             self.audio.release_audio("STT", interaction_id=interaction_id)
             if not user_text:
                 self.logger.warning("No speech recognized.")
+                self.broadcast("log", "User: [No speech recognized]")
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                 return
             user_text = normalize_system_text(user_text)
+            self.broadcast("log", f"User: {user_text}")
 
             # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
             from core.canonical_answers import get_canonical_answer
@@ -944,9 +865,6 @@ class ArgoPipeline:
                         self._low_conf_notice_given = True
                     self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                     return
-
-            self.broadcast("log", f"User: {user_text}")
-
 
             intent = None
             try:
