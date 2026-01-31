@@ -35,7 +35,8 @@ class MemoryStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # Short timeout ensures locked DBs fail fast and can be handled gracefully upstream.
+        conn = sqlite3.connect(self.db_path, timeout=0.2)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
@@ -74,14 +75,19 @@ class MemoryStore:
             raise ValueError("mem_type must be FACT or PROJECT")
         ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         conn = self._connect()
-        cur = conn.execute(
-            "INSERT INTO memory(type, namespace, key, value, source, timestamp) VALUES(?, ?, ?, ?, ?, ?)",
-            (mem_type, namespace, key, value, source, ts),
-        )
-        conn.commit()
-        row_id = int(cur.lastrowid)
-        conn.close()
-        return row_id
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "INSERT INTO memory(type, namespace, key, value, source, timestamp) VALUES(?, ?, ?, ?, ?, ?)",
+                (mem_type, namespace, key, value, source, ts),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def list_memory(
         self,
@@ -120,27 +126,42 @@ class MemoryStore:
         if namespace is not None:
             query += " AND namespace = ?"
             params.append(namespace)
-        cur = conn.execute(query, params)
-        conn.commit()
-        count = int(cur.rowcount)
-        conn.close()
-        return count
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(query, params)
+            conn.commit()
+            return int(cur.rowcount)
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def clear_project(self, namespace: str) -> int:
         conn = self._connect()
-        cur = conn.execute("DELETE FROM memory WHERE type = 'PROJECT' AND namespace = ?", (namespace,))
-        conn.commit()
-        count = int(cur.rowcount)
-        conn.close()
-        return count
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute("DELETE FROM memory WHERE type = 'PROJECT' AND namespace = ?", (namespace,))
+            conn.commit()
+            return int(cur.rowcount)
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def clear_all(self) -> int:
         conn = self._connect()
-        cur = conn.execute("DELETE FROM memory")
-        conn.commit()
-        count = int(cur.rowcount)
-        conn.close()
-        return count
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute("DELETE FROM memory")
+            conn.commit()
+            return int(cur.rowcount)
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def get_by_key(
         self,

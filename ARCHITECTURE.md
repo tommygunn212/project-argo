@@ -12,6 +12,31 @@ The current runtime is **VAD-only** and runs from main.py with the UI debugger a
 
 Note: Several sections below describe legacy wake-word and Edge-TTS/LiveKit designs kept for historical reference.
 
+## Core Baseline (Memory + STT Hardening)
+
+High-level pipeline:
+
+Audio → Hygiene → Whisper → Intent → Action / Response
+
+Memory contract:
+- Explicit writes only
+- Namespaces: FACT / PROJECT / EPHEMERAL
+- EPHEMERAL clears on restart
+- Memory is advisory, never authoritative
+- Memory cannot trigger actions
+
+STT design:
+- Local-only Whisper
+- Configurable initial_prompt
+- Deterministic audio rejection rules
+
+Cloud policy:
+- Core system is local-first
+- Any cloud usage (if added later) must be explicit, opt-in, and sandboxed
+- Cloud systems have NO authority
+
+Memory is infrastructure, not a feature.
+
 ## System Overview
 
 ARGO is a 7-layer voice system designed for predictability, debuggability, and control.

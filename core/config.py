@@ -109,7 +109,14 @@ _DEFAULT_CONFIG = {
     },
     "speech_to_text": {
         "model": "base",
-        "device": "cpu"
+        "device": "cpu",
+        "prompt_profile": "general",
+        "initial_prompt_profiles": {
+            "general": "",
+            "technical": "float, integer, database, SQL, SQLite, engine, buffer, memory, Argo",
+        },
+        "min_rms_threshold": 0.005,
+        "silence_ratio_threshold": 0.90
     },
     "text_to_speech": {
         "engine": "piper",
@@ -164,6 +171,7 @@ _RUNTIME_OVERRIDES_DEFAULT = {
     "music_enabled": True,
     "debug_level": "INFO",
     "personality_mode": "tommy_gunn",
+    "execution_mode": "EXPLAIN_MODE",
 }
 _runtime_overrides = dict(_RUNTIME_OVERRIDES_DEFAULT)
 

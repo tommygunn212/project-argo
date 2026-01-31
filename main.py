@@ -15,6 +15,7 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ============================================================================
 # 2) PATH SETUP / ENV
@@ -22,6 +23,9 @@ from pathlib import Path
 # Add core to path just in case
 repo_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(repo_root)
+
+# Load environment variables from .env (ignored by git)
+load_dotenv(Path(repo_root) / ".env")
 
 # Enable native crash logging (access violations, etc.)
 try:

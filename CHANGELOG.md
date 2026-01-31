@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.7.0 — Core Memory & STT Hardening (Stable)
+
+### Added
+- Explicit-only memory system with FACT / PROJECT / EPHEMERAL namespaces
+- Read-only memory introspection commands
+- Whisper STT hint injection (local-only)
+- Audio hygiene and silence rejection
+- Deterministic chaos stress testing
+
+### Fixed
+- Implicit memory writes (eliminated)
+- Audio-induced hallucinations
+- Pipeline instability under interruption
+
+### Security / Guarantees
+- Memory cannot trigger actions
+- No cloud dependencies
+- No eval / exec paths
+- Deterministic restart behavior
+
 ## v1.5.0 – Hardened Core Baseline
 - Deterministic system health + disk queries (no LLM)
 - Conversational system status formatting (voice-friendly)

@@ -25,6 +25,8 @@ memory/
 .hf_cache/
 gem_test/
 data/*.db
+data/*.db-wal
+data/*.db-shm
 
 # Temporary files
 temp/
@@ -37,6 +39,7 @@ piper-master.zip
 monitors/*.zip
 voices/*.zip
 voices/
+frontend-2/
 
 # IDE / OS
 .vscode/

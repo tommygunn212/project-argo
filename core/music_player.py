@@ -9,6 +9,12 @@ def set_volume_percent(percent: int):
     clamped = max(0, min(100, int(percent)))
     logger.info(f"[ARGO] Music volume set to {clamped}%")
     _GLOBAL_MUSIC_VOLUME_PERCENT = clamped
+    try:
+        player = get_music_player()
+        if player._pygame_module is not None:
+            player._pygame_module.mixer.music.set_volume(clamped / 100.0)
+    except Exception:
+        pass
 
 def adjust_volume_percent(delta: int):
     """Adjust global music playback volume by delta (clamped 0-100)."""
@@ -1383,12 +1389,14 @@ Response (JSON ONLY):"""
                 logger.debug(f"[ARGO] Starting ffplay streaming from {stream_url[:80]}...")
                 
                 # Launch ffplay with streaming flags for instant playback
+                vol = get_volume_percent()
                 self.current_process = subprocess.Popen(
                     [
                         ffplay_path,
                         "-nodisp",           # Don't display video window
                         "-noborder",         # No window border (save resources)
                         "-autoexit",         # Exit when done
+                        "-volume", str(vol), # Apply volume (0-100)
                         "-probesize", "32",  # Fast stream probing
                         "-analyzeduration", "0",  # Don't analyze duration
                         "-infbuf",           # CRITICAL: Infinite buffer for network stability
@@ -1408,8 +1416,9 @@ Response (JSON ONLY):"""
             mpv_path = shutil.which("mpv")
             if mpv_path:
                 logger.debug("[ARGO] Using mpv for streaming")
+                vol = get_volume_percent()
                 self.current_process = subprocess.Popen(
-                    [mpv_path, "--no-video", stream_url],
+                    [mpv_path, "--no-video", f"--volume={vol}", stream_url],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
@@ -1467,6 +1476,8 @@ Response (JSON ONLY):"""
                     import pygame
                     self._pygame_module = pygame
                     pygame.mixer.init()
+                    vol = get_volume_percent()
+                    pygame.mixer.music.set_volume(vol / 100.0)
                     pygame.mixer.music.load(track_path)
                     pygame.mixer.music.play()
                     
@@ -1515,9 +1526,10 @@ Response (JSON ONLY):"""
                     
                     ffplay_path = shutil.which("ffplay")
                     if ffplay_path:
+                        vol = get_volume_percent()
                         logger.info(f"[ARGO] Playing via ffplay: {ffplay_path}")
                         self.current_process = subprocess.Popen(
-                            [ffplay_path, "-nodisp", "-autoexit", track_path],
+                            [ffplay_path, "-nodisp", "-autoexit", "-volume", str(vol), track_path],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )

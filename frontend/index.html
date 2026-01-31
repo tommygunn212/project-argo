@@ -73,7 +73,7 @@
             const [vadStats, setVadStats] = useState(Array(30).fill({ value: 0 }));
             const [userText, setUserText] = useState('Waiting for speech...');
             const [aiText, setAiText] = useState('Waiting for generation...');
-            const [currentVoice, setCurrentVoice] = useState('lessac');
+            const [currentVoice, setCurrentVoice] = useState('ryan');
             const [activeSolutions, setActiveSolutions] = useState([]);
             
             // New State for Modules & Metrics
@@ -174,13 +174,13 @@
                         }
                         if (msg.includes('Voice switched to')) {
                             const match = msg.match(/Voice switched to\s+(\w+)/i);
-                            setModelInfo(m => ({...m, tts: { name: 'Piper', detail: match?.[1] || 'voice' }}));
+                            setModelInfo(m => ({...m, tts: { name: 'Edge TTS', detail: match?.[1] || 'voice' }}));
                         }
                         if (msg.includes('Piper not in PATH') || msg.includes('[TTS]') || msg.includes('Voice switched') || msg.includes('Voice profile')) {
                             setHealth(h => ({...h, tts: 'Ready'}));
                             if (msg.includes('[TTS] Speaking with')) {
                                 const match = msg.match(/Speaking with\s+(\w+)/i);
-                                setModelInfo(m => ({...m, tts: { name: 'Piper', detail: match?.[1] || 'voice' }}));
+                                setModelInfo(m => ({...m, tts: { name: 'Edge TTS', detail: match?.[1] || 'voice' }}));
                             }
                         }
                         
@@ -360,10 +360,18 @@
                         </div>
 
                         {/* Voice Controls */}
-                        <div className="flex gap-3">
-                            <button onClick={() => changeVoice('lessac')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'lessac' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>LESSAC (US)</button>
-                            <button onClick={() => changeVoice('alan')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alan' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALAN (GB)</button>
-                            <button onClick={() => changeVoice('alba')} className={`px-4 py-2 rounded text-xs font-bold transition-all ${currentVoice === 'alba' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>ALBA (GB)</button>
+                        <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400 font-mono uppercase">Voice</span>
+                            <select
+                                value={currentVoice}
+                                onChange={(e) => changeVoice(e.target.value)}
+                                className="bg-slate-800 text-slate-200 text-xs font-semibold rounded px-3 py-2 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                <option value="ryan">Ryan (GB) — en-GB-RyanNeural</option>
+                                <option value="libby">Libby (GB) — en-GB-LibbyNeural</option>
+                                <option value="natasha">Natasha (AU) — en-AU-NatashaNeural</option>
+                                <option value="abeo">Abeo (NG) — en-NG-AbeoNeural</option>
+                            </select>
                         </div>
 
                         {/* Start/Stop Controls */}
