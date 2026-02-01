@@ -13,6 +13,8 @@
 
 **Version:** see [core/version.py](core/version.py)
 
+**Disclaimer:** See [ARGO_DISCLAIMER.md](ARGO_DISCLAIMER.md)
+
 ---
 
 ## Versioning
