@@ -10,13 +10,15 @@ import wmi
 # ============================================================================
 _SYSTEM_PROFILE = None
 _GPU_PROFILE = None
+_PORTS_PROFILE = None
+_IRQ_PROFILE = None
 
 
 # ============================================================================
 # 3) SYSTEM PROFILE (CPU/RAM/BOARD/OS)
 # ============================================================================
 def get_system_profile():
-    global _SYSTEM_PROFILE
+    global _SYSTEM_PROFILE, _PORTS_PROFILE, _IRQ_PROFILE
     if _SYSTEM_PROFILE is None:
         c = wmi.WMI()
 
@@ -91,6 +93,54 @@ def get_system_profile():
         except Exception:
             pass
 
+        ports = None
+        try:
+            if _PORTS_PROFILE is None:
+                serial_ports = []
+                parallel_ports = []
+                usb_controllers = []
+                for port in c.Win32_SerialPort():
+                    serial_ports.append({
+                        "name": getattr(port, "Name", None),
+                        "device_id": getattr(port, "DeviceID", None),
+                        "description": getattr(port, "Description", None),
+                    })
+                for port in c.Win32_ParallelPort():
+                    parallel_ports.append({
+                        "name": getattr(port, "Name", None),
+                        "device_id": getattr(port, "DeviceID", None),
+                        "description": getattr(port, "Description", None),
+                    })
+                for controller in c.Win32_USBController():
+                    usb_controllers.append({
+                        "name": getattr(controller, "Name", None),
+                        "device_id": getattr(controller, "DeviceID", None),
+                        "manufacturer": getattr(controller, "Manufacturer", None),
+                    })
+                _PORTS_PROFILE = {
+                    "serial": serial_ports,
+                    "parallel": parallel_ports,
+                    "usb_controllers": usb_controllers,
+                }
+            ports = _PORTS_PROFILE
+        except Exception:
+            ports = None
+
+        irqs = None
+        try:
+            if _IRQ_PROFILE is None:
+                irq_list = []
+                for irq in c.Win32_IRQResource():
+                    irq_list.append({
+                        "irq": getattr(irq, "IRQNumber", None),
+                        "name": getattr(irq, "Name", None),
+                        "description": getattr(irq, "Description", None),
+                    })
+                _IRQ_PROFILE = irq_list
+            irqs = _IRQ_PROFILE
+        except Exception:
+            irqs = None
+
         os_name = platform.system()
         os_version = platform.release()
 
@@ -110,6 +160,8 @@ def get_system_profile():
             "system_manufacturer": system_manufacturer,
             "system_model": system_model,
             "storage_drives": storage_drives,
+            "ports": ports,
+            "irqs": irqs,
             "os": f"{os_name} {os_version}",
         }
     return _SYSTEM_PROFILE

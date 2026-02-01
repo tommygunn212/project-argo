@@ -23,10 +23,19 @@ import subprocess
 import shutil
 import os
 from pathlib import Path
+from collections import deque
 
 from core.instrumentation import log_event
-from core.config import get_runtime_overrides, get_config
+from core.config import (
+    get_runtime_overrides,
+    get_config,
+    MIN_TTS_CONFIDENCE,
+    MIN_TTS_TEXT_LEN,
+    PERSONAL_MODE_MIN_CONFIDENCE,
+    PERSONAL_MODE_MIN_TEXT_LEN,
+)
 from core.intent_parser import RuleBasedIntentParser, IntentType, normalize_system_text, is_system_keyword
+from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
 from core.music_player import get_music_player
 from core.music_status import query_music_status
 from core.memory_store import get_memory_store
@@ -61,6 +70,11 @@ class ArgoPipeline:
             self._config = get_config()
         except Exception:
             self._config = None
+        self._current_stt_confidence = 1.0
+        self._tts_min_text_length = MIN_TTS_TEXT_LEN
+        self._tts_min_confidence = MIN_TTS_CONFIDENCE
+        self._personal_mode_min_confidence = PERSONAL_MODE_MIN_CONFIDENCE
+        self._personal_mode_min_text_len = PERSONAL_MODE_MIN_TEXT_LEN
         self._intent_parser = RuleBasedIntentParser()
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
@@ -79,7 +93,7 @@ class ArgoPipeline:
             "IDLE": {"LISTENING"},
             "LISTENING": {"TRANSCRIBING"},
             "TRANSCRIBING": {"THINKING", "LISTENING", "IDLE"},
-            "THINKING": {"SPEAKING", "IDLE"},
+            "THINKING": {"SPEAKING", "LISTENING", "IDLE"},
             "SPEAKING": {"LISTENING", "IDLE"},
         }
         
@@ -88,6 +102,8 @@ class ArgoPipeline:
         
         # Models
         self.stt_model = None
+        self.stt_engine_manager = None
+        self.stt_engine = "openai"  # Default engine name
         self.tts_process = None
         self.stt_model_name = "unknown"
         self.llm_model_name = "unknown"
@@ -110,19 +126,68 @@ class ArgoPipeline:
         except Exception:
             convo_size = 8
         self._conversation_buffer = ConversationBuffer(max_turns=convo_size)
+        ledger_size = 10
+        try:
+            if self._config is not None:
+                ledger_size = int(self._config.get("conversation.ledger_size", 10))
+        except Exception:
+            ledger_size = 10
+        self._conversation_ledger = deque(maxlen=ledger_size)
+        self._pending_memory_write = None
+        self._pending_memory = None
+        self._session_flags = {}
         self._stt_prompt_profile = "general"
         self._stt_initial_prompt = ""
         self._stt_min_rms_threshold = 0.005
         self._stt_silence_ratio_threshold = 0.90
+        self._stt_min_duration_s = 0.3
+        self._vad_silence_pad_ms = 300
+        self.strict_lab_mode = False
         try:
             if self._config is not None:
                 self._stt_prompt_profile = str(self._config.get("speech_to_text.prompt_profile", "general"))
                 self._stt_min_rms_threshold = float(self._config.get("speech_to_text.min_rms_threshold", 0.005))
                 self._stt_silence_ratio_threshold = float(self._config.get("speech_to_text.silence_ratio_threshold", 0.90))
+                self._stt_min_duration_s = float(
+                    self._config.get(
+                        "speech_to_text.min_duration_seconds",
+                        self._stt_min_duration_s,
+                    )
+                )
+                self._vad_silence_pad_ms = int(self._config.get("audio.vad_silence_pad_ms", self._vad_silence_pad_ms))
+                self.strict_lab_mode = bool(self._config.get("modes.strict_lab_mode", False))
                 profiles = self._config.get("speech_to_text.initial_prompt_profiles", {}) or {}
                 self._stt_initial_prompt = str(profiles.get(self._stt_prompt_profile, ""))
+                self._tts_min_text_length = int(
+                    self._config.get("guards.tts.min_text_length", self._tts_min_text_length)
+                )
+                self._tts_min_confidence = float(
+                    self._config.get("guards.tts.min_confidence", self._tts_min_confidence)
+                )
+                self._personal_mode_min_confidence = float(
+                    self._config.get(
+                        "guards.stt.personal_min_confidence",
+                        self._personal_mode_min_confidence,
+                    )
+                )
+                self._personal_mode_min_text_len = int(
+                    self._config.get(
+                        "guards.stt.personal_min_text_length",
+                        self._personal_mode_min_text_len,
+                    )
+                )
         except Exception:
             pass
+        self._tts_min_text_length = max(1, int(self._tts_min_text_length))
+        self._personal_mode_min_text_len = max(1, int(self._personal_mode_min_text_len))
+        self._tts_min_confidence = max(0.0, min(1.0, float(self._tts_min_confidence)))
+        self._personal_mode_min_confidence = max(0.0, min(1.0, float(self._personal_mode_min_confidence)))
+        self._stt_min_duration_s = max(self._stt_min_duration_s, self._vad_silence_pad_ms / 1000.0)
+        if "strict_lab_mode" in self.runtime_overrides:
+            try:
+                self.strict_lab_mode = bool(self.runtime_overrides["strict_lab_mode"])
+            except Exception:
+                pass
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
@@ -138,7 +203,133 @@ class ArgoPipeline:
             return True
         return False
 
-    def _sanitize_tts_text(self, text: str) -> str:
+    def _extract_name_from_statement(self, text: str) -> str | None:
+        """Extract name from identity statement like 'my name is X' or 'i am X'."""
+        lower_text = text.lower().strip()
+        
+        # Pattern: "my name is X"
+        name_match = re.search(r"my name is (.+?)(?:\.|!|\?|$)", lower_text)
+        if name_match:
+            name = name_match.group(1).strip().title()
+            return name if len(name) > 1 and len(name) < 50 else None
+        
+        # Pattern: "i am X" (stricter: only if confident phrasing)
+        if re.match(r"^i am [a-z]", lower_text):
+            parts = lower_text.split(" ", 2)
+            if len(parts) >= 3:
+                name = parts[2].strip().title()
+                return name if len(name) > 1 and len(name) < 50 else None
+
+        # Pattern: "call me X" or "you can call me X"
+        call_match = re.search(r"(call me|you can call me)\s+(.+?)(?:\.|!|\?|$)", lower_text)
+        if call_match and len(call_match.groups()) >= 2:
+            name = call_match.group(2).strip().title()
+            return name if len(name) > 1 and len(name) < 50 else None
+        
+        return None
+
+    def _is_affirmative_response(self, text: str) -> bool:
+        """Check if response is affirmative (yes, yeah, correct, do it, confirm)."""
+        lower_text = text.lower().strip()
+        affirmatives = {"yes", "yeah", "yep", "correct", "right", "do it", "confirm", "ok", "okay"}
+        return lower_text in affirmatives or any(a == lower_text[:len(a)] for a in affirmatives)
+
+    def _is_negative_response(self, text: str) -> bool:
+        """Check if response is negative (no, nope, never, skip, forget)."""
+        lower_text = text.lower().strip()
+        negatives = {"no", "nope", "never", "skip", "don't", "dont", "forget", "cancel"}
+        return lower_text in negatives or any(n == lower_text[:len(n)] for n in negatives)
+
+    def _is_identity_phrase(self, text: str) -> bool:
+        lower = (text or "").lower()
+        phrases = [
+            "my name is",
+            "call me",
+            "you can call me",
+            "i am",
+        ]
+        return any(phrase in lower for phrase in phrases)
+
+    def _is_identity_query(self, text: str) -> bool:
+        lower = (text or "").lower().strip()
+        if not lower:
+            return False
+        if lower.startswith("my name is") and "?" not in lower:
+            return False
+        query_phrases = {
+            "what is my name",
+            "what's my name",
+            "whats my name",
+            "who am i",
+            "do you remember my name",
+            "remember my name",
+            "tell me my name",
+            "say my name",
+            "what did i tell you my name",
+            "what name did i give you",
+            "do you know my name",
+        }
+        if any(phrase in lower for phrase in query_phrases):
+            return True
+        if "my name" in lower and "?" in lower:
+            return True
+        return False
+
+    def _lookup_user_name(self) -> str | None:
+        keys = ("name", "user.name")
+        try:
+            for key in keys:
+                records = self._memory_store.get_by_key(key, mem_type="FACT")
+                if records:
+                    value = (records[0].value or "").strip()
+                    if value:
+                        return value
+        except Exception as e:
+            self.logger.warning(f"[MEMORY] identity_lookup_failed: {e}")
+            return None
+        for key in keys:
+            value = (self._ephemeral_memory or {}).get(key)
+            if value:
+                text = str(value).strip()
+                if text:
+                    return text
+        return None
+
+    def _respond_with_identity_lookup(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        name_value = self._lookup_user_name()
+        if name_value:
+            response = f"Your name is {name_value}."
+            source = "memory"
+        else:
+            response = "I don't know your name yet."
+            source = "missing"
+        self.logger.info(f"[MEMORY] identity_lookup source={source}")
+        self._record_timeline("IDENTITY_LOOKUP", stage="memory", interaction_id=interaction_id)
+        self.broadcast("log", f"Argo: {response}")
+        self._append_convo_ledger("argo", response)
+        if not self.stop_signal.is_set() and not replay_mode:
+            tts_text = self._sanitize_tts_text(response)
+            tts_override = (overrides or {}).get("suppress_tts", False)
+            if tts_override:
+                self.logger.info("[TTS] Suppressed for next interaction override")
+            elif tts_text:
+                self.speak(tts_text, interaction_id=interaction_id)
+        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+        self.logger.info("--- Interaction Complete ---")
+        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        return True
+
+    def _get_clarification_prompt(self) -> str:
+        """Return a generic clarification prompt."""
+        prompts = [
+            "Can you clarify what you mean?",
+            "Could you say that more clearly?",
+            "I'm not quite sure what you're referring to. Can you rephrase?",
+            "Could you be more specific?",
+        ]
+        return prompts[hash(id(self)) % len(prompts)]
+
+    def _sanitize_tts_text(self, text: str, enforce_confidence: bool = True) -> str:
         if not text or not text.strip():
             return ""
         cleaned = text
@@ -152,7 +343,26 @@ class ArgoPipeline:
         # Remove list bullets
         cleaned = re.sub(r"^\s*[-*•]\s+", "", cleaned, flags=re.MULTILINE)
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
-        return cleaned.strip()
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return ""
+        if len(cleaned) < max(1, self._tts_min_text_length):
+            self.logger.warning(
+                "[TTS GUARD] Sanitized text too short (len=%s, min=%s); skipping speech",
+                len(cleaned),
+                self._tts_min_text_length,
+            )
+            return ""
+        if enforce_confidence:
+            active_conf = getattr(self, "_current_stt_confidence", None)
+            if active_conf is not None and active_conf < self._tts_min_confidence:
+                self.logger.warning(
+                    "[TTS GUARD] Confidence %.2f below %.2f; skipping speech",
+                    active_conf,
+                    self._tts_min_confidence,
+                )
+                return ""
+        return cleaned
 
     def warmup(self):
         self.logger.info("Warming up models...")
@@ -166,18 +376,52 @@ class ArgoPipeline:
             os.environ.setdefault("HF_HOME", str(cache_dir))
             os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(cache_dir / "hub"))
 
-            self.stt_model_name = "base.en"
-            self.logger.info("Loading Whisper Model: base.en...")
-            try:
-                self.stt_model = WhisperModel("base.en", device="cuda", compute_type="float16")
-            except Exception as cuda_error:
-                self.logger.warning(f"STT CUDA init failed, falling back to CPU: {cuda_error}")
-                self.stt_model = WhisperModel("base.en", device="cpu", compute_type="int8")
-            # Run a dummy transcription to load into VRAM
-            self.stt_model.transcribe(np.zeros(16000, dtype='float32'), beam_size=1)
-            self.logger.info("STT model warmed up")
+            # Get STT engine configuration
+            stt_engine = "openai"  # Default
+            stt_model_size = "base"  # Default
+            stt_device = "cpu"  # Default
+            
+            if self._config is not None:
+                stt_config = self._config.get("speech_to_text", {})
+                if isinstance(stt_config, dict):
+                    stt_engine = stt_config.get("engine", "openai")
+                    stt_model_size = stt_config.get("model", "base")
+                    stt_device = stt_config.get("device", "cpu")
+
+            # Validate engine selection
+            if stt_engine not in STTEngineManager.SUPPORTED_ENGINES:
+                self.logger.error(
+                    f"Invalid STT_ENGINE: {stt_engine}. "
+                    f"Supported: {', '.join(STTEngineManager.SUPPORTED_ENGINES)}"
+                )
+                raise ValueError(f"Invalid STT engine: {stt_engine}")
+
+            self.logger.info(
+                f"[STT] Engine configuration: engine={stt_engine}, "
+                f"model={stt_model_size}, device={stt_device}"
+            )
+
+            # ✅ PREFLIGHT CHECK: Verify engine dependencies before audio init
+            verify_engine_dependencies(stt_engine)
+
+            # Initialize STT engine manager
+            self.stt_engine_manager = STTEngineManager(
+                engine=stt_engine,
+                model_size=stt_model_size,
+                device=stt_device
+            )
+            self.stt_model_name = f"{stt_model_size}"
+            self.stt_engine = stt_engine
+            
+            # Warmup the engine
+            self.stt_engine_manager.warmup(duration_s=1.0)
+            self.logger.info(
+                f"[STT] STT engine ready (engine={stt_engine}, "
+                f"model={stt_model_size}, device={stt_device})"
+            )
         except Exception as e:
-            self.logger.error(f"STT Warmup Error: {e}")
+            self.logger.error(f"[STT] Initialization Error: {e}")
+            raise
         
         if self.llm_enabled:
             try:
@@ -270,9 +514,17 @@ class ArgoPipeline:
         except Exception:
             pass
 
-    def _classify_request_type(self, user_text: str, intent) -> str:
+    # PERSONAL MODE CONTRACT:
+    # - If text exists, ALWAYS respond.
+    # - STT confidence NEVER blocks conversation.
+    # - Confidence may only block ACTION execution.
+    # - Identity reads bypass confidence entirely.
+    # - strict_lab_mode is opt-in only.
+    def _classify_request_kind(self, user_text: str) -> str:
         if not user_text or not user_text.strip():
             return "UNKNOWN"
+        if self._parse_memory_write(user_text):
+            return "WRITE_MEMORY"
         text = user_text.strip().lower()
         tokens = re.findall(r"\w+", text)
         token_set = set(tokens)
@@ -297,10 +549,26 @@ class ArgoPipeline:
         }
         mentions_concept = bool(token_set & concept_tokens)
 
-        # Strict command: clear action + target + no hedging + not framed as a question
         has_target = len(tokens) >= 2
         looks_question = starts_question or ends_question or has_question_cue or has_hedge
         is_command = has_action and has_target and not looks_question
+
+        if is_command:
+            return "ACTION"
+
+        if starts_question or ends_question or has_question_cue:
+            return "QUESTION"
+        if mentions_concept and not has_action:
+            return "QUESTION"
+        if len(tokens) <= 4 and not has_action:
+            return "QUESTION"
+
+        return "QUESTION"
+
+    def _classify_request_type(self, user_text: str, intent) -> str:
+        request_kind = self._classify_request_kind(user_text)
+        if request_kind in {"WRITE_MEMORY", "UNKNOWN"}:
+            return request_kind
 
         if intent is not None:
             if intent.intent_type in {
@@ -309,24 +577,19 @@ class ArgoPipeline:
                 IntentType.MUSIC_NEXT,
                 IntentType.MUSIC_STATUS,
             }:
-                if is_command:
-                    return "COMMAND"
-            if intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_INFO, IntentType.COUNT}:
+                if request_kind == "ACTION" or self._is_executable_command(user_text):
+                    return "ACTION"
+            if intent.intent_type in {
+                IntentType.SYSTEM_HEALTH,
+                IntentType.SYSTEM_STATUS,
+                IntentType.SYSTEM_INFO,
+                IntentType.COUNT,
+                IntentType.ARGO_IDENTITY,
+                IntentType.ARGO_GOVERNANCE,
+            }:
                 return "QUESTION"
 
-        if is_command:
-            return "COMMAND"
-
-        # Loose question detection
-        if starts_question or ends_question or has_question_cue:
-            return "QUESTION"
-        if mentions_concept and not has_action:
-            return "QUESTION"
-        if len(tokens) <= 4 and not has_action:
-            return "QUESTION"
-
-        # Safe default: ambiguous -> QUESTION
-        return "QUESTION"
+        return request_kind
 
     def _is_executable_command(self, user_text: str) -> bool:
         if not user_text:
@@ -353,12 +616,76 @@ class ArgoPipeline:
             return False
         return True
 
-    def _should_reject_audio(self, rms: float, silence_ratio: float) -> tuple[bool, str]:
-        if rms < self._stt_min_rms_threshold:
-            return True, "below_rms_threshold"
-        if silence_ratio >= self._stt_silence_ratio_threshold:
-            return True, "silence_detected"
-        return False, ""
+    def _should_reject_audio(self, rms: float, silence_ratio: float, duration_s: float) -> tuple[bool, str]:
+        """Return True if audio should be rejected as silence/noise."""
+        meets_duration_floor = duration_s >= self._stt_min_duration_s
+        if meets_duration_floor or rms >= self._stt_min_rms_threshold:
+            return False, ""
+        if silence_ratio < self._stt_silence_ratio_threshold:
+            return False, ""
+        return True, (
+            f"VAD discard: rms={rms:.4f}, duration_ms={duration_s * 1000:.0f}, "
+            f"silence_ratio={silence_ratio:.2f}"
+        )
+
+    def _append_convo_ledger(self, speaker: str, text: str) -> None:
+        if not text:
+            return
+        self._conversation_ledger.append({
+            "speaker": speaker,
+            "text": text,
+            "timestamp": time.monotonic(),
+        })
+        self.logger.info(f"[CONVO] convo_ledger_size={len(self._conversation_ledger)}")
+
+    def _get_previous_user_entry(self) -> str | None:
+        if len(self._conversation_ledger) < 2:
+            return None
+        for entry in reversed(list(self._conversation_ledger)[:-1]):
+            if entry.get("speaker") == "user":
+                return entry.get("text")
+        return None
+
+    def _is_convo_recall_request(self, user_text: str) -> bool:
+        text = (user_text or "").lower()
+        phrases = {
+            "previous question",
+            "last question",
+            "last thing i asked",
+            "what did i ask you",
+            "what was the previous question",
+            "what did i just ask",
+            "what did we just talk about",
+            "before that",
+        }
+        return any(p in text for p in phrases)
+
+    def _handle_convo_recall(self) -> str:
+        previous = self._get_previous_user_entry()
+        if not previous:
+            self.logger.info("[CONVO] convo_recall_hit=false convo_recall_source=none")
+            return "This is the first question in this session."
+        self.logger.info("[CONVO] convo_recall_hit=true convo_recall_source=ledger")
+        return f"You asked: '{previous}'"
+
+    def _find_color_statement(self) -> str | None:
+        color_pattern = re.compile(r"\b\w+\s+(is|are)\s+(yellow|green|red|blue|orange|purple|black|white|brown|pink)\b", re.IGNORECASE)
+        for entry in reversed(self._conversation_ledger):
+            text = entry.get("text") or ""
+            if color_pattern.search(text):
+                return text
+        return None
+
+    def _handle_contextual_followup(self, user_text: str) -> str | None:
+        text = (user_text or "").lower()
+        if "what color" in text and "fruit" in text:
+            statement = self._find_color_statement()
+            if statement:
+                self.logger.info("[CONVO] convo_recall_hit=true convo_recall_source=ledger")
+                return f"We said: '{statement}'"
+            self.logger.info("[CONVO] convo_recall_hit=false convo_recall_source=none")
+            return "We talked about fruit, but no specific fruit or color was mentioned."
+        return None
 
     def _get_project_namespace(self) -> str:
         try:
@@ -386,11 +713,32 @@ class ArgoPipeline:
         ]
         return any(re.search(p, text, flags=re.IGNORECASE) for p in patterns)
 
+    def _get_memory_context(self, interaction_id: str) -> str:
+        project_ns = self._get_project_namespace()
+        try:
+            facts = self._memory_store.list_memory("FACT")
+            projects = self._memory_store.list_memory("PROJECT", namespace=project_ns)
+            prefs = self._memory_store.list_memory("PREFERENCE")
+        except Exception as e:
+            self.logger.warning(f"[MEMORY] Context load failed: {e}")
+            self._record_timeline("MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
+            return ""
+        parts = []
+        if facts:
+            parts.append("FACT: " + "; ".join([f"{m.key} = {m.value}" for m in facts[:20]]))
+        if projects:
+            parts.append("PROJECT: " + "; ".join([f"{m.key} = {m.value}" for m in projects[:20]]))
+        if prefs:
+            parts.append("PREFERENCE: " + "; ".join([f"{m.key} = {m.value}" for m in prefs[:20]]))
+        if self._ephemeral_memory:
+            parts.append("EPHEMERAL: " + "; ".join([f"{k} = {v}" for k, v in list(self._ephemeral_memory.items())[:20]]))
+        return " | ".join(parts)
+
     def _parse_memory_write(self, user_text: str) -> dict | None:
         text = user_text.strip()
         original_lower = text.lower()
         lower = original_lower
-        match = re.search(r"\b(remember|save this|from now on)\b", lower)
+        match = re.search(r"\b(remember that|remember this|remember|save this|don't forget|dont forget|store this|add this to memory)\b", lower)
         if not match:
             return None
 
@@ -403,8 +751,8 @@ class ArgoPipeline:
         mem_type = "FACT"
         if re.search(r"\b(project|this project)\b", original_lower):
             mem_type = "PROJECT"
-        if re.search(r"\b(session|this session|temporary|temp)\b", original_lower):
-            mem_type = "EPHEMERAL"
+        if re.search(r"\b(preference|prefer)\b", original_lower):
+            mem_type = "PREFERENCE"
 
         remainder = re.sub(r"^(please\s+)?(remember|save this|from now on)\b", "", text, flags=re.IGNORECASE).strip(" :,-")
         if not remainder:
@@ -419,16 +767,26 @@ class ArgoPipeline:
                 "type": mem_type,
                 "key": "user.likes",
                 "value": like_match.group(2).strip(),
-                "overwrite": "overwrite" in original_lower or "replace" in original_lower,
+                "display": f"I {like_match.group(1)} {like_match.group(2).strip()}",
             }
 
         call_match = re.search(r"\bcall me\s+(.+)$", remainder, flags=re.IGNORECASE)
         if call_match:
-            return {"type": mem_type, "key": "user.name", "value": call_match.group(1).strip()}
+            return {
+                "type": mem_type,
+                "key": "user.name",
+                "value": call_match.group(1).strip(),
+                "display": f"My name is {call_match.group(1).strip()}",
+            }
 
         name_match = re.search(r"\bmy name is\s+(.+)$", remainder, flags=re.IGNORECASE)
         if name_match:
-            return {"type": mem_type, "key": "user.name", "value": name_match.group(1).strip()}
+            return {
+                "type": mem_type,
+                "key": "user.name",
+                "value": name_match.group(1).strip(),
+                "display": f"My name is {name_match.group(1).strip()}",
+            }
 
         if ":" in remainder:
             key, value = remainder.split(":", 1)
@@ -436,7 +794,7 @@ class ArgoPipeline:
                 "type": mem_type,
                 "key": key.strip(" .,!?:;"),
                 "value": value.strip(),
-                "overwrite": "overwrite" in original_lower or "replace" in original_lower,
+                "display": remainder.strip(),
             }
 
         if " is " in remainder:
@@ -445,14 +803,57 @@ class ArgoPipeline:
                 "type": mem_type,
                 "key": key.strip(" .,!?:;"),
                 "value": value.strip(),
-                "overwrite": "overwrite" in original_lower or "replace" in original_lower,
+                "display": remainder.strip(),
             }
 
-        return {"type": mem_type, "key": None, "value": remainder.strip()}
+        return {"type": mem_type, "key": None, "value": remainder.strip(), "display": remainder.strip()}
 
     def _handle_memory_command(self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
         lower = user_text.lower().strip()
         project_ns = self._get_project_namespace()
+
+        if self._pending_memory_write is not None:
+            confirm_terms = {"yes", "correct", "confirm", "that's right", "thats right"}
+            if lower in confirm_terms:
+                pending = self._pending_memory_write
+                self._pending_memory_write = None
+                mem_type = pending.get("type") or "FACT"
+                key = pending.get("key")
+                value = pending.get("value")
+                namespace = pending.get("namespace")
+                if not key or not value:
+                    response = "Memory write canceled."
+                    self.logger.info("[MEMORY] memory_write_canceled")
+                else:
+                    try:
+                        self._memory_store.add_memory(mem_type, key, value, source="explicit_user_request", namespace=namespace)
+                        response = "Memory stored."
+                        self.logger.info(f"[MEMORY] memory_write_confirmed memory_write_type={mem_type}")
+                    except Exception as e:
+                        self.logger.warning(f"[MEMORY] Write failed: {e}")
+                        response = "Memory store unavailable."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                return True
+
+            self._pending_memory_write = None
+            self.logger.info("[MEMORY] memory_write_canceled")
+            response = "Memory write canceled."
+            self.broadcast("log", f"Argo: {response}")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            return True
 
         if re.search(r"\b(clear|wipe)\s+all\s+memory\b", lower):
             if "confirm" not in lower:
@@ -488,6 +889,7 @@ class ArgoPipeline:
             try:
                 facts = self._memory_store.list_memory("FACT")
                 projects = self._memory_store.list_memory("PROJECT", namespace=project_ns)
+                preferences = self._memory_store.list_memory("PREFERENCE")
             except Exception as e:
                 self.logger.warning(f"[MEMORY] List failed: {e}")
                 response = "Memory store unavailable."
@@ -501,7 +903,7 @@ class ArgoPipeline:
                         self.speak(tts_text, interaction_id=interaction_id)
                 return True
             ephemerals = self._ephemeral_memory
-            if not facts and not projects and not ephemerals:
+            if not facts and not projects and not ephemerals and not preferences:
                 response = "No memory stored."
             else:
                 parts = []
@@ -509,6 +911,8 @@ class ArgoPipeline:
                     parts.append("FACT: " + "; ".join([f"{m.key} = {m.value}" for m in facts[:20]]))
                 if projects:
                     parts.append("PROJECT: " + "; ".join([f"{m.key} = {m.value}" for m in projects[:20]]))
+                if preferences:
+                    parts.append("PREFERENCE: " + "; ".join([f"{m.key} = {m.value}" for m in preferences[:20]]))
                 if ephemerals:
                     parts.append("EPHEMERAL: " + "; ".join([f"{k} = {v}" for k, v in list(ephemerals.items())[:20]]))
                 response = "Memory: " + " | ".join(parts)
@@ -526,11 +930,12 @@ class ArgoPipeline:
             try:
                 fact_count = len(self._memory_store.list_memory("FACT"))
                 project_count = len(self._memory_store.list_memory("PROJECT", namespace=project_ns))
+                pref_count = len(self._memory_store.list_memory("PREFERENCE"))
             except Exception as e:
                 self.logger.warning(f"[MEMORY] Stats failed: {e}")
                 response = "Memory store unavailable."
             else:
-                response = f"Memory stats: FACT={fact_count}, PROJECT({project_ns})={project_count}, EPHEMERAL={len(self._ephemeral_memory)}."
+                response = f"Memory stats: FACT={fact_count}, PROJECT({project_ns})={project_count}, PREFERENCE={pref_count}, EPHEMERAL={len(self._ephemeral_memory)}."
             self.broadcast("log", f"Argo: {response}")
             if not self.stop_signal.is_set() and not replay_mode:
                 tts_text = self._sanitize_tts_text(response)
@@ -550,6 +955,7 @@ class ArgoPipeline:
                 try:
                     facts = self._memory_store.get_by_key(key, mem_type="FACT")
                     projects = self._memory_store.get_by_key(key, mem_type="PROJECT", namespace=project_ns)
+                    prefs = self._memory_store.get_by_key(key, mem_type="PREFERENCE")
                 except Exception as e:
                     self.logger.warning(f"[MEMORY] Explain failed: {e}")
                     response = "Memory store unavailable."
@@ -559,6 +965,8 @@ class ArgoPipeline:
                         parts.append(f"FACT {m.key} = {m.value} (source={m.source}, ts={m.timestamp})")
                     for m in projects:
                         parts.append(f"PROJECT[{m.namespace}] {m.key} = {m.value} (source={m.source}, ts={m.timestamp})")
+                    for m in prefs:
+                        parts.append(f"PREFERENCE {m.key} = {m.value} (source={m.source}, ts={m.timestamp})")
                     if key in self._ephemeral_memory:
                         parts.append(f"EPHEMERAL {key} = {self._ephemeral_memory[key]}")
                     response = " | ".join(parts) if parts else f"No memory found for '{key}'."
@@ -633,6 +1041,11 @@ class ArgoPipeline:
 
         write = self._parse_memory_write(user_text)
         if write is not None:
+            stt_conf = 0.0
+            try:
+                stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
+            except Exception:
+                stt_conf = 0.0
             if write.get("reject") == "bulk":
                 response = "I can't store everything. Tell me one specific fact to remember."
                 self.broadcast("log", f"Argo: {response}")
@@ -644,9 +1057,10 @@ class ArgoPipeline:
                     elif tts_text:
                         self.speak(tts_text, interaction_id=interaction_id)
                 return True
-            mem_type = write.get("type")
+            mem_type = write.get("type") or "FACT"
             key = write.get("key")
             value = write.get("value")
+            display = write.get("display") or value
             if not key or not value:
                 response = "What should I remember? Provide a key and value."
                 self.broadcast("log", f"Argo: {response}")
@@ -671,49 +1085,41 @@ class ArgoPipeline:
                         self.speak(tts_text, interaction_id=interaction_id)
                 return True
 
-            if mem_type == "EPHEMERAL":
-                self._ephemeral_memory[key] = value
-                response = f"Okay. I will remember for this session: {key} = {value}."
-            else:
-                allowed, reason = self._evaluate_gates("memory_write", "memory", interaction_id)
-                if not allowed:
-                    response = f"Memory write blocked by policy ({reason})."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    return True
-                namespace = project_ns if mem_type == "PROJECT" else None
-                try:
-                    existing = self._memory_store.get_by_key(key, mem_type=mem_type, namespace=namespace)
-                except Exception as e:
-                    self.logger.warning(f"[MEMORY] Lookup failed: {e}")
-                    response = "Memory store unavailable."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    return True
-                if existing and not write.get("overwrite"):
-                    response = f"Memory key '{key}' already exists. Say 'overwrite' to replace it."
-                else:
-                    try:
-                        if existing and write.get("overwrite"):
-                            self._memory_store.delete_memory(key, mem_type=mem_type, namespace=namespace)
-                        self._memory_store.add_memory(mem_type, key, value, source="user", namespace=namespace)
-                        response = f"Stored {mem_type} memory: {key} = {value}."
-                    except Exception as e:
-                        self.logger.warning(f"[MEMORY] Write failed: {e}")
-                        response = "Memory store unavailable."
+            if stt_conf < 0.35:
+                response = "I won’t store that unless you ask me to remember it clearly."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                return True
 
+            allowed, reason = self._evaluate_gates("memory_write", "memory", interaction_id)
+            if not allowed:
+                response = f"Memory write blocked by policy ({reason})."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                return True
+
+            namespace = project_ns if mem_type == "PROJECT" else None
+            self._pending_memory_write = {
+                "type": mem_type,
+                "key": key,
+                "value": value,
+                "namespace": namespace,
+                "display": display,
+            }
+            response = f"You want me to remember: '{display}'. Is that correct?"
+            self.logger.info(f"[MEMORY] memory_write_proposed memory_write_type={mem_type}")
             self.broadcast("log", f"Argo: {response}")
             if not self.stop_signal.is_set() and not replay_mode:
                 tts_text = self._sanitize_tts_text(response)
@@ -771,9 +1177,15 @@ class ArgoPipeline:
             return ""
         if not is_module_enabled("rag"):
             return ""
+        safe_query = " ".join(re.findall(r"[a-z0-9]+", (user_text or "").lower()))
+        safe_query = re.sub(r"\s+", " ", safe_query).strip()
+        token_count = len(safe_query.split()) if safe_query else 0
+        self.logger.info(f"[RAG] sanitized_rag_query='{safe_query}' tokens={token_count}")
+        if token_count < 2:
+            return ""
         try:
             from tools.argo_rag import query_index
-            results = query_index(user_text, limit=5)
+            results = query_index(safe_query, limit=5)
         except Exception as e:
             self.logger.warning(f"[RAG] Query failed: {e}")
             self._record_timeline("RAG_QUERY_ERROR", stage="rag", interaction_id=interaction_id)
@@ -789,11 +1201,16 @@ class ArgoPipeline:
 
 
     def transcribe(self, audio_data, interaction_id: str = ""):
-        if self.stt_model is None:
-            self.logger.error("[STT] Model not initialized")
+        if self.stt_engine_manager is None or self.stt_engine_manager.model is None:
+            self.logger.error("[STT] Engine not initialized")
             return ""
-        self.logger.info(f"[STT] Starting transcription... Audio len: {len(audio_data)}")
+        
+        self.logger.info(
+            f"[STT] Starting transcription (engine={self.stt_engine})... "
+            f"Audio len: {len(audio_data)}"
+        )
         self._record_timeline("STT_START", stage="stt", interaction_id=interaction_id)
+        
         start = time.perf_counter()
         try:
             # Basic audio metrics
@@ -802,9 +1219,9 @@ class ArgoPipeline:
             peak = float(np.max(np.abs(audio_data))) if len(audio_data) else 0.0
             silence_ratio = float(np.mean(np.abs(audio_data) < 0.01)) if len(audio_data) else 1.0
 
-            reject, reason = self._should_reject_audio(rms, silence_ratio)
+            reject, reason = self._should_reject_audio(rms, silence_ratio, duration_s)
             if reject:
-                self.logger.info(f"[STT] Discarded audio: {reason}")
+                self.logger.info(reason)
                 self._record_timeline(f"STT_DISCARD {reason}", stage="stt", interaction_id=interaction_id)
                 return ""
 
@@ -812,32 +1229,47 @@ class ArgoPipeline:
             if peak > 1.0:
                 audio_data = audio_data / peak
 
-            segments, info = self.stt_model.transcribe(
-                audio_data, 
-                beam_size=5, 
+            # Use STT engine manager for transcription
+            stt_result = self.stt_engine_manager.transcribe(
+                audio_data,
                 language="en",
-                condition_on_previous_text=False,
+                beam_size=5 if self.stt_engine == "faster" else None,
+                condition_on_previous_text=False if self.stt_engine == "faster" else None,
                 initial_prompt=self._stt_initial_prompt or None,
             )
-            segments_list = list(segments)
-            text = " ".join([s.text for s in segments_list]).strip()
             
-            for i, seg in enumerate(segments_list):
-                confidence = np.exp(seg.avg_logprob)
-                self.logger.info(f"  Seg {i}: '{seg.text}' ({confidence:.2f})")
+            text = stt_result["text"]
+            engine = stt_result["engine"]
+            duration_ms = stt_result["duration_ms"]
+            segments = stt_result.get("segments", [])
             
-            duration = (time.perf_counter() - start) * 1000
-            self.logger.info(f"[STT] Done in {duration:.0f}ms: '{text}'")
+            # Log segments (defensive: handle both dict and dataclass formats)
+            for i, seg in enumerate(segments):
+                seg_text = seg.text if hasattr(seg, "text") else seg.get("text", "")
+                if hasattr(seg, "avg_logprob"):
+                    confidence = np.exp(seg.avg_logprob)
+                    self.logger.info(f"  Seg {i}: '{seg_text}' (conf={confidence:.2f})")
+                else:
+                    self.logger.info(f"  Seg {i}: '{seg_text}'")
+            
+            # Calculate confidence proxy
             confidence_proxy = 0.0
             if duration_s > 0:
                 confidence_proxy = min(1.0, (len(text) / max(1.0, duration_s * 10)) * (1.0 - silence_ratio))
+            
+            self.logger.info(
+                f"[STT] Done in {duration_ms:.0f}ms (engine={engine}): '{text}'"
+            )
+            
             self._record_timeline(
-                f"STT_DONE len={len(text)} rms={rms:.4f} peak={peak:.4f} silence={silence_ratio:.2f} conf={confidence_proxy:.2f}",
+                f"STT_DONE engine={engine} len={len(text)} rms={rms:.4f} peak={peak:.4f} silence={silence_ratio:.2f} conf={confidence_proxy:.2f}",
                 stage="stt",
                 interaction_id=interaction_id,
             )
+            
             self.broadcast("stt_metrics", {
                 "interaction_id": interaction_id,
+                "engine": engine,
                 "text_len": len(text),
                 "duration_s": duration_s,
                 "rms": rms,
@@ -845,7 +1277,9 @@ class ArgoPipeline:
                 "silence_ratio": silence_ratio,
                 "confidence": confidence_proxy,
             })
+            
             self._last_stt_metrics = {
+                "engine": engine,
                 "text_len": len(text),
                 "duration_s": duration_s,
                 "rms": rms,
@@ -859,14 +1293,14 @@ class ArgoPipeline:
             self._record_timeline("STT_ERROR", stage="stt", interaction_id=interaction_id)
             return ""
 
-    def generate_response(self, text, interaction_id: str = "", rag_context: str = ""):
+    def generate_response(self, text, interaction_id: str = "", rag_context: str = "", memory_context: str = "", use_convo_buffer: bool = True):
         if not self.llm_enabled:
             self.logger.info("LLM offline: skipping generation")
             return ""
         mode = self._resolve_personality_mode()
         serious_mode = self._is_serious(text)
-        convo_context = self._conversation_buffer.as_context_block()
-        prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, convo_context)
+        convo_context = self._conversation_buffer.as_context_block() if use_convo_buffer else ""
+        prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, memory_context, convo_context)
         self.logger.info(f"[LLM] Prompt: '{text}'")
         full_response = ""
         try:
@@ -928,13 +1362,19 @@ class ArgoPipeline:
         lower = text.lower()
         return any(kw in lower for kw in self._serious_mode_keywords)
 
-    def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool, rag_context: str = "", convo_context: str = "") -> str:
+    def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool, rag_context: str = "", memory_context: str = "", convo_context: str = "") -> str:
         critical = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
         rag_block = ""
         if rag_context:
             rag_block = (
                 "RAG CONTEXT (read-only). Use only this context. If it is insufficient, say you do not know.\n"
                 f"{rag_context}\n"
+            )
+        memory_block = ""
+        if memory_context:
+            memory_block = (
+                "MEMORY CONTEXT (read-only). Use only if relevant. Do not invent new facts.\n"
+                f"{memory_context}\n"
             )
         convo_block = ""
         if convo_context:
@@ -969,7 +1409,7 @@ class ArgoPipeline:
                 "End with a line that adds perspective or a small smile.\n"
                 "Do not perform, hype, or explain yourself.\n"
             )
-        return f"{persona}{critical}{rag_block}{convo_block}User: {user_text}\nResponse:"
+        return f"{persona}{critical}{rag_block}{memory_block}{convo_block}User: {user_text}\nResponse:"
 
     def _strip_prompt_artifacts(self, text: str) -> str:
         if not text:
@@ -1156,6 +1596,277 @@ class ArgoPipeline:
         except Exception:
             return f"{gb} gigs"
 
+    def _format_ports_summary(self, ports: dict | None) -> str:
+        if not ports:
+            return "Ports information unavailable."
+        serial = ports.get("serial") or []
+        parallel = ports.get("parallel") or []
+        usb = ports.get("usb_controllers") or []
+        bits = []
+        if serial:
+            serial_names = ", ".join(p.get("name") or p.get("device_id") or "Unknown" for p in serial)
+            bits.append(f"Serial ports: {serial_names}.")
+        if parallel:
+            parallel_names = ", ".join(p.get("name") or p.get("device_id") or "Unknown" for p in parallel)
+            bits.append(f"Parallel ports: {parallel_names}.")
+        if usb:
+            usb_names = ", ".join(u.get("name") or u.get("device_id") or "USB controller" for u in usb)
+            bits.append(f"USB controllers: {usb_names}.")
+        return " ".join(bits).strip() or "Ports information unavailable."
+
+    def _format_irq_summary(self, irqs: list | None, limit: int = 25) -> str:
+        if not irqs:
+            return "IRQ information unavailable."
+        lines = []
+        for irq in irqs[:limit]:
+            irq_num = irq.get("irq")
+            name = irq.get("name") or irq.get("description") or "IRQ"
+            if irq_num is not None:
+                lines.append(f"IRQ {irq_num}: {name}")
+            else:
+                lines.append(f"IRQ: {name}")
+        remaining = len(irqs) - len(lines)
+        if remaining > 0:
+            lines.append(f"({remaining} more)")
+        return "; ".join(lines).strip() or "IRQ information unavailable."
+
+    def _allow_low_conf_music_command(self, intent, user_text: str) -> bool:
+        if not intent or intent.intent_type not in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
+            return False
+        if not self._is_executable_command(user_text):
+            return False
+        if intent.intent_type in {IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
+            return True
+        if getattr(intent, "is_generic_play", False):
+            return True
+        if getattr(intent, "keyword", None) or getattr(intent, "title", None) or getattr(intent, "artist", None):
+            return True
+        return False
+
+    def _deliver_canonical_response(self, message: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        self.broadcast("log", f"Argo: {message}")
+        if not self.stop_signal.is_set() and not replay_mode:
+            tts_text = self._sanitize_tts_text(message)
+            tts_override = (overrides or {}).get("suppress_tts", False)
+            if tts_override:
+                self.logger.info("[TTS] Suppressed for next interaction override")
+            elif tts_text:
+                self.speak(tts_text, interaction_id=interaction_id)
+        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+        self.logger.info("--- Interaction Complete ---")
+        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        return True
+
+    def _respond_with_system_health(self, user_text, intent, interaction_id, replay_mode, overrides) -> bool:
+        """Answer system health questions without invoking the LLM."""
+
+        def _finish(message: str) -> bool:
+            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides)
+
+        allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
+        if not allowed:
+            return _finish(f"System health access blocked by policy ({reason}).")
+
+        subintent = getattr(intent, "subintent", None) if intent else None
+        if intent and intent.intent_type == IntentType.SYSTEM_STATUS and not subintent:
+            subintent = "full"
+        raw_text_lower = (getattr(intent, "raw_text", None) or user_text or "").lower()
+
+        if subintent == "disk" or "drive" in raw_text_lower or "disk" in raw_text_lower:
+            disks = get_disk_info()
+            if not disks:
+                return _finish("Hardware information unavailable.")
+            drive_match = re.search(r"\b([a-z])\s*drive\b", raw_text_lower)
+            if not drive_match:
+                drive_match = re.search(r"\b([a-z]):\b", raw_text_lower)
+            if drive_match:
+                letter = drive_match.group(1).upper()
+                key = f"{letter}:"
+                info = disks.get(key) or disks.get(letter)
+                if info:
+                    return _finish(
+                        f"{letter} drive is {info['percent']} percent full, with {info['free_gb']} gigabytes free."
+                    )
+                return _finish("Hardware information unavailable.")
+            if "fullest" in raw_text_lower or "most used" in raw_text_lower:
+                disk, info = max(disks.items(), key=lambda x: x[1]["percent"])
+                return _finish(f"{disk} is the fullest drive at {info['percent']} percent used.")
+            if "most free" in raw_text_lower or "most space" in raw_text_lower:
+                disk, info = max(disks.items(), key=lambda x: x[1]["free_gb"])
+                return _finish(f"{disk} has the most free space at {info['free_gb']} gigabytes free.")
+            total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
+            return _finish(f"You have {total_free} gigabytes free across {len(disks)} drives.")
+
+        if subintent == "full":
+            report = get_system_full_report()
+            return _finish(self._format_system_full_report(report))
+
+        if subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
+            profile = get_system_profile()
+            gpus = get_gpu_profile()
+            wants_specs = "spec" in raw_text_lower or "detail" in raw_text_lower
+            wants_ports = "port" in raw_text_lower or "usb" in raw_text_lower
+            wants_irqs = "irq" in raw_text_lower or "interrupt" in raw_text_lower
+            wants_drives = "drive" in raw_text_lower or "disk" in raw_text_lower or "storage" in raw_text_lower
+            if subintent == "memory":
+                ram_gb = profile.get("ram_gb") if profile else None
+                if wants_specs and profile:
+                    speed = profile.get("memory_speed_mhz")
+                    modules = profile.get("memory_modules")
+                    extra = []
+                    if speed:
+                        extra.append(f"{speed}MHz")
+                    if modules:
+                        extra.append(f"{modules} modules")
+                    extra_text = f" ({', '.join(extra)})" if extra else ""
+                    if ram_gb is not None:
+                        return _finish(f"Your system has {ram_gb} gigabytes of memory{extra_text}.")
+                    return _finish("Hardware information unavailable.")
+                return _finish(
+                    f"Your system has {ram_gb} gigabytes of memory." if ram_gb is not None else "Hardware information unavailable."
+                )
+            if subintent == "cpu":
+                cpu_name = profile.get("cpu") if profile else None
+                if wants_specs and profile:
+                    cores = profile.get("cpu_cores")
+                    threads = profile.get("cpu_threads")
+                    mhz = profile.get("cpu_max_mhz")
+                    maker = profile.get("cpu_manufacturer")
+                    bits = []
+                    if maker:
+                        bits.append(maker)
+                    if cores:
+                        bits.append(f"{cores} cores")
+                    if threads:
+                        bits.append(f"{threads} threads")
+                    if mhz:
+                        bits.append(f"{mhz} MHz max")
+                    detail = f" ({', '.join(bits)})" if bits else ""
+                    if cpu_name:
+                        return _finish(f"Your CPU is a {cpu_name}{detail}.")
+                    return _finish("Hardware information unavailable.")
+                return _finish(
+                    f"Your CPU is a {cpu_name}." if cpu_name else "Hardware information unavailable."
+                )
+            if subintent == "gpu":
+                if gpus:
+                    if wants_specs:
+                        gpu_bits = []
+                        for gpu in gpus:
+                            name = gpu.get("name")
+                            vram = gpu.get("vram_mb")
+                            driver_version = gpu.get("driver_version")
+                            detail = []
+                            if vram:
+                                detail.append(f"{vram}MB VRAM")
+                            if driver_version:
+                                detail.append(f"driver {driver_version}")
+                            gpu_bits.append(f"{name} ({', '.join(detail)})" if detail else f"{name}")
+                        return _finish("Your GPU(s): " + "; ".join(gpu_bits) + ".")
+                    return _finish(f"Your GPU is {gpus[0].get('name')}.")
+                return _finish("No GPU detected.")
+            if subintent == "os":
+                os_name = profile.get("os") if profile else None
+                return _finish(f"You are running {os_name}." if os_name else "Hardware information unavailable.")
+            if subintent == "motherboard":
+                board = profile.get("motherboard") if profile else None
+                if wants_specs and profile:
+                    bios = profile.get("bios_version")
+                    sys_maker = profile.get("system_manufacturer")
+                    sys_model = profile.get("system_model")
+                    parts = []
+                    if sys_maker or sys_model:
+                        parts.append(" ".join(p for p in [sys_maker, sys_model] if p).strip())
+                    if bios:
+                        parts.append(f"BIOS {bios}")
+                    extra = f" ({', '.join(parts)})" if parts else ""
+                    if board:
+                        return _finish(f"Your motherboard is {board}{extra}.")
+                    return _finish("Hardware information unavailable.")
+                return _finish(f"Your motherboard is {board}." if board else "Hardware information unavailable.")
+            cpu_name = profile.get("cpu") if profile else None
+            ram_gb = profile.get("ram_gb") if profile else None
+            if not cpu_name or ram_gb is None:
+                return _finish("Hardware information unavailable.")
+            response = f"Your CPU is a {cpu_name}. You have {ram_gb} gigabytes of memory."
+            if gpus:
+                response += f" Your GPU is {gpus[0].get('name')}."
+            if (wants_specs or wants_drives) and profile:
+                drives = profile.get("storage_drives") or []
+                if drives:
+                    drive_bits = []
+                    for drive in drives:
+                        name = drive.get("model") or "Drive"
+                        size = drive.get("size_gb")
+                        iface = drive.get("interface")
+                        detail = []
+                        if size:
+                            detail.append(f"{size}GB")
+                        if iface:
+                            detail.append(iface)
+                        drive_bits.append(f"{name} ({', '.join(detail)})" if detail else name)
+                    response += " Storage: " + "; ".join(drive_bits) + "."
+            if wants_ports:
+                response += " " + self._format_ports_summary(profile.get("ports") if profile else None)
+            if wants_irqs:
+                response += " " + self._format_irq_summary(profile.get("irqs") if profile else None)
+            return _finish(response)
+
+        if subintent == "temperature":
+            temps = get_temperature_health()
+            if temps.get("error") == "TEMPERATURE_UNAVAILABLE":
+                return _finish("Temperature sensors are not available on this system.")
+            return _finish(self._format_temperature_response(temps))
+
+        health = get_system_health()
+        self.logger.info(
+            "[SYSTEM] cpu=%s ram=%s disk=%s",
+            health.get("cpu_percent"),
+            health.get("ram_percent"),
+            health.get("disk_percent"),
+        )
+        return _finish(self._format_system_health(health))
+
+    def _respond_with_argo_identity(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        block = self._config.get("canonical.identity", {}) if self._config else {}
+        if not isinstance(block, dict):
+            block = {}
+        statement = block.get("statement")
+        laws = block.get("laws") or []
+        segments = []
+        if statement:
+            segments.append(statement)
+        if laws:
+            segments.append("Operating laws: " + " ".join(laws))
+        message = " ".join(segments).strip() or "Identity information unavailable."
+        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides)
+
+    def _respond_with_argo_governance(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        block = self._config.get("canonical.governance", {}) if self._config else {}
+        if not isinstance(block, dict):
+            block = {}
+        overview = block.get("overview")
+        laws = block.get("laws") or []
+        gates = block.get("five_gates") or []
+        subintent = getattr(intent, "subintent", None) if intent else None
+        lines = []
+        if overview and subintent in {None, "overview"}:
+            lines.append(overview)
+        if laws and subintent in {None, "overview", "laws"}:
+            lines.append("Laws: " + " ".join(laws))
+        if gates and subintent in {None, "overview", "gates"}:
+            gate_bits = []
+            for gate in gates:
+                if not isinstance(gate, dict):
+                    continue
+                name = gate.get("name") or "Gate"
+                summary = gate.get("summary") or gate.get("description") or ""
+                gate_bits.append(f"{name} — {summary}".strip(" —"))
+            if gate_bits:
+                lines.append("Five Gates: " + " ".join(gate_bits))
+        message = " ".join(lines).strip() or "Governance information unavailable."
+        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides)
+
     def _strip_disallowed_phrases(self, text: str) -> str:
         if not text:
             return text
@@ -1223,6 +1934,38 @@ class ArgoPipeline:
         )
         text = user_text.lower() if user_text else ""
         tokens = set(re.findall(r"\w+", text))
+        phrases = text
+
+        identity_phrases = {
+            "what cpu do i have",
+            "which cpu",
+            "cpu brand",
+            "cpu model",
+            "what processor do i have",
+            "which processor",
+            "processor model",
+            "processor name",
+            "what gpu do i have",
+            "which gpu",
+            "gpu brand",
+            "gpu model",
+            "what graphics card",
+            "what video card",
+            "what motherboard",
+            "which motherboard",
+            "motherboard brand",
+            "motherboard model",
+            "what os",
+            "what operating system",
+            "os version",
+            "system specs",
+            "hardware specs",
+        }
+        qualifier_tokens = {"brand", "model", "type"}
+        hardware_tokens = {"cpu", "processor", "gpu", "graphics", "video", "motherboard", "ram", "memory", "os"}
+        identity_query = any(p in phrases for p in identity_phrases) or (
+            (tokens & qualifier_tokens) and (tokens & hardware_tokens)
+        )
 
         # SYSTEM_HEALTH short-circuit (must be evaluated before SELF_IDENTITY)
         health_matches = set()
@@ -1252,7 +1995,7 @@ class ArgoPipeline:
                 health_matches.add(q)
         if tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"}:
             health_matches |= (tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"})
-        if health_matches:
+        if health_matches and not identity_query:
             return "SYSTEM_HEALTH", health_matches
 
         # COUNT short-circuit (numeric/utility before other canonical topics)
@@ -1262,17 +2005,50 @@ class ArgoPipeline:
         }
         if ("count" in tokens and ("to" in tokens or tokens & count_number_tokens or re.search(r"\b\d+\b", text))):
             return "COUNT", {"count"}
+        governance_phrases = {
+            "argo laws",
+            "the laws",
+            "governing laws",
+            "five gates",
+            "hard gates",
+            "permission gates",
+            "argo gates",
+        }
+        matched_governance_phrases = {p for p in governance_phrases if p in phrases}
+        if matched_governance_phrases:
+            return "ARGO_GOVERNANCE", matched_governance_phrases
+        governance_keywords = {
+            "law",
+            "laws",
+            "rule",
+            "rules",
+            "constraint",
+            "constraints",
+            "policy",
+            "policies",
+            "gate",
+            "gates",
+            "permission",
+            "permissions",
+            "govern",
+            "governing",
+        }
+        matched_governance_keywords = tokens & governance_keywords
+        if matched_governance_keywords:
+            return "ARGO_GOVERNANCE", matched_governance_keywords
+
         topic_keywords = {
-            "LAW": {"law", "laws", "rule", "rules", "constraint", "constraints", "policy", "policies", "govern", "governing"},
-            "GATES": {"gate", "gates", "permission", "permissions", "barrier", "barriers", "check", "checks"},
             # Removed 'system' from ARCHITECTURE keywords to allow 'system health' etc. to route to normal logic
             "ARCHITECTURE": {"architecture", "design", "pipeline", "structure", "modules", "components", "layout", "engine"},
-            "SELF_IDENTITY": {"identity", "yourself", "argo", "agent", "assistant", "name"},
-            "CAPABILITIES": {"capability", "capabilities", "can", "able", "features", "do", "function", "functions", "limit", "limits", "limitation", "limitations", "cannot", "not", "support", "supported"},
-            "CODEBASE_STATS": set(),
         }
-        # Priority order: LAW, GATES, ARCHITECTURE
-        for topic in ["LAW", "GATES", "ARCHITECTURE"]:
+        topic_phrases = {
+            "ARCHITECTURE": {"system architecture", "pipeline design", "argo architecture"},
+        }
+        for topic in ["ARCHITECTURE"]:
+            phrases_for_topic = topic_phrases.get(topic, set())
+            matched_phrases = {p for p in phrases_for_topic if p in phrases}
+            if matched_phrases:
+                return topic, matched_phrases
             keywords = topic_keywords[topic]
             matched = tokens & keywords
             if matched:
@@ -1301,13 +2077,20 @@ class ArgoPipeline:
             return "CODEBASE_STATS", matched_codebase
 
         # CAPABILITIES before SELF_IDENTITY fallback
-        keywords = topic_keywords["CAPABILITIES"]
-        matched = tokens & keywords
-        if matched:
-            return "CAPABILITIES", matched
+        capabilities_phrases = {
+            "what can you do",
+            "what can argo do",
+            "what can you do for me",
+            "what are your capabilities",
+            "what are your features",
+            "list your capabilities",
+            "list your features",
+        }
+        if any(p in phrases for p in capabilities_phrases):
+            return "CAPABILITIES", {p for p in capabilities_phrases if p in phrases}
 
-        # SELF_IDENTITY fallback (tightened)
-        keywords = topic_keywords["SELF_IDENTITY"]
+        # ARGO_IDENTITY fallback (tightened)
+        keywords = {"identity", "yourself", "argo", "agent", "assistant", "name"}
         matched = tokens & keywords
         identity_phrases = {
             "who are you",
@@ -1324,11 +2107,11 @@ class ArgoPipeline:
             "who am i speaking to",
         }
         if any(p in text for p in identity_phrases):
-            return "SELF_IDENTITY", {p for p in identity_phrases if p in text}
+            return "ARGO_IDENTITY", {p for p in identity_phrases if p in text}
         identity_specific = tokens & {"argo", "yourself", "identity", "assistant", "agent", "name"}
         question_cue = tokens & {"who", "what"}
         if identity_specific and question_cue:
-            return "SELF_IDENTITY", (identity_specific | question_cue)
+            return "ARGO_IDENTITY", (identity_specific | question_cue)
         return None, set()
 
     def run_interaction(self, audio_data, interaction_id: str = "", replay_mode: bool = False, overrides: dict | None = None):
@@ -1360,66 +2143,347 @@ class ArgoPipeline:
 
             user_text = self.transcribe(audio_data, interaction_id=interaction_id)
             self.audio.release_audio("STT", interaction_id=interaction_id)
+            confidence_hint = 1.0
+            stt_result = self._last_stt_metrics
+            if stt_result and "confidence" in stt_result:
+                confidence_hint = stt_result["confidence"]
+            self._current_stt_confidence = confidence_hint
+
             if not user_text:
                 self.logger.warning("No speech recognized.")
                 self.broadcast("log", "User: [No speech recognized]")
+                response = "I didn't catch any words. Try again."
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response, enforce_confidence=False)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
                 return
             user_text = normalize_system_text(user_text)
             self.broadcast("log", f"User: {user_text}")
             self._conversation_buffer.add("User", user_text)
+            self._append_convo_ledger("user", user_text)
 
-            # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
-            from core.canonical_answers import get_canonical_answer
-            topic, matched = self._classify_canonical_topic(user_text)
-            if topic == "SYSTEM_HEALTH":
-                self.logger.info(f"[CANONICAL] SYSTEM_HEALTH matched keywords: {sorted(matched)} | LLM BYPASSED")
-                topic = None
-            if topic == "COUNT":
-                response = self._build_count_response(user_text)
-                self.logger.info(f"[CANONICAL] Intercepted topic: COUNT | Matched: {sorted(matched)} | LLM BYPASSED")
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            if topic:
-                answer = get_canonical_answer(topic)
-                self.logger.info(f"[CANONICAL] Intercepted topic: {topic} | Matched: {sorted(matched)} | LLM BYPASSED")
-                self.broadcast("log", f"Argo: {answer}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(answer or "")
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
+            self.handle_user_text(
+                user_text=user_text,
+                confidence_hint=confidence_hint,
+                interaction_id=interaction_id,
+                replay_mode=replay_mode,
+                overrides=overrides,
+                audio_data=audio_data,
+            )
+            return
 
-            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
-            user_text_lower = user_text.lower()
-            if any(term in user_text_lower for term in stop_terms):
-                music_player = get_music_player()
-                if music_player.is_playing():
-                    self.logger.info("[ARGO] Active music detected")
-                    music_player.stop()
+        except Exception as e:
+            self.logger.error(f"Pipeline Error: {e}", exc_info=True)
+            self.broadcast("status", "ERROR")
+            self._record_timeline("PIPELINE_ERROR", stage="pipeline", interaction_id=interaction_id)
+        finally:
+            self.processing_lock.release()
+
+    # PERSONAL MODE CONTRACT:
+    # - If text exists, ALWAYS respond.
+    # - STT confidence NEVER blocks conversation.
+    # - Confidence may only block ACTION execution.
+    # - Identity reads bypass confidence entirely.
+    # - strict_lab_mode is opt-in only.
+    def handle_user_text(
+        self,
+        user_text: str,
+        confidence_hint: float,
+        interaction_id: str = "",
+        replay_mode: bool = False,
+        overrides: dict | None = None,
+        audio_data=None,
+    ) -> None:
+        """Route recognized text through canonical, memory, and LLM paths.
+
+        Confidence is treated as a hint (metadata). It may gate actions/memory writes
+        but never suppresses conversational responses in personal mode.
+        """
+        user_text = (user_text or "").strip()
+        personal_question_bypass_logged = False
+        try:
+            stt_conf = max(0.0, min(1.0, float(confidence_hint)))
+        except Exception:
+            stt_conf = 0.0
+        self._current_stt_confidence = stt_conf
+        self.logger.info(
+            "[STT] text_received conf_hint=%.2f strict_lab_mode=%s",
+            stt_conf,
+            self.strict_lab_mode,
+        )
+
+        if not user_text:
+            response = "I didn't catch any words. Try again."
+            self.broadcast("log", f"Argo: {response}")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        filler_match = re.fullmatch(r"(okay\.?\s*)+|\.+", user_text, flags=re.IGNORECASE)
+        request_kind = self._classify_request_kind(user_text)
+
+        # IDENTITY STATEMENT CONFIRMATION GATE (before canonical, before LLM)
+        confirm_name_pending = self._session_flags.get("confirm_name", False)
+        if confirm_name_pending:
+            if self._is_affirmative_response(user_text):
+                if self._pending_memory:
+                    try:
+                        self._memory_store.add_memory(
+                            "FACT",
+                            self._pending_memory.get("key"),
+                            self._pending_memory.get("value"),
+                            source="explicit_user_request",
+                        )
+                        self.logger.info(f"[MEMORY] write_confirmed key=name value={self._pending_memory.get('value')}")
+                        response = "Got it. I'll remember that."
+                    except Exception as e:
+                        self.logger.warning(f"[MEMORY] Name write failed: {e}")
+                        response = "Memory store unavailable."
+                else:
+                    response = "No pending memory to write."
+                self._pending_memory = None
+                self._session_flags["confirm_name"] = False
+            else:
+                self.logger.info("[MEMORY] write_aborted user_response_negative_or_topic_change")
+                self._pending_memory = None
+                self._session_flags["confirm_name"] = False
+                response = "Okay."
+
+            self.broadcast("log", f"Argo: {response}")
+            self._append_convo_ledger("argo", response)
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        if user_text.lower().strip() == "clear conversation":
+            self._conversation_ledger.clear()
+            self.logger.info("[CONVO] convo_ledger_size=0")
+            response = "Conversation cleared."
+            self.broadcast("log", f"Argo: {response}")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        if not self.strict_lab_mode and self._is_identity_query(user_text):
+            self._respond_with_identity_lookup(interaction_id=interaction_id, replay_mode=replay_mode, overrides=overrides)
+            return
+
+        if not self.strict_lab_mode and filler_match:
+            response = "Okay."
+            self.broadcast("log", f"Argo: {response}")
+            self._append_convo_ledger("argo", response)
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        if not self.strict_lab_mode:
+            compact_len = len(re.sub(r"\s+", "", user_text))
+            low_conf_guard = stt_conf < self._personal_mode_min_confidence
+            short_text_guard = compact_len < self._personal_mode_min_text_len
+            if low_conf_guard or short_text_guard:
+                early_intent = None
+                try:
+                    early_intent = self._intent_parser.parse(user_text)
+                except Exception:
+                    early_intent = None
+                if early_intent and self._allow_low_conf_music_command(early_intent, user_text):
+                    self.logger.info(
+                        "[PERSONAL_MODE] Low confidence but executable music command; continuing"
+                    )
+                else:
+                    self.logger.warning(
+                        "[PERSONAL_MODE] Guarded utterance len=%s conf=%.2f thresholds(len=%s, conf=%.2f)",
+                        compact_len,
+                        stt_conf,
+                        self._personal_mode_min_text_len,
+                        self._personal_mode_min_confidence,
+                    )
+                    response = "I didn't catch that. Try again."
+                    self.broadcast("log", f"Argo: {response}")
+                    if (
+                        not self._low_conf_notice_given
+                        and not self.stop_signal.is_set()
+                        and not replay_mode
+                        and self.runtime_overrides.get("tts_enabled", True)
+                        and not (overrides or {}).get("suppress_tts", False)
+                    ):
+                        tts_text = self._sanitize_tts_text(response, enforce_confidence=False)
+                        if tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                            self._low_conf_notice_given = True
+                    self._record_timeline("PERSONAL_LOW_CONF_GUARD", stage="pipeline", interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+
+        if self.strict_lab_mode:
+            if stt_conf < 0.30 or filler_match:
+                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or filler; skipping")
+                if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
+                    self.speak("I didn’t catch that. Try a complete question.", interaction_id=interaction_id)
+                    self._low_conf_notice_given = True
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+            if stt_conf < 0.35 or not user_text.strip():
+                user_text_lower = user_text.lower()
+                if is_system_keyword(user_text):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
+                elif re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
+                elif re.search(r"\bvolume\b", user_text, flags=re.IGNORECASE):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but volume intent detected; continuing")
+                elif re.search(r"\b(remember|save this|from now on|memory|forget)\b", user_text, flags=re.IGNORECASE):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but memory intent detected; continuing")
+                elif any(term in user_text_lower for term in {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}):
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but stop intent detected; continuing")
+                elif stt_conf < 0.15 or not user_text.strip():
+                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
+                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
+                        self.speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=interaction_id)
+                        self._low_conf_notice_given = True
                     self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                     return
-            stt_conf = 0.0
-            try:
-                stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
-            except Exception:
-                stt_conf = 0.0
+
+        # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
+        from core.canonical_answers import get_canonical_answer
+        topic, matched = self._classify_canonical_topic(user_text)
+        if topic == "SYSTEM_HEALTH":
+            self.logger.info(f"[CANONICAL] SYSTEM_HEALTH matched keywords: {sorted(matched)} | LLM BYPASSED")
+            if self._respond_with_system_health(user_text, None, interaction_id, replay_mode, overrides):
+                return
+            topic = None
+        if topic == "ARGO_IDENTITY":
+            self.logger.info(f"[CANONICAL] ARGO_IDENTITY matched keywords: {sorted(matched)} | LLM BYPASSED")
+            if self._respond_with_argo_identity(interaction_id, replay_mode, overrides):
+                return
+            topic = None
+        if topic == "ARGO_GOVERNANCE":
+            self.logger.info(f"[CANONICAL] ARGO_GOVERNANCE matched keywords: {sorted(matched)} | LLM BYPASSED")
+            if self._respond_with_argo_governance(None, interaction_id, replay_mode, overrides):
+                return
+            topic = None
+        if topic:
+            self._session_flags["clarification_asked"] = False
+        if self._is_convo_recall_request(user_text):
+            response = self._handle_convo_recall()
+            self.broadcast("log", f"Argo: {response}")
+            self._append_convo_ledger("argo", response)
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+        if topic and topic not in {"SYSTEM_HEALTH", "COUNT"}:
+            phrase_match = any(" " in m for m in matched)
+            self.logger.debug(
+                "[STT] confidence_used=%s phrase_match=%s",
+                stt_conf,
+                phrase_match,
+            )
+            if not phrase_match and stt_conf < 0.5:
+                self.logger.info(f"[CANONICAL] Low confidence ({stt_conf:.2f}) without phrase match; deferring to LLM")
+                topic = None
+        if topic == "COUNT":
+            response = self._build_count_response(user_text)
+            self.logger.info(f"[CANONICAL] Intercepted topic: COUNT | Matched: {sorted(matched)} | LLM BYPASSED")
+            self.broadcast("log", f"Argo: {response}")
+            self._append_convo_ledger("argo", response)
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+        if topic:
+            answer = get_canonical_answer(topic)
+            self.logger.info(f"[CANONICAL] Intercepted topic: {topic} | Matched: {sorted(matched)} | LLM BYPASSED")
+            self.broadcast("log", f"Argo: {answer}")
+            self._append_convo_ledger("argo", answer or "")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(answer or "")
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        allow_llm = topic is None
+        if request_kind == "QUESTION" and not self.strict_lab_mode:
+            assert allow_llm, "Personal mode questions must never be blocked"
+
+        stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
+        user_text_lower = user_text.lower()
+        if any(term in user_text_lower for term in stop_terms):
+            music_player = get_music_player()
+            if music_player.is_playing():
+                self.logger.info("[ARGO] Active music detected")
+                music_player.stop()
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+        filler_match = re.fullmatch(r"(okay\.?\s*)+|\.+", user_text.strip(), flags=re.IGNORECASE)
+        if self.strict_lab_mode:
+            if stt_conf < 0.30 or filler_match:
+                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or filler; skipping")
+                if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
+                    self.speak("I didn’t catch that. Try a complete question.", interaction_id=interaction_id)
+                    self._low_conf_notice_given = True
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
             if stt_conf < 0.35 or not user_text.strip():
                 if is_system_keyword(user_text):
                     self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
@@ -1438,611 +2502,611 @@ class ArgoPipeline:
                         self._low_conf_notice_given = True
                     self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                     return
+        elif not user_text.strip():
+            self.logger.info("[STT] Empty text in personal mode; skipping")
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            return
 
-            if self._handle_memory_command(user_text, interaction_id, replay_mode, overrides):
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
+        if self._handle_memory_command(user_text, interaction_id, replay_mode, overrides):
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
 
-            intent = None
-            try:
-                intent = self._intent_parser.parse(user_text)
-            except Exception:
-                intent = None
-
-            request_kind = self._classify_request_type(user_text, intent)
-            self.logger.info(f"[CANONICAL] classification={request_kind}")
-            self._record_timeline(
-                f"CLASSIFY {request_kind}",
-                stage="pipeline",
-                interaction_id=interaction_id,
-            )
-            if request_kind == "COMMAND" and intent is None:
-                request_kind = "QUESTION"
-
-            # --- MUSIC VOLUME CONTROL (voice) ---
-            # Recognize patterns like 'music volume 75%', 'set volume to 50%', 'volume up', 'volume down'
-            from core.music_player import set_volume_percent, adjust_volume_percent, get_volume_percent
-            volume_patterns = [
-                (r"(?:music )?volume (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
-                (r"set volume to (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
-                (r"volume up (\d{1,3})%?", lambda m: adjust_volume_percent(int(m.group(1)))),
-                (r"volume down (\d{1,3})%?", lambda m: adjust_volume_percent(-int(m.group(1)))),
-                (r"volume up", lambda m: adjust_volume_percent(10)),
-                (r"volume down", lambda m: adjust_volume_percent(-10)),
-                (r"what is the volume", lambda m: None),
-                (r"current volume", lambda m: None),
-            ]
-            user_text_lower = user_text.lower().strip()
-            user_text_clean = re.sub(r"[^\w\s%]", " ", user_text_lower)
-            user_text_clean = re.sub(r"\s+", " ", user_text_clean).strip()
-            is_imperative_volume = bool(re.match(r"^(music\s+)?volume\b", user_text_clean))
-            if user_text_lower.endswith("?"):
-                is_imperative_volume = False
-            if re.search(r"\b(would|could|can|should|might|maybe|perhaps|possibly)\b", user_text_clean):
-                is_imperative_volume = False
-            if re.search(r"\bwhat happens if\b|\bwhat if\b", user_text_clean):
-                is_imperative_volume = False
-            for pat, action in volume_patterns:
-                m = re.fullmatch(pat, user_text_clean)
-                if m:
-                    is_status_query = pat in ["what is the volume", "current volume"]
-                    if is_imperative_volume:
-                        request_kind = "COMMAND"
-                    if request_kind != "COMMAND" and not is_status_query:
-                        response = "I can adjust volume. Say it as a command to execute."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    if not is_status_query and not (self._is_executable_command(user_text) or is_imperative_volume):
-                        response = "I can adjust volume. Say it as a direct command."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
-                    if not allowed:
-                        response = f"Action blocked by policy ({reason})."
-                        self.logger.info(f"[GATE] {response}")
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    if pat in ["what is the volume", "current volume"]:
-                        vol = get_volume_percent()
-                        response = f"Music volume: {vol}%"
-                    else:
-                        action(m)
-                        vol = get_volume_percent()
-                        response = f"Music volume set to {vol}%"
-                    self.logger.info(f"[ARGO] {response}")
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-
-            if intent and intent.intent_type in {
-                IntentType.MUSIC,
-                IntentType.MUSIC_STOP,
-                IntentType.MUSIC_NEXT,
-                IntentType.MUSIC_STATUS,
-            }:
-                if request_kind != "COMMAND" and intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
-                    response = "I can do that. Say it as a command to execute."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-                if intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
-                    if not self._is_executable_command(user_text):
-                        response = "I can do that. Say it as a direct command."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
-                if not allowed:
-                    response = f"Action blocked by policy ({reason})."
-                    self.logger.info(f"[GATE] {response}")
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak(response, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-                if not self.runtime_overrides.get("music_enabled", True):
-                    msg = "Music is disabled."
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak(msg, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-
-                music_player = get_music_player()
-                blocked = music_player.preflight()
-                if blocked:
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak("Music library not indexed yet.", interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-                playback_started = False
-                error_message = ""
-
-                if intent.intent_type == IntentType.MUSIC_STOP:
-                    music_player.stop()
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak("Stopped.", interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-
-                if intent.intent_type == IntentType.MUSIC_NEXT:
-                    playback_started = music_player.play_next(None)
-                    if not playback_started:
-                        error_message = "No music playing."
-
-                elif intent.intent_type == IntentType.MUSIC_STATUS:
-                    status = query_music_status()
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak(status, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-
-                else:
-                    artist = getattr(intent, "artist", None)
-                    title = getattr(intent, "title", None)
-                    do_not_try_genre_lookup = bool(title)
-                    explicit_genre = bool(getattr(intent, "explicit_genre", False))
-                    if getattr(intent, "is_generic_play", False) and not artist and not title and not getattr(intent, "keyword", None):
-                        playback_started = music_player.play_random(None)
-                        if not playback_started:
-                            error_message = "Your music library is empty or unavailable."
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        return
-                    if title:
-                        playback_started = music_player.play_by_song(title, None)
-                        if not playback_started and not artist:
-                            playback_started = music_player.play_by_artist(title, None)
-                    if not playback_started and artist:
-                        playback_started = music_player.play_by_artist(artist, None)
-                    if not playback_started and getattr(intent, "keyword", None):
-                        keyword = intent.keyword
-                        if explicit_genre and not do_not_try_genre_lookup:
-                            playback_started = music_player.play_by_genre(keyword, None)
-                        if not playback_started:
-                            playback_started = music_player.play_by_keyword(keyword, None)
-                        if not playback_started:
-                            error_message = f"No music found for '{keyword}'."
-                    if not playback_started and not artist and not title and not getattr(intent, "keyword", None):
-                        playback_started = music_player.play_random(None)
-                        if not playback_started:
-                            error_message = "No music available."
-
-                if intent.intent_type == IntentType.MUSIC and not playback_started and title:
-                    setattr(intent, "unresolved", True)
-                    if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                        self.speak("I can’t find that track in your library.", interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-
-                if error_message and self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak(error_message, interaction_id=interaction_id)
-
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-
-            if intent and intent.intent_type == IntentType.COUNT:
-                response = self._build_count_response(user_text)
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-
-            if intent and intent.intent_type == IntentType.SYSTEM_HEALTH:
-                allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
-                if not allowed:
-                    response = f"System health access blocked by policy ({reason})."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-                subintent = getattr(intent, "subintent", None)
-                raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
-                if subintent == "disk" or "drive" in raw_text_lower or "disk" in raw_text_lower:
-                    disks = get_disk_info()
-                    if not disks:
-                        response = "Hardware information unavailable."
-                    else:
-                        drive_match = re.search(r"\b([a-z])\s*drive\b", raw_text_lower)
-                        if not drive_match:
-                            drive_match = re.search(r"\b([a-z]):\b", raw_text_lower)
-                        if drive_match:
-                            letter = drive_match.group(1).upper()
-                            key = f"{letter}:"
-                            info = disks.get(key) or disks.get(letter)
-                            if info:
-                                response = (
-                                    f"{letter} drive is {info['percent']} percent full, "
-                                    f"with {info['free_gb']} gigabytes free."
-                                )
-                            else:
-                                response = "Hardware information unavailable."
-                        elif "fullest" in raw_text_lower or "most used" in raw_text_lower:
-                            disk, info = max(disks.items(), key=lambda x: x[1]["percent"])
-                            response = f"{disk} is the fullest drive at {info['percent']} percent used."
-                        elif "most free" in raw_text_lower or "most space" in raw_text_lower:
-                            disk, info = max(disks.items(), key=lambda x: x[1]["free_gb"])
-                            response = f"{disk} has the most free space at {info['free_gb']} gigabytes free."
-                        else:
-                            total_free = round(sum(d["free_gb"] for d in disks.values()), 1)
-                            response = f"You have {total_free} gigabytes free across {len(disks)} drives."
-                elif subintent == "full":
-                    report = get_system_full_report()
-                    response = self._format_system_full_report(report)
-                elif subintent in {"memory", "cpu", "gpu", "os", "motherboard", "hardware"}:
-                    profile = get_system_profile()
-                    gpus = get_gpu_profile()
-                    raw_text_lower = (getattr(intent, "raw_text", "") or "").lower()
-                    wants_specs = "spec" in raw_text_lower or "detail" in raw_text_lower
-                    if subintent == "memory":
-                        ram_gb = profile.get("ram_gb") if profile else None
-                        if wants_specs and profile:
-                            speed = profile.get("memory_speed_mhz")
-                            modules = profile.get("memory_modules")
-                            extra = []
-                            if speed:
-                                extra.append(f"{speed}MHz")
-                            if modules:
-                                extra.append(f"{modules} modules")
-                            extra_text = f" ({', '.join(extra)})" if extra else ""
-                            response = f"Your system has {ram_gb} gigabytes of memory{extra_text}."
-                            self.broadcast("log", f"Argo: {response}")
-                            if not self.stop_signal.is_set() and not replay_mode:
-                                tts_text = self._sanitize_tts_text(response)
-                                tts_override = (overrides or {}).get("suppress_tts", False)
-                                if tts_override:
-                                    self.logger.info("[TTS] Suppressed for next interaction override")
-                                elif tts_text:
-                                    self.speak(tts_text, interaction_id=interaction_id)
-                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                            self.logger.info("--- Interaction Complete ---")
-                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                            return
-                        response = (
-                            f"Your system has {ram_gb} gigabytes of memory."
-                            if ram_gb is not None
-                            else "Hardware information unavailable."
-                        )
-                    elif subintent == "cpu":
-                        cpu_name = profile.get("cpu") if profile else None
-                        if wants_specs and profile:
-                            cores = profile.get("cpu_cores")
-                            threads = profile.get("cpu_threads")
-                            mhz = profile.get("cpu_max_mhz")
-                            maker = profile.get("cpu_manufacturer")
-                            bits = []
-                            if maker:
-                                bits.append(maker)
-                            if cores:
-                                bits.append(f"{cores} cores")
-                            if threads:
-                                bits.append(f"{threads} threads")
-                            if mhz:
-                                bits.append(f"{mhz} MHz max")
-                            detail = f" ({', '.join(bits)})" if bits else ""
-                            response = f"Your CPU is a {cpu_name}{detail}." if cpu_name else "Hardware information unavailable."
-                            self.broadcast("log", f"Argo: {response}")
-                            if not self.stop_signal.is_set() and not replay_mode:
-                                tts_text = self._sanitize_tts_text(response)
-                                tts_override = (overrides or {}).get("suppress_tts", False)
-                                if tts_override:
-                                    self.logger.info("[TTS] Suppressed for next interaction override")
-                                elif tts_text:
-                                    self.speak(tts_text, interaction_id=interaction_id)
-                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                            self.logger.info("--- Interaction Complete ---")
-                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                            return
-                        response = (
-                            f"Your CPU is a {cpu_name}."
-                            if cpu_name
-                            else "Hardware information unavailable."
-                        )
-                    elif subintent == "gpu":
-                        if gpus:
-                            if wants_specs:
-                                gpu_bits = []
-                                for gpu in gpus:
-                                    name = gpu.get("name")
-                                    vram = gpu.get("vram_mb")
-                                    dv = gpu.get("driver_version")
-                                    detail = []
-                                    if vram:
-                                        detail.append(f"{vram}MB VRAM")
-                                    if dv:
-                                        detail.append(f"driver {dv}")
-                                    gpu_bits.append(f"{name} ({', '.join(detail)})" if detail else f"{name}")
-                                response = "Your GPU(s): " + "; ".join(gpu_bits) + "."
-                                self.broadcast("log", f"Argo: {response}")
-                                if not self.stop_signal.is_set() and not replay_mode:
-                                    tts_text = self._sanitize_tts_text(response)
-                                    tts_override = (overrides or {}).get("suppress_tts", False)
-                                    if tts_override:
-                                        self.logger.info("[TTS] Suppressed for next interaction override")
-                                    elif tts_text:
-                                        self.speak(tts_text, interaction_id=interaction_id)
-                                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                                self.logger.info("--- Interaction Complete ---")
-                                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                                return
-                            response = f"Your GPU is {gpus[0].get('name')}."
-                        else:
-                            response = "No GPU detected."
-                    elif subintent == "os":
-                        os_name = profile.get("os") if profile else None
-                        response = (
-                            f"You are running {os_name}."
-                            if os_name
-                            else "Hardware information unavailable."
-                        )
-                    elif subintent == "motherboard":
-                        board = profile.get("motherboard") if profile else None
-                        if wants_specs and profile:
-                            bios = profile.get("bios_version")
-                            sys_maker = profile.get("system_manufacturer")
-                            sys_model = profile.get("system_model")
-                            parts = []
-                            if sys_maker or sys_model:
-                                parts.append(" ".join(p for p in [sys_maker, sys_model] if p))
-                            if bios:
-                                parts.append(f"BIOS {bios}")
-                            extra = f" ({', '.join(parts)})" if parts else ""
-                            response = f"Your motherboard is {board}{extra}." if board else "Hardware information unavailable."
-                            self.broadcast("log", f"Argo: {response}")
-                            if not self.stop_signal.is_set() and not replay_mode:
-                                tts_text = self._sanitize_tts_text(response)
-                                tts_override = (overrides or {}).get("suppress_tts", False)
-                                if tts_override:
-                                    self.logger.info("[TTS] Suppressed for next interaction override")
-                                elif tts_text:
-                                    self.speak(tts_text, interaction_id=interaction_id)
-                            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                            self.logger.info("--- Interaction Complete ---")
-                            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                            return
-                        response = (
-                            f"Your motherboard is {board}."
-                            if board
-                            else "Hardware information unavailable."
-                        )
-                    else:
-                        cpu_name = profile.get("cpu") if profile else None
-                        ram_gb = profile.get("ram_gb") if profile else None
-                        gpu_name = gpus[0].get("name") if gpus else None
-                        if not cpu_name or ram_gb is None:
-                            response = "Hardware information unavailable."
-                        else:
-                            response = (
-                                f"Your CPU is a {cpu_name}. "
-                                f"You have {ram_gb} gigabytes of memory."
-                            )
-                            if gpu_name:
-                                response += f" Your GPU is {gpu_name}."
-                            if wants_specs and profile:
-                                drives = profile.get("storage_drives") or []
-                                if drives:
-                                    drive_bits = []
-                                    for d in drives:
-                                        name = d.get("model") or "Drive"
-                                        size = d.get("size_gb")
-                                        iface = d.get("interface")
-                                        detail = []
-                                        if size:
-                                            detail.append(f"{size}GB")
-                                        if iface:
-                                            detail.append(iface)
-                                        drive_bits.append(f"{name} ({', '.join(detail)})" if detail else name)
-                                    response += " Storage: " + "; ".join(drive_bits) + "."
-                elif subintent == "temperature":
-                    temps = get_temperature_health()
-                    if temps.get("error") == "TEMPERATURE_UNAVAILABLE":
-                        response = "Temperature sensors are not available on this system."
-                    else:
-                        response = self._format_temperature_response(temps)
-                else:
-                    health = get_system_health()
-                    self.logger.info(
-                        "[SYSTEM] cpu=%s ram=%s disk=%s",
-                        health.get("cpu_percent"),
-                        health.get("ram_percent"),
-                        health.get("disk_percent"),
-                    )
-                    response = self._format_system_health(health)
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-
-            if intent and intent.intent_type == IntentType.SYSTEM_INFO:
-                allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
-                if not allowed:
-                    response = f"System information access blocked by policy ({reason})."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-                profile = get_system_profile()
-                gpus = get_gpu_profile()
-                subintent = getattr(intent, "subintent", None)
-                if subintent == "memory":
-                    ram_gb = profile.get("ram_gb") if profile else None
-                    response = (
-                        f"Your system has {ram_gb} gigabytes of memory."
-                        if ram_gb is not None
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "cpu":
-                    cpu_name = profile.get("cpu") if profile else None
-                    response = (
-                        f"Your CPU is a {cpu_name}."
-                        if cpu_name
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "gpu":
-                    if gpus:
-                        response = f"Your GPU is {gpus[0].get('name')}."
-                    else:
-                        response = "No GPU detected."
-                elif subintent == "os":
-                    os_name = profile.get("os") if profile else None
-                    response = (
-                        f"You are running {os_name}."
-                        if os_name
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "motherboard":
-                    board = profile.get("motherboard") if profile else None
-                    response = (
-                        f"Your motherboard is {board}."
-                        if board
-                        else "Hardware information unavailable."
-                    )
-                else:
-                    response = "Hardware information unavailable."
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-
-            rag_context = ""
-            if request_kind == "QUESTION":
-                rag_context = self._get_rag_context(user_text, interaction_id)
-            self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
-            ai_text = self.generate_response(user_text, interaction_id=interaction_id, rag_context=rag_context)
-            ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
-            ai_text = self._strip_disallowed_phrases(ai_text)
-            if not ai_text.strip():
-                self.logger.warning("[LLM] Empty response")
-                self.broadcast("log", "Argo: [No response]")
-                return
-            self.broadcast("log", f"Argo: {ai_text}")
-            self._conversation_buffer.add("Assistant", ai_text)
-
+        contextual_reply = self._handle_contextual_followup(user_text)
+        if contextual_reply:
+            self.broadcast("log", f"Argo: {contextual_reply}")
+            self._append_convo_ledger("argo", contextual_reply)
             if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(ai_text)
+                tts_text = self._sanitize_tts_text(contextual_reply)
                 tts_override = (overrides or {}).get("suppress_tts", False)
                 if tts_override:
                     self.logger.info("[TTS] Suppressed for next interaction override")
                 elif tts_text:
                     self.speak(tts_text, interaction_id=interaction_id)
-                else:
-                    self.logger.warning("[TTS] Sanitized response is empty, skipping TTS")
-            
             self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
             self.logger.info("--- Interaction Complete ---")
             self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
 
-            if not replay_mode:
-                self._save_replay(
-                    interaction_id=interaction_id,
-                    audio_data=audio_data,
-                    user_text=user_text,
-                    ai_text=ai_text,
+        intent = None
+        try:
+            intent = self._intent_parser.parse(user_text)
+        except Exception:
+            intent = None
+
+        request_kind = self._classify_request_type(user_text, intent)
+        safe_utterance = re.sub(r"\s+", " ", (user_text or "").replace("\n", " ").strip())
+        intent_type_label = intent.intent_type.value if intent else "None"
+        intent_artist = getattr(intent, "artist", None)
+        intent_title = getattr(intent, "title", None)
+        self.logger.info(
+            "[INTENT] intent=%s request_kind=%s artist=%s title=%s utterance=\"%s\"",
+            intent_type_label,
+            request_kind,
+            intent_artist,
+            intent_title,
+            safe_utterance,
+        )
+        if intent is None:
+            music_keywords = {
+                "play",
+                "pause",
+                "resume",
+                "shuffle",
+                "song",
+                "music",
+                "artist",
+                "album",
+                "next",
+                "skip",
+                "track",
+            }
+            detected_keywords = sorted({kw for kw in music_keywords if kw in safe_utterance.lower()})
+            if detected_keywords:
+                self.logger.warning(
+                    "[INTENT WARNING] intent=None but music keywords detected keywords=%s utterance=\"%s\"",
+                    detected_keywords,
+                    safe_utterance,
                 )
-            
-        except Exception as e:
-            self.logger.error(f"Pipeline Error: {e}", exc_info=True)
-            self.broadcast("status", "ERROR")
-            self._record_timeline("PIPELINE_ERROR", stage="pipeline", interaction_id=interaction_id)
-        finally:
-            self.processing_lock.release()
+        
+        # IDENTITY STATEMENT GATE: Detect "my name is X" BEFORE request classification gates
+        # This must happen before canonical/clarification/LLM routing
+        if not topic:
+            name_candidate = self._extract_name_from_statement(user_text)
+            if name_candidate and not self._session_flags.get("confirm_name", False):
+                self.logger.info(
+                    f"[MEMORY] candidate_detected type=identity.name value={name_candidate} conf_hint={stt_conf:.2f}"
+                )
+                self._pending_memory = {"key": "name", "value": name_candidate}
+                self._session_flags["confirm_name"] = True
+                response = f"Do you want me to remember that your name is {name_candidate}?"
+                self.logger.info("[MEMORY] confirmation_requested")
+                self._record_timeline("IDENTITY_CONFIRM_GATE", stage="pipeline", interaction_id=interaction_id)
+                self.broadcast("log", f"Argo: {response}")
+                self._append_convo_ledger("argo", response)
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+        
+        canonical_reason = "none"
+        if topic:
+            canonical_reason = f"topic:{topic}"
+        self.logger.info(f"[CANONICAL] classification={request_kind} canonical_reason={canonical_reason}")
+        self._record_timeline(
+            f"CLASSIFY {request_kind}",
+            stage="pipeline",
+            interaction_id=interaction_id,
+        )
+        if request_kind == "ACTION" and intent is None:
+            request_kind = "QUESTION"
 
+        low_confidence_audio = not self.strict_lab_mode and stt_conf < 0.50
+        if (
+            not self.strict_lab_mode
+            and request_kind == "QUESTION"
+            and low_confidence_audio
+            and not personal_question_bypass_logged
+        ):
+            self.logger.info("[PERSONAL_MODE] Question bypassed confidence gating")
+            personal_question_bypass_logged = True
+
+        # CLARIFICATION GATE: Low-mid confidence question without phrase/canonical match
+        if (
+            request_kind == "QUESTION"
+            and 0.35 <= stt_conf < 0.55
+            and not topic
+            and self.strict_lab_mode
+        ):
+            phrase_match_gate = any(" " in m for m in matched) if matched else False
+            clarify_asked_already = self._session_flags.get("clarification_asked", False)
+            
+            if not phrase_match_gate and not clarify_asked_already:
+                self._session_flags["clarification_asked"] = True
+                response = self._get_clarification_prompt()
+                self.logger.info(f"[CLARIFY] triggered conf={stt_conf:.2f} reason=ambiguous_question")
+                self._record_timeline("CLARIFY_GATE", stage="pipeline", interaction_id=interaction_id)
+                self.broadcast("log", f"Argo: {response}")
+                self._append_convo_ledger("argo", response)
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+
+        # --- MUSIC VOLUME CONTROL (voice) ---
+        # Recognize patterns like 'music volume 75%', 'set volume to 50%', 'volume up', 'volume down'
+        from core.music_player import set_volume_percent, adjust_volume_percent, get_volume_percent
+        volume_patterns = [
+            (r"(?:music )?volume (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
+            (r"set volume to (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
+            (r"volume up (\d{1,3})%?", lambda m: adjust_volume_percent(int(m.group(1)))),
+            (r"volume down (\d{1,3})%?", lambda m: adjust_volume_percent(-int(m.group(1)))),
+            (r"volume up", lambda m: adjust_volume_percent(10)),
+            (r"volume down", lambda m: adjust_volume_percent(-10)),
+            (r"what is the volume", lambda m: None),
+            (r"current volume", lambda m: None),
+        ]
+        user_text_lower = user_text.lower().strip()
+        user_text_clean = re.sub(r"[^\w\s%]", " ", user_text_lower)
+        user_text_clean = re.sub(r"\s+", " ", user_text_clean).strip()
+        is_imperative_volume = bool(re.match(r"^(music\s+)?volume\b", user_text_clean))
+        if user_text_lower.endswith("?"):
+            is_imperative_volume = False
+        if re.search(r"\b(would|could|can|should|might|maybe|perhaps|possibly)\b", user_text_clean):
+            is_imperative_volume = False
+        if re.search(r"\bwhat happens if\b|\bwhat if\b", user_text_clean):
+            is_imperative_volume = False
+        for pat, action in volume_patterns:
+            m = re.fullmatch(pat, user_text_clean)
+            if m:
+                is_status_query = pat in ["what is the volume", "current volume"]
+                if is_imperative_volume:
+                    request_kind = "ACTION"
+                if request_kind != "ACTION" and not is_status_query:
+                    response = "I can adjust volume. Say it as a command to execute."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+                if low_confidence_audio and request_kind == "ACTION" and not is_status_query:
+                    response = "I heard that, but the audio was unclear. Please repeat the volume command."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+                if not is_status_query and not (self._is_executable_command(user_text) or is_imperative_volume):
+                    response = "I can adjust volume. Say it as a direct command."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+                allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
+                if not allowed:
+                    response = f"Action blocked by policy ({reason})."
+                    self.logger.info(f"[GATE] {response}")
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+                if pat in ["what is the volume", "current volume"]:
+                    vol = get_volume_percent()
+                    response = f"Music volume: {vol}%"
+                else:
+                    action(m)
+                    vol = get_volume_percent()
+                    response = f"Music volume set to {vol}%"
+                self.logger.info(f"[ARGO] {response}")
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+
+        if intent and intent.intent_type in {
+            IntentType.MUSIC,
+            IntentType.MUSIC_STOP,
+            IntentType.MUSIC_NEXT,
+            IntentType.MUSIC_STATUS,
+        }:
+            self.logger.info(
+                "[MUSIC] intent=%s request_kind=%s entered handler",
+                intent.intent_type if intent else None,
+                request_kind,
+            )
+            if request_kind != "ACTION" and intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
+                self.logger.info(
+                    "[MUSIC GUARD] guard=non_action intent=%s request_kind=%s",
+                    intent.intent_type,
+                    request_kind,
+                )
+                response = "I can do that. Say it as a command to execute."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+            if (
+                low_confidence_audio
+                and request_kind == "ACTION"
+                and intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}
+                and not self._allow_low_conf_music_command(intent, user_text)
+            ):
+                self.logger.info(
+                    "[MUSIC GUARD] guard=low_confidence intent=%s request_kind=%s stt_conf=%.2f",
+                    intent.intent_type,
+                    request_kind,
+                    stt_conf,
+                )
+                response = "I heard a music control, but the audio was unclear. Please repeat the command."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+            if intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
+                if not self._is_executable_command(user_text):
+                    self.logger.info(
+                        "[MUSIC GUARD] guard=non_executable intent=%s request_kind=%s text=\"%s\"",
+                        intent.intent_type,
+                        request_kind,
+                        user_text,
+                    )
+                    response = "I can do that. Say it as a direct command."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response)
+                        tts_override = (overrides or {}).get("suppress_tts", False)
+                        if tts_override:
+                            self.logger.info("[TTS] Suppressed for next interaction override")
+                        elif tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    self.logger.info("--- Interaction Complete ---")
+                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                    return
+            allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
+            if not allowed:
+                self.logger.info(
+                    "[MUSIC GUARD] guard=policy_block intent=%s request_kind=%s reason=%s",
+                    intent.intent_type,
+                    request_kind,
+                    reason,
+                )
+                response = f"Action blocked by policy ({reason})."
+                self.logger.info(f"[GATE] {response}")
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak(response, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+            if not self.runtime_overrides.get("music_enabled", True):
+                self.logger.info(
+                    "[MUSIC GUARD] guard=music_disabled intent=%s request_kind=%s",
+                    intent.intent_type,
+                    request_kind,
+                )
+                msg = "Music is disabled."
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak(msg, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+
+            music_player = get_music_player()
+            blocked = music_player.preflight()
+            if blocked:
+                self.logger.info(
+                    "[MUSIC GUARD] guard=preflight intent=%s request_kind=%s message=%s",
+                    intent.intent_type,
+                    request_kind,
+                    blocked,
+                )
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak("Music library not indexed yet.", interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+            playback_started = False
+            error_message = ""
+
+            if intent.intent_type == IntentType.MUSIC_STOP:
+                music_player.stop()
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak("Stopped.", interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+
+            if intent.intent_type == IntentType.MUSIC_NEXT:
+                playback_started = music_player.play_next(None)
+                if not playback_started:
+                    error_message = "No music playing."
+
+            elif intent.intent_type == IntentType.MUSIC_STATUS:
+                status = query_music_status()
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak(status, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+
+            else:
+                artist = getattr(intent, "artist", None)
+                title = getattr(intent, "title", None)
+                do_not_try_genre_lookup = bool(title)
+                explicit_genre = bool(getattr(intent, "explicit_genre", False))
+                if getattr(intent, "is_generic_play", False) and not artist and not title and not getattr(intent, "keyword", None):
+                    playback_started = music_player.play_random(None)
+                    if not playback_started:
+                        error_message = "Your music library is empty or unavailable."
+                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                    return
+                if title:
+                    playback_started = music_player.play_by_song(title, None)
+                    if not playback_started and not artist:
+                        playback_started = music_player.play_by_artist(title, None)
+                if not playback_started and artist:
+                    playback_started = music_player.play_by_artist(artist, None)
+                if not playback_started and getattr(intent, "keyword", None):
+                    keyword = intent.keyword
+                    if explicit_genre and not do_not_try_genre_lookup:
+                        playback_started = music_player.play_by_genre(keyword, None)
+                    if not playback_started:
+                        playback_started = music_player.play_by_keyword(keyword, None)
+                    if not playback_started:
+                        error_message = f"No music found for '{keyword}'."
+                if not playback_started and not artist and not title and not getattr(intent, "keyword", None):
+                    playback_started = music_player.play_random(None)
+                    if not playback_started:
+                        error_message = "No music available."
+
+            if intent.intent_type == IntentType.MUSIC and not playback_started and title:
+                setattr(intent, "unresolved", True)
+                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                    self.speak("I can’t find that track in your library.", interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                return
+
+            if error_message and self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
+                self.speak(error_message, interaction_id=interaction_id)
+
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            return
+
+        if intent and intent.intent_type == IntentType.ARGO_IDENTITY:
+            if self._respond_with_argo_identity(interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.ARGO_GOVERNANCE:
+            if self._respond_with_argo_governance(intent, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.COUNT:
+            response = self._build_count_response(user_text)
+            self.broadcast("log", f"Argo: {response}")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        if intent and intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_STATUS}:
+            if self._respond_with_system_health(user_text, intent, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.SYSTEM_INFO:
+            allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
+            if not allowed:
+                response = f"System information access blocked by policy ({reason})."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self.logger.info("--- Interaction Complete ---")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
+            profile = get_system_profile()
+            gpus = get_gpu_profile()
+            subintent = getattr(intent, "subintent", None)
+            if subintent == "memory":
+                ram_gb = profile.get("ram_gb") if profile else None
+                response = (
+                    f"Your system has {ram_gb} gigabytes of memory."
+                    if ram_gb is not None
+                    else "Hardware information unavailable."
+                )
+            elif subintent == "cpu":
+                cpu_name = profile.get("cpu") if profile else None
+                response = (
+                    f"Your CPU is a {cpu_name}."
+                    if cpu_name
+                    else "Hardware information unavailable."
+                )
+            elif subintent == "gpu":
+                if gpus:
+                    response = f"Your GPU is {gpus[0].get('name')}."
+                else:
+                    response = "No GPU detected."
+            elif subintent == "os":
+                os_name = profile.get("os") if profile else None
+                response = (
+                    f"You are running {os_name}."
+                    if os_name
+                    else "Hardware information unavailable."
+                )
+            elif subintent == "motherboard":
+                board = profile.get("motherboard") if profile else None
+                response = (
+                    f"Your motherboard is {board}."
+                    if board
+                    else "Hardware information unavailable."
+                )
+            else:
+                response = "Hardware information unavailable."
+            self.broadcast("log", f"Argo: {response}")
+            if not self.stop_signal.is_set() and not replay_mode:
+                tts_text = self._sanitize_tts_text(response)
+                tts_override = (overrides or {}).get("suppress_tts", False)
+                if tts_override:
+                    self.logger.info("[TTS] Suppressed for next interaction override")
+                elif tts_text:
+                    self.speak(tts_text, interaction_id=interaction_id)
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self.logger.info("--- Interaction Complete ---")
+            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+            return
+
+        restricted_llm_intents = {
+            IntentType.MUSIC,
+            IntentType.MUSIC_STOP,
+            IntentType.MUSIC_NEXT,
+            IntentType.MUSIC_STATUS,
+            IntentType.SYSTEM_HEALTH,
+            IntentType.SYSTEM_STATUS,
+            IntentType.ARGO_IDENTITY,
+            IntentType.ARGO_GOVERNANCE,
+        }
+        if intent and intent.intent_type in restricted_llm_intents:
+            leak_messages = {
+                IntentType.MUSIC: "Music control routing failed. Please repeat the command.",
+                IntentType.MUSIC_STOP: "Music stop failed to route. Say stop music again.",
+                IntentType.MUSIC_NEXT: "Skip command failed to route. Say next track again.",
+                IntentType.MUSIC_STATUS: "Music status is handled locally. Ask again.",
+                IntentType.SYSTEM_HEALTH: "System health is handled locally. Please ask again.",
+                IntentType.SYSTEM_STATUS: "System status is handled locally. Please ask again.",
+                IntentType.ARGO_IDENTITY: "Identity answers are deterministic. Ask again if needed.",
+                IntentType.ARGO_GOVERNANCE: "Governance answers are deterministic. Ask again if needed.",
+            }
+            leak_msg = leak_messages.get(intent.intent_type, "Routing error. Please repeat the request.")
+            safe_text = safe_utterance or (user_text or "")
+            self.logger.error(f"[CANONICAL LEAK] intent={intent.intent_type} text=\"{safe_text}\"")
+            self._deliver_canonical_response(leak_msg, interaction_id, replay_mode, overrides)
+            return
+
+        rag_context = ""
+        memory_context = ""
+        llm_context_scope = "isolated"
+        if request_kind == "QUESTION":
+            rag_context = self._get_rag_context(user_text, interaction_id)
+            memory_context = self._get_memory_context(interaction_id)
+            if rag_context:
+                llm_context_scope = "buffered"
+        self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
+        self.logger.info(f"[LLM] context_scope={llm_context_scope}")
+        ai_text = self.generate_response(
+            user_text,
+            interaction_id=interaction_id,
+            rag_context=rag_context,
+            memory_context=memory_context,
+            use_convo_buffer=(llm_context_scope == "buffered"),
+        )
+        ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
+        ai_text = self._strip_disallowed_phrases(ai_text)
+        if not ai_text.strip():
+            self.logger.warning("[LLM] Empty response")
+            self.broadcast("log", "Argo: [No response]")
+            return
+        self.broadcast("log", f"Argo: {ai_text}")
+        self._conversation_buffer.add("Assistant", ai_text)
+        self._append_convo_ledger("argo", ai_text)
+
+        if not self.stop_signal.is_set() and not replay_mode:
+            tts_text = self._sanitize_tts_text(ai_text)
+            tts_override = (overrides or {}).get("suppress_tts", False)
+            if tts_override:
+                self.logger.info("[TTS] Suppressed for next interaction override")
+            elif tts_text:
+                self.speak(tts_text, interaction_id=interaction_id)
+            else:
+                self.logger.warning("[TTS] Sanitized response is empty, skipping TTS")
+
+        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+        self.logger.info("--- Interaction Complete ---")
+        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+
+        if not replay_mode and audio_data is not None:
+            self._save_replay(
+                interaction_id=interaction_id,
+                audio_data=audio_data,
+                user_text=user_text,
+                ai_text=ai_text,
+            )
+
+        return
     def _save_replay(self, interaction_id: str, audio_data, user_text: str, ai_text: str):
         try:
             replay_dir = Path("runtime") / "replays"

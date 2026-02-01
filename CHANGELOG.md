@@ -1,24 +1,35 @@
 # Changelog
 
-## v1.7.0 — Core Memory & STT Hardening (Stable)
+## v1.6.0 — Voice Stability & UX Refinement (Stable)
 
-### Added
-- Explicit-only memory system with FACT / PROJECT / EPHEMERAL namespaces
-- Read-only memory introspection commands
-- Whisper STT hint injection (local-only)
-- Audio hygiene and silence rejection
-- Deterministic chaos stress testing
+### Core Stability
+- Fixed pipeline state machine to allow THINKING → LISTENING
+- Prevents illegal transitions when TTS is suppressed
+- Eliminates state-machine warnings and deadlocks
+- Deterministic behavior confirmed via logs
+- Barge-in handling fully stabilized
+- Forced audio release during TTS works correctly
+- Clean recovery to LISTENING with no duplicate transitions
 
-### Fixed
-- Implicit memory writes (eliminated)
-- Audio-induced hallucinations
-- Pipeline instability under interruption
+### Audio + Interaction Flow
+- TTS suppression paths now terminate cleanly
+- Silence and low-confidence exits no longer poison pipeline state
+- Interaction lifecycle consistently reaches INTERACTION_END
 
-### Security / Guarantees
-- Memory cannot trigger actions
-- No cloud dependencies
-- No eval / exec paths
-- Deterministic restart behavior
+### Intent + UX Improvements
+- Canonical routing refined to prevent misclassification
+- Identity questions no longer misrouted as SYSTEM_HEALTH
+- Keyword-only canonical bypass reduced
+- MUSIC intent handling improved:
+	- Confidence guards scoped by intent (music commands more tolerant)
+	- Prevents false rejections for short, common commands
+	- MUSIC intent no longer falls back to open-ended LLM responses
+	- Failed matches now request clarification instead of hallucinating
+
+### Safety & Governance
+- No changes to gate system (validation, permission, safety, resource, audit)
+- No loosening of security or execution constraints
+- Behavior improvements are scoped and deterministic
 
 ## v1.5.0 – Hardened Core Baseline
 - Deterministic system health + disk queries (no LLM)
