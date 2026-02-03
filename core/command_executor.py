@@ -59,7 +59,12 @@ class CommandExecutor:
     
     # Pattern: "count to N" - supports digits OR spelled-out numbers
     # Matches: "count to 5", "count to five", "count to ten", "can you count to five?"
-    COUNT_PATTERN = re.compile(r'count\s+to\s+(\d+|\w+)', re.IGNORECASE)
+    # Also: "let's count to five", "give me five numbers"
+    COUNT_PATTERN = re.compile(r'count\s+to\s+(.+)', re.IGNORECASE)
+    COUNT_ALT_PATTERNS = [
+        re.compile(r"let'?s\s+count\s+to\s+(.+)", re.IGNORECASE),
+        re.compile(r"give\s+me\s+(\w+)\s+numbers?", re.IGNORECASE),
+    ]
 
     # Pattern: "set computer light(s) ..."
     LIGHT_PATTERN = re.compile(r'\bset\s+computer\s+lights?\b(.*)', re.IGNORECASE)
@@ -107,10 +112,22 @@ class CommandExecutor:
         # Check count pattern (digits or spelled-out numbers)
         match = self.COUNT_PATTERN.search(text)
         if match:
-            num_str = match.group(1).lower()
+            raw_target = match.group(1).strip().lower()
+            raw_target = re.sub(r'[^\w\s]', '', raw_target)
+            first_word = raw_target.split()[0] if raw_target.split() else ""
             # Validate it's a valid number (digit or known word)
-            if num_str.isdigit() or num_str in WORD_TO_NUMBER:
+            if first_word.isdigit() or first_word in WORD_TO_NUMBER:
                 return True
+        
+        # Check alternate count patterns ("let's count to", "give me N numbers")
+        for pattern in self.COUNT_ALT_PATTERNS:
+            alt_match = pattern.search(text)
+            if alt_match:
+                raw_target = alt_match.group(1).strip().lower()
+                raw_target = re.sub(r'[^\w\s]', '', raw_target)
+                first_word = raw_target.split()[0] if raw_target.split() else ""
+                if first_word.isdigit() or first_word in WORD_TO_NUMBER:
+                    return True
         
         # Future patterns go here
         
@@ -157,7 +174,7 @@ class CommandExecutor:
                 self.logger.error(f"[CommandExecutor] Lighting command failed: {e}")
                 return False
 
-        # Try count command
+        # Try count command (primary pattern)
         count_match = self.COUNT_PATTERN.search(text)
         if count_match:
             try:
@@ -171,6 +188,22 @@ class CommandExecutor:
             except Exception as e:
                 self.logger.error(f"[CommandExecutor] Count command failed: {e}")
                 return False
+        
+        # Try alternate count patterns ("let's count to", "give me N numbers")
+        for pattern in self.COUNT_ALT_PATTERNS:
+            alt_match = pattern.search(text)
+            if alt_match:
+                try:
+                    num_str = alt_match.group(1)
+                    count_to = self._parse_number(num_str)
+                    if count_to is None:
+                        self.logger.warning(f"[CommandExecutor] Could not parse number: '{num_str}'")
+                        return False
+                    self._execute_count(count_to)
+                    return True
+                except Exception as e:
+                    self.logger.error(f"[CommandExecutor] Count command failed: {e}")
+                    return False
         
         return False
 
@@ -230,6 +263,7 @@ class CommandExecutor:
         devices_env = os.getenv("OPENRGB_DEVICES", "").strip()
         devices = [d.strip() for d in devices_env.split(",") if d.strip()] if devices_env else [None]
 
+        success = True
         for dev in devices:
             args = list(base_args)
             if dev is not None:
@@ -238,14 +272,16 @@ class CommandExecutor:
                 result = subprocess.run(args, capture_output=True, text=True, timeout=10)
             except Exception as e:
                 self.logger.error(f"[CommandExecutor] OpenRGB call failed: {e}")
-                return False
+                success = False
+                continue
 
             if result.returncode != 0:
                 self.logger.error(
                     "[CommandExecutor] OpenRGB error: %s",
                     (result.stderr or result.stdout).strip(),
                 )
-                return False
+                success = False
+                continue
 
         if self.audio_sink:
             try:
@@ -257,10 +293,10 @@ class CommandExecutor:
                     self.audio_sink.speak("Computer lights set to breathing mode.")
                 else:
                     self.audio_sink.speak("Computer lights updated.")
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.error(f"[CommandExecutor] Failed to speak OpenRGB status: {e}")
 
-        return True
+        return bool(success)
     
     def _execute_count(self, count_to: int) -> None:
         """
@@ -285,9 +321,13 @@ class CommandExecutor:
         self.logger.info(f"[CommandExecutor] Counting to {count_to}")
         
         for i in range(1, count_to + 1):
+            # Check for stop/interruption flag
+            if hasattr(self, 'stop_requested') and getattr(self, 'stop_requested', False):
+                self.logger.info(f"[CommandExecutor] Counting interrupted at {i-1}")
+                break
             # Speak the number
             num_text = str(i)
-            
+            self.logger.info(f"Argo: {num_text}")
             self.logger.info(f"[CommandExecutor] Counting: {num_text}")
             
             if self.audio_sink:
@@ -300,5 +340,5 @@ class CommandExecutor:
             # Delay between numbers (except after last)
             if i < count_to:
                 time.sleep(1.0)  # 1 second delay
-        
+
         self.logger.info(f"[CommandExecutor] Counting complete (1 to {count_to})")

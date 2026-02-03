@@ -7,6 +7,7 @@
 - **UI debugger is required** — it is the primary visibility surface.
 - **Local‑first** — no cloud dependencies for speech or TTS.
 - **Deterministic system facts** — system health/specs never call the LLM.
+- **Natural language flexibility** — supports colloquial phrasing for core commands (e.g., "how's my computer doing", "close the browser", "give me 5 numbers").
 
 **Web UI:** http://localhost:8000  
 **WebSocket:** ws://localhost:8001/ws

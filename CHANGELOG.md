@@ -1,12 +1,13 @@
 # Changelog
 
-## v1.6.1 — Deterministic Core Stabilization (2026-02-02)
+## v1.6.1 — Deterministic Core Stabilization (2025-02-02)
 
 ### Added
 - Canonical / deterministic commands now bypass STT confidence gates entirely
 - Unresolved noun phrase detection triggers clarification instead of LLM fallback
 - Six missing method stubs added to pipeline.py for interrogative detection and clarification flow
-- VAD_END minimum voiced speech threshold tunable (lowered to 240ms for faster response)
+- VAD_END minimum voiced speech threshold set to 300ms (reduces false triggers from grunts/noise)
+- Natural language phrasing support: COUNT ("let's count to 5", "give me 3 numbers"), SYSTEM HEALTH ("how's my computer doing", "anything wrong with my system"), APP CONTROL ("shut notepad", "close the browser")
 
 ### Fixed
 - Type annotations corrected across pipeline.py (Optional[str] for nullable returns)

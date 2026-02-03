@@ -175,7 +175,8 @@ async def send_to_clients(msg):
     for ws in list(connected_clients):
         try:
             await ws.send(msg)
-        except:
+        except Exception as e:
+            logger.error(f"[Main] Failed to send to client: {e}")
             connected_clients.discard(ws)
 
 async def websocket_handler(websocket):
@@ -456,6 +457,7 @@ def main_loop():
     silence_seconds = 1.5
     silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
+    voiced_ms_accumulator = 0
     
     while SERVER_ENABLED:
         if pipeline.illegal_transition:
@@ -500,6 +502,7 @@ def main_loop():
             )
             is_recording = True
             silence_counter = 0
+            voiced_ms_accumulator = 0
             preroll = audio.get_preroll()
             if len(preroll) > 0:
                 speech_buffer = [preroll]
@@ -545,22 +548,28 @@ def main_loop():
         
         if is_recording and not passive_listen:
             speech_buffer.append(frame)
-            
-            if volume < vad_threshold:
-                silence_counter += 1
-            else:
+
+            # Only count voiced frames (rms >= threshold)
+            if volume >= vad_threshold:
+                voiced_ms_accumulator += (BLOCK_SIZE / INPUT_SAMPLE_RATE) * 1000
                 silence_counter = 0
-                
+            else:
+                silence_counter += 1
+
             # Stop Recording after silence
             if silence_counter > silence_threshold:
+                # Only allow VAD_END if at least 300 ms of voiced frames have been accumulated
+                if voiced_ms_accumulator < 300:
+                    logger.info(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")
+                    continue
                 is_recording = False
                 silence_counter = 0
                 log_event("VAD_END", stage="vad", interaction_id=current_interaction_id)
-                
+
                 # Process Audio
                 if len(speech_buffer) > 0:
                     full_audio = np.concatenate(speech_buffer)
-                    
+
                     # --- AUDIO NORMALIZATION ---
                     peak = np.max(np.abs(full_audio))
                     if peak > 0.01: 
@@ -570,9 +579,9 @@ def main_loop():
 
                         # CRITICAL FIX: Squeeze 2D array (N, 1) -> 1D array (N,)
                         full_audio = np.squeeze(full_audio)
-                        
+
                         audio.clear_buffers()
-                        
+
                         # Offload to pipeline
                         overrides = dict(NEXT_INTERACTION_OVERRIDES)
                         NEXT_INTERACTION_OVERRIDES.clear()
