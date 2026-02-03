@@ -27,6 +27,7 @@ def make_pipeline(db_path: Path):
     pipeline = ArgoPipeline(DummyAudio(), broadcast)
     pipeline._memory_store = MemoryStore(db_path)
     pipeline._ephemeral_memory = {}
+    pipeline._last_stt_metrics = {"confidence": 0.99}
     return pipeline, logs
 
 
@@ -44,7 +45,10 @@ def test_phase1_intent_explicit_vs_implicit(tmp_path):
     assert handled is False
     assert p._memory_store.list_memory() == []
 
-    handled, _ = handle(p, logs, "Remember that I like jazz music.")
+    handled, logs_out = handle(p, logs, "Remember that I like jazz music.")
+    assert handled is True
+    assert any("you want me to remember" in msg.lower() for msg in logs_out)
+    handled, _ = handle(p, logs, "yes")
     assert handled is True
     facts = p._memory_store.list_memory("FACT")
     assert len(facts) == 1
@@ -62,18 +66,22 @@ def test_phase2_memory_types(tmp_path):
     p, logs = make_pipeline(db)
 
     handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "confirm")
     facts = p._memory_store.list_memory("FACT")
     assert any(m.key == "my favorite editor" for m in facts)
 
     handle(p, logs, "For the ARGO project, remember the music DB is SQLite.")
+    handle(p, logs, "confirm")
     projects = p._memory_store.list_memory("PROJECT", namespace="argo")
     assert len(projects) == 1
     assert "sqlite" in projects[0].value.lower()
 
-    handle(p, logs, "Remember for this session voice_failed_this_session is true.")
-    assert p._memory_store.list_memory("PROJECT")
-    assert p._memory_store.list_memory("FACT")
-    assert "voice_failed_this_session" in p._ephemeral_memory
+    handled, logs_out = handle(p, logs, "Remember this as a preference: editor is VS Code.")
+    assert handled is True
+    assert any("you want me to remember" in msg.lower() for msg in logs_out)
+    handled, logs_out = handle(p, logs, "confirm")
+    assert handled is True
+    assert any("memory stored" in msg.lower() for msg in logs_out)
 
 
 def test_phase3_negative_and_adversarial(tmp_path):
@@ -90,9 +98,10 @@ def test_phase3_negative_and_adversarial(tmp_path):
     assert any("What should I remember" in msg for msg in logs_out)
 
     handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "confirm")
     handled, logs_out = handle(p, logs, "Remember my favorite editor is Emacs.")
     assert handled is True
-    assert any("already exists" in msg for msg in logs_out)
+    assert any("you want me to remember" in msg.lower() for msg in logs_out)
 
 
 def test_phase4_deletion_and_erase(tmp_path):
@@ -100,6 +109,7 @@ def test_phase4_deletion_and_erase(tmp_path):
     p, logs = make_pipeline(db)
 
     handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "confirm")
     handled, logs_out = handle(p, logs, "List memory.")
     assert handled is True
     assert any("Memory:" in msg for msg in logs_out)
@@ -109,11 +119,13 @@ def test_phase4_deletion_and_erase(tmp_path):
     assert any("Deleted memory" in msg for msg in logs_out)
 
     handle(p, logs, "For the ARGO project, remember the music DB is SQLite.")
+    handle(p, logs, "confirm")
     handled, logs_out = handle(p, logs, "Clear memory for ARGO project.")
     assert handled is True
     assert any("Cleared project memory" in msg for msg in logs_out)
 
     handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "confirm")
     handled, logs_out = handle(p, logs, "Clear all memory.")
     assert handled is True
     assert any("Confirm" in msg for msg in logs_out)
@@ -129,6 +141,7 @@ def test_phase5_failure_resilience(tmp_path):
 
     # Missing directory
     handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "confirm")
     assert p._memory_store.list_memory("FACT")
 
     # DB lock
@@ -139,7 +152,8 @@ def test_phase5_failure_resilience(tmp_path):
         "INSERT INTO memory(type, namespace, key, value, source, timestamp) VALUES(?, ?, ?, ?, ?, ?)",
         ("FACT", None, "lock", "lock", "system", "2026-01-31T00:00:00Z"),
     )
-    handled, logs_out = handle(p, logs, "Remember my favorite editor is VS Code.")
+    handle(p, logs, "Remember my favorite editor is VS Code.")
+    handled, logs_out = handle(p, logs, "confirm")
     conn.rollback()
     conn.close()
     assert handled is True
@@ -158,4 +172,4 @@ def test_phase6_action_isolation(tmp_path):
 
     handled, logs_out = handle(p, logs, "Remember that lights are on.")
     assert handled is True
-    assert any("Stored" in msg for msg in logs_out) or any("remember" in msg.lower() for msg in logs_out)
+    assert any("what should i remember" in msg.lower() for msg in logs_out)

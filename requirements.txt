@@ -16,5 +16,7 @@ simpleaudio>=1.0.4
 edge-tts>=6.1.12
 psutil>=5.9.8
 wmi>=1.5.1
+pycaw>=20240210
+comtypes>=1.2.0
 pytest>=7.4.3
 pytest-asyncio>=0.21.1

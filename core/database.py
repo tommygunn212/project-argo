@@ -874,7 +874,7 @@ class MusicDatabase:
                     t.duration,
                     t.path,
                     a.name AS artist,
-                    al.title AS album,
+                    al.title AS album
                 FROM tracks t
                 JOIN albums al ON al.id = t.album_id
                 JOIN artists a ON a.id = al.artist_id

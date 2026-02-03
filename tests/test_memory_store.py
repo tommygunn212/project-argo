@@ -52,3 +52,10 @@ def test_invalid_type_raises(tmp_path):
     store = MemoryStore(tmp_path / "memory.db")
     with pytest.raises(ValueError):
         store.add_memory("EPHEMERAL", "x", "y", source="user")
+
+
+def test_preference_type_allowed(tmp_path):
+    store = MemoryStore(tmp_path / "memory.db")
+    store.add_memory("PREFERENCE", "editor", "VS Code", source="user")
+    prefs = store.list_memory("PREFERENCE")
+    assert len(prefs) == 1

@@ -317,6 +317,7 @@ class PiperOutputSink(OutputSink):
         self._on_playback_complete: Optional[Callable[[], None]] = None
         self._pending_text: str = ""
         self._playback_task = None
+        self._interrupt_suppress_until = 0.0
         
         # HARDENING STEP 2: Interaction ID for zombie callback filtering
         self._interaction_id: Optional[int] = None
@@ -526,9 +527,9 @@ class PiperOutputSink(OutputSink):
                 duration_ms = (time_end - time_start) * 1000
                 print(f"[PIPER_PROFILING] play_sentence_complete: {duration_ms:.1f}ms")
             
-            # Adaptive pacing: minimal gap between sentences (max 50ms)
+            # Adaptive pacing: minimal gap between sentences (max 20ms)
             if audio_duration:
-                delay = min(audio_duration * 0.01, 0.05)
+                delay = min(audio_duration * 0.005, 0.02)
                 time.sleep(delay)
     
     def _stream_and_play(self, process: subprocess.Popen):
@@ -557,7 +558,7 @@ class PiperOutputSink(OutputSink):
             SAMPLE_WIDTH = 2  # int16 = 2 bytes
             BLOCK_FRAMES = 2048
             CHUNK_BYTES = BLOCK_FRAMES * SAMPLE_WIDTH
-            MIN_PREROLL_FRAMES = int(SAMPLE_RATE * 0.1)  # 100ms
+            MIN_PREROLL_FRAMES = int(SAMPLE_RATE * 0.05)  # 50ms
 
             audio_queue = queue.Queue(maxsize=50)
             eof = object()
@@ -801,6 +802,10 @@ class PiperOutputSink(OutputSink):
         - Kill Piper subprocess immediately
         - Return instantly (no waiting)
         """
+        import time
+
+        if time.time() < self._interrupt_suppress_until:
+            return
         # INSTRUMENTATION: Log TTS stop
         log_event(f"TTS STOP (interaction_id={self._interaction_id})")
         
@@ -835,6 +840,12 @@ class PiperOutputSink(OutputSink):
         
         # Signal not playing
         self._is_playing = False
+
+    def suppress_interrupt(self, duration_s: float) -> None:
+        import time
+
+        if duration_s and duration_s > 0:
+            self._interrupt_suppress_until = time.time() + duration_s
     
     async def stop(self) -> None:
         """
@@ -955,6 +966,7 @@ class EdgeTTSOutputSink(OutputSink):
         self.pitch = "+0Hz"    # MUST be string ending in Hz
         self.volume = "+0%"    # MUST be string ending in %
         self._stop_requested = False
+        self._interrupt_suppress_until = 0.0
         self._audio_device = None
         self._device_sample_rate = 48000  # Will be detected at init
         
@@ -963,6 +975,12 @@ class EdgeTTSOutputSink(OutputSink):
         
         # Initialize audio device at startup
         self._init_audio_device()
+
+    def suppress_interrupt(self, duration_s: float) -> None:
+        import time
+
+        if duration_s and duration_s > 0:
+            self._interrupt_suppress_until = time.time() + duration_s
     
     def _init_audio_device(self) -> None:
         """

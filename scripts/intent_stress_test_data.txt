@@ -1,0 +1,76 @@
+
+# Intent Stress Test Data (with expectation tags)
+# Each block starts with STEP: and can include EXPECT_* tags
+
+
+STEP: Why does coffee cool down?
+EXPECT_INTENT: knowledge_physics
+EXPECT_KEYWORDS: heat, cooling, thermodynamics
+EXPECT_CONFIDENCE: high
+MUST_PASS: true
+
+STEP: Open Notepad
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: notepad, open
+EXPECT_CONFIDENCE: high
+
+STEP: Close Notepad
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: notepad, close
+EXPECT_CONFIDENCE: high
+
+STEP: Open browser
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: browser, open
+EXPECT_CONFIDENCE: high
+
+
+STEP: Is Bitcoin actually money?
+EXPECT_INTENT: knowledge_finance
+EXPECT_KEYWORDS: bitcoin, money, currency
+EXPECT_CONFIDENCE: high
+MUST_PASS: true
+
+STEP: Close browser
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: browser, close
+EXPECT_CONFIDENCE: high
+
+STEP: Computer health
+EXPECT_INTENT: system_health
+EXPECT_KEYWORDS: health, system
+EXPECT_CONFIDENCE: high
+
+STEP: Full computer status
+EXPECT_INTENT: system_health
+EXPECT_KEYWORDS: status, system, full
+EXPECT_CONFIDENCE: high
+
+STEP: Open Notepad
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: notepad, open
+EXPECT_CONFIDENCE: high
+
+STEP: Open browser
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: browser, open
+EXPECT_CONFIDENCE: high
+
+STEP: Close Notepad
+EXPECT_INTENT: app_control
+EXPECT_KEYWORDS: notepad, close
+EXPECT_CONFIDENCE: high
+
+STEP: What time is it and how's my system doing?
+EXPECT_INTENT: knowledge_time_system
+EXPECT_KEYWORDS: time, system, status
+EXPECT_CONFIDENCE: high
+MUST_PASS: true
+
+# Deliberately ambiguous control case
+STEP: Open it
+EXPECT_INTENT: clarify
+EXPECT_CONFIDENCE: low
+EXPECT_INTENT: knowledge_time_system
+EXPECT_KEYWORDS: time, system, status
+EXPECT_CONFIDENCE: high

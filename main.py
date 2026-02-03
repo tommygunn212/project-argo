@@ -454,7 +454,7 @@ def main_loop():
     speech_buffer = []
     is_recording = False
     silence_counter = 0
-    silence_seconds = 1.5
+    silence_seconds = 0.8
     silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
     voiced_ms_accumulator = 0
@@ -558,8 +558,8 @@ def main_loop():
 
             # Stop Recording after silence
             if silence_counter > silence_threshold:
-                # Only allow VAD_END if at least 300 ms of voiced frames have been accumulated
-                if voiced_ms_accumulator < 300:
+                # Only allow VAD_END if at least 180 ms of voiced frames have been accumulated
+                if voiced_ms_accumulator < 180:
                     logger.info(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")
                     continue
                 is_recording = False
@@ -572,10 +572,14 @@ def main_loop():
 
                     # --- AUDIO NORMALIZATION ---
                     peak = np.max(np.abs(full_audio))
-                    if peak > 0.01: 
-                        normalization_factor = 0.9 / peak
-                        full_audio = full_audio * normalization_factor
-                        logger.info(f"[Audio] Normalized input (original peak: {peak:.4f} -> 0.9)")
+                    if peak > 0.01:
+                        # Skip normalization if already loud enough (micro-latency win)
+                        if peak < 0.85:
+                            normalization_factor = 0.9 / peak
+                            full_audio = full_audio * normalization_factor
+                            logger.info(f"[Audio] Normalized input (original peak: {peak:.4f} -> 0.9)")
+                        else:
+                            logger.info(f"[Audio] Skipping normalization (peak: {peak:.4f} >= 0.85)")
 
                         # CRITICAL FIX: Squeeze 2D array (N, 1) -> 1D array (N,)
                         full_audio = np.squeeze(full_audio)

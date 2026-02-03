@@ -71,8 +71,8 @@ class MemoryStore:
         namespace: Optional[str] = None,
     ) -> int:
         # Guard: EPHEMERAL must never be written to disk.
-        if mem_type not in {"FACT", "PROJECT"}:
-            raise ValueError("mem_type must be FACT or PROJECT")
+        if mem_type not in {"FACT", "PROJECT", "PREFERENCE"}:
+            raise ValueError("mem_type must be FACT, PROJECT, or PREFERENCE")
         ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         conn = self._connect()
         try:

@@ -1,0 +1,138 @@
+{
+  "summary": {
+    "total_steps": 13,
+    "success_count": 6,
+    "weak_pass_count": 7,
+    "hard_failures": 0
+  },
+  "broken": [],
+  "fragile": [
+    {
+      "step_id": "2",
+      "raw_text": "Open Notepad",
+      "resolved_intent": "app_launch",
+      "expected_intent": "app_control",
+      "expected_keywords": [
+        "notepad",
+        "open"
+      ],
+      "action_taken": "Executed app_launch for 'Open Notepad'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 51,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "4",
+      "raw_text": "Open browser",
+      "resolved_intent": "app_launch",
+      "expected_intent": "app_control",
+      "expected_keywords": [
+        "browser",
+        "open"
+      ],
+      "action_taken": "Executed app_launch for 'Open browser'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "7",
+      "raw_text": "Computer health",
+      "resolved_intent": "system_status",
+      "expected_intent": "system_health",
+      "expected_keywords": [
+        "health",
+        "system"
+      ],
+      "action_taken": "Executed system_status for 'Computer health'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "8",
+      "raw_text": "Full computer status",
+      "resolved_intent": "system_status",
+      "expected_intent": "system_health",
+      "expected_keywords": [
+        "status",
+        "system",
+        "full"
+      ],
+      "action_taken": "Executed system_status for 'Full computer status'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "9",
+      "raw_text": "Open Notepad",
+      "resolved_intent": "app_launch",
+      "expected_intent": "app_control",
+      "expected_keywords": [
+        "notepad",
+        "open"
+      ],
+      "action_taken": "Executed app_launch for 'Open Notepad'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "10",
+      "raw_text": "Open browser",
+      "resolved_intent": "app_launch",
+      "expected_intent": "app_control",
+      "expected_keywords": [
+        "browser",
+        "open"
+      ],
+      "action_taken": "Executed app_launch for 'Open browser'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:missing alias",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [],
+      "must_pass": false
+    },
+    {
+      "step_id": "13",
+      "raw_text": "Open it",
+      "resolved_intent": "app_control",
+      "expected_intent": "knowledge_time_system",
+      "expected_keywords": [
+        "time",
+        "system",
+        "status"
+      ],
+      "action_taken": "Executed app_control for 'Open it'",
+      "result": "weak_pass",
+      "weak_pass_subtype": "intent_drift:intent priority conflict",
+      "latency_ms": 50,
+      "block_reason": null,
+      "missing_keywords": [
+        "time",
+        "system",
+        "status"
+      ],
+      "must_pass": false
+    }
+  ],
+  "blocked_by_design": [],
+  "recommendations": []
+}

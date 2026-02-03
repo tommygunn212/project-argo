@@ -590,6 +590,8 @@ class ArgoPipeline:
                 return "QUESTION"
             if intent.intent_type == IntentType.TIME_STATUS:
                 return "QUESTION"
+            if intent.intent_type == IntentType.WORLD_TIME:
+                return "QUESTION"
             if intent.intent_type == IntentType.VOLUME_STATUS:
                 return "QUESTION"
             if intent.intent_type == IntentType.VOLUME_CONTROL:
@@ -1400,7 +1402,7 @@ class ArgoPipeline:
             stt_result = self.stt_engine_manager.transcribe(
                 audio_data,
                 language="en",
-                beam_size=5 if self.stt_engine == "faster" else None,
+                beam_size=1 if self.stt_engine == "faster" else None,
                 condition_on_previous_text=False if self.stt_engine == "faster" else None,
                 initial_prompt=self._stt_initial_prompt or None,
             )
@@ -2274,6 +2276,145 @@ class ArgoPipeline:
             return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
         return self._deliver_canonical_response("System volume command failed.", interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
 
+    # =========================================================================
+    # WORLD TIME - City/Country to IANA Timezone mapping
+    # =========================================================================
+    LOCATION_TO_TIMEZONE = {
+        # Major cities
+        "london": "Europe/London",
+        "paris": "Europe/Paris",
+        "berlin": "Europe/Berlin",
+        "rome": "Europe/Rome",
+        "madrid": "Europe/Madrid",
+        "amsterdam": "Europe/Amsterdam",
+        "brussels": "Europe/Brussels",
+        "vienna": "Europe/Vienna",
+        "zurich": "Europe/Zurich",
+        "stockholm": "Europe/Stockholm",
+        "oslo": "Europe/Oslo",
+        "copenhagen": "Europe/Copenhagen",
+        "helsinki": "Europe/Helsinki",
+        "dublin": "Europe/Dublin",
+        "lisbon": "Europe/Lisbon",
+        "athens": "Europe/Athens",
+        "moscow": "Europe/Moscow",
+        "istanbul": "Europe/Istanbul",
+        "dubai": "Asia/Dubai",
+        "mumbai": "Asia/Kolkata",
+        "delhi": "Asia/Kolkata",
+        "bangalore": "Asia/Kolkata",
+        "kolkata": "Asia/Kolkata",
+        "chennai": "Asia/Kolkata",
+        "singapore": "Asia/Singapore",
+        "hong kong": "Asia/Hong_Kong",
+        "hongkong": "Asia/Hong_Kong",
+        "shanghai": "Asia/Shanghai",
+        "beijing": "Asia/Shanghai",
+        "tokyo": "Asia/Tokyo",
+        "osaka": "Asia/Tokyo",
+        "seoul": "Asia/Seoul",
+        "bangkok": "Asia/Bangkok",
+        "jakarta": "Asia/Jakarta",
+        "sydney": "Australia/Sydney",
+        "melbourne": "Australia/Melbourne",
+        "brisbane": "Australia/Brisbane",
+        "perth": "Australia/Perth",
+        "auckland": "Pacific/Auckland",
+        "new york": "America/New_York",
+        "nyc": "America/New_York",
+        "new york city": "America/New_York",
+        "los angeles": "America/Los_Angeles",
+        "la": "America/Los_Angeles",
+        "san francisco": "America/Los_Angeles",
+        "seattle": "America/Los_Angeles",
+        "chicago": "America/Chicago",
+        "denver": "America/Denver",
+        "phoenix": "America/Phoenix",
+        "miami": "America/New_York",
+        "boston": "America/New_York",
+        "washington": "America/New_York",
+        "dc": "America/New_York",
+        "atlanta": "America/New_York",
+        "dallas": "America/Chicago",
+        "houston": "America/Chicago",
+        "toronto": "America/Toronto",
+        "vancouver": "America/Vancouver",
+        "montreal": "America/Toronto",
+        "mexico city": "America/Mexico_City",
+        "sao paulo": "America/Sao_Paulo",
+        "rio": "America/Sao_Paulo",
+        "buenos aires": "America/Argentina/Buenos_Aires",
+        "cairo": "Africa/Cairo",
+        "johannesburg": "Africa/Johannesburg",
+        "lagos": "Africa/Lagos",
+        "nairobi": "Africa/Nairobi",
+        # Countries (use capital/major city timezone)
+        "uk": "Europe/London",
+        "united kingdom": "Europe/London",
+        "england": "Europe/London",
+        "france": "Europe/Paris",
+        "germany": "Europe/Berlin",
+        "italy": "Europe/Rome",
+        "spain": "Europe/Madrid",
+        "japan": "Asia/Tokyo",
+        "china": "Asia/Shanghai",
+        "india": "Asia/Kolkata",
+        "australia": "Australia/Sydney",
+        "canada": "America/Toronto",
+        "brazil": "America/Sao_Paulo",
+        "russia": "Europe/Moscow",
+        "south korea": "Asia/Seoul",
+        "korea": "Asia/Seoul",
+        "mexico": "America/Mexico_City",
+        "egypt": "Africa/Cairo",
+        "south africa": "Africa/Johannesburg",
+        # US states/regions
+        "california": "America/Los_Angeles",
+        "texas": "America/Chicago",
+        "florida": "America/New_York",
+        "new jersey": "America/New_York",
+        "hawaii": "Pacific/Honolulu",
+        "alaska": "America/Anchorage",
+    }
+
+    def _format_world_time(self, location: str) -> str:
+        """Get the current time in a specified location."""
+        from zoneinfo import ZoneInfo
+        
+        location_lower = location.lower().strip()
+        
+        # Try direct lookup
+        tz_name = self.LOCATION_TO_TIMEZONE.get(location_lower)
+        
+        if not tz_name:
+            # Try partial match
+            for loc, tz in self.LOCATION_TO_TIMEZONE.items():
+                if loc in location_lower or location_lower in loc:
+                    tz_name = tz
+                    break
+        
+        if not tz_name:
+            return f"I don't have timezone data for {location}. Try a major city name."
+        
+        try:
+            tz = ZoneInfo(tz_name)
+            now = datetime.now(tz)
+            time_str = now.strftime("%I:%M %p").lstrip("0")
+            # Clean up location name for speech
+            location_display = location.title()
+            return f"It's {time_str} in {location_display}."
+        except Exception as e:
+            self.logger.error(f"[WORLD_TIME] Error getting time for {location}: {e}")
+            return f"Couldn't get the time for {location}."
+
+    def _respond_with_world_time(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        location = getattr(intent, "target", None) if intent else None
+        if not location:
+            message = "I didn't catch the location. Where would you like to know the time?"
+        else:
+            message = self._format_world_time(location)
+        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+
     def _format_time_status(self, subintent: str | None) -> str:
         now = datetime.now()
         if subintent == "day":
@@ -3004,6 +3145,9 @@ class ArgoPipeline:
                 return
         if early_intent and early_intent.intent_type == IntentType.TIME_STATUS:
             if self._respond_with_time_status(early_intent, interaction_id, replay_mode, overrides):
+                return
+        if early_intent and early_intent.intent_type == IntentType.WORLD_TIME:
+            if self._respond_with_world_time(early_intent, interaction_id, replay_mode, overrides):
                 return
         if early_intent and early_intent.intent_type == IntentType.VOLUME_STATUS:
             if self._respond_with_system_volume_status(interaction_id, replay_mode, overrides):
@@ -3819,6 +3963,10 @@ class ArgoPipeline:
             if self._respond_with_time_status(intent, interaction_id, replay_mode, overrides):
                 return
 
+        if intent and intent.intent_type == IntentType.WORLD_TIME:
+            if self._respond_with_world_time(intent, interaction_id, replay_mode, overrides):
+                return
+
         if intent and intent.intent_type == IntentType.ARGO_IDENTITY:
             if self._respond_with_argo_identity(interaction_id, replay_mode, overrides):
                 return
@@ -3932,6 +4080,7 @@ class ArgoPipeline:
             IntentType.VOLUME_STATUS,
             IntentType.VOLUME_CONTROL,
             IntentType.TIME_STATUS,
+            IntentType.WORLD_TIME,
             IntentType.ARGO_IDENTITY,
             IntentType.ARGO_GOVERNANCE,
         }
@@ -3955,6 +4104,7 @@ class ArgoPipeline:
                 IntentType.VOLUME_STATUS: "System volume status is handled locally. Ask again.",
                 IntentType.VOLUME_CONTROL: "System volume control is handled locally. Please repeat the command.",
                 IntentType.TIME_STATUS: "Time status is handled locally. Ask again.",
+                IntentType.WORLD_TIME: "World time is handled locally. Ask again.",
                 IntentType.ARGO_IDENTITY: "Identity answers are deterministic. Ask again if needed.",
                 IntentType.ARGO_GOVERNANCE: "Governance answers are deterministic. Ask again if needed.",
             }

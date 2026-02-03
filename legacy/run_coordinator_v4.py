@@ -137,8 +137,8 @@ def main():
             # Emergency music stop on Ctrl+C
             from core.music_player import get_music_player
             get_music_player().stop()
-        except:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to stop music: {e}")
         return 1
     except Exception as e:
         print(f"\n[ERROR] {e}")

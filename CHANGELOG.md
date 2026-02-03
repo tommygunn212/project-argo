@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.4 — Audio Responsiveness + World Time (2025-02-03)
+
+- **World Time**: "What time is it in Tokyo/London/etc?" now handled deterministically with accurate timezone lookup (100+ cities/countries supported)
+- TTS pre-roll reduced from 100ms to 50ms (faster first-word playback)
+- Inter-sentence gap reduced from max 50ms to max 20ms (continuous-sounding responses)
+- PERSONAL_MODE_MIN_CONFIDENCE loosened from 0.25 to 0.15 (fewer rejection moments)
+- Audio normalization skipped when peak >= 0.85 (micro-latency win)
+
+---
+
+## v1.6.3 — Latency Tuning for Personal Use (2025-02-03)
+
+- STT beam_size reduced from 5 to 1 (faster transcription, ~200-500ms savings)
+- Silence detection threshold reduced from 1.5s to 0.8s (faster response after speech ends)
+- VAD minimum voiced duration reduced from 300ms to 180ms (accepts shorter commands)
+
+---
+
 ## v1.6.2 — Natural Language Flexibility (2025-02-03)
 
 - Improved natural language handling for counting and app control.

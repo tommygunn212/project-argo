@@ -233,6 +233,13 @@ TIME_STATUS_PHRASES = [
     "whats the time",
 ]
 
+# Regex pattern for world time queries - matches "time in {location}" variants
+# Must be checked BEFORE local time phrases to avoid false matches
+WORLD_TIME_PATTERN = re.compile(
+    r"(?:what(?:'s| is)? the time|what time is it|time|current time)\s+(?:in|at)\s+(.+?)(?:\?|$)",
+    re.IGNORECASE
+)
+
 TIME_DAY_PHRASES = [
     "what day is it",
     "what day is today",
@@ -574,6 +581,7 @@ class IntentType(Enum):
     VOLUME_STATUS = "volume_status"
     VOLUME_CONTROL = "volume_control"
     TIME_STATUS = "time_status"
+    WORLD_TIME = "world_time"
     DEVELOP = "develop"
     ARGO_IDENTITY = "argo_identity"
     ARGO_GOVERNANCE = "argo_governance"
@@ -1194,6 +1202,19 @@ class RuleBasedIntentParser(IntentParser):
                     serious_mode=serious_mode,
                     action="focus",
                     target=target,
+                )
+
+        # Rule 0.06454: WORLD TIME (time in {location}) - must check BEFORE local time
+        world_time_match = WORLD_TIME_PATTERN.search(text_lower)
+        if world_time_match:
+            location = world_time_match.group(1).strip()
+            if location:
+                return Intent(
+                    intent_type=IntentType.WORLD_TIME,
+                    confidence=1.0,
+                    raw_text=text_original,
+                    serious_mode=serious_mode,
+                    target=location,
                 )
 
         # Rule 0.06455: TIME STATUS (read-only)

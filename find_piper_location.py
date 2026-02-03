@@ -23,8 +23,8 @@ for loc in locations:
                     print(f'    {item}/ ({len(files)} files)')
                 else:
                     print(f'    {item}')
-        except:
-            pass
+        except Exception as e:
+            print(f'    [ERROR] Failed to list {loc}: {e}')
 
 # Check PIPER_HOME environment variable
 piper_home = os.environ.get('PIPER_HOME')

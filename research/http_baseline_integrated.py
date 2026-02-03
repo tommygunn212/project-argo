@@ -30,7 +30,8 @@ def wait_for_server(max_attempts=10, wait_between=0.5):
             r = requests.get("http://127.0.0.1:8000/", timeout=1)
             print("[OK] Server ready")
             return True
-        except:
+        except Exception as e:
+            print(f"[ERROR] Server not ready: {e}")
             if attempt < max_attempts - 1:
                 time.sleep(wait_between)
     return False

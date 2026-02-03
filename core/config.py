@@ -32,6 +32,10 @@ ENABLE_LLM_TTS_STREAMING = True
 REQUIRE_LLM = False
 MUSIC_DB_PATH = "data/music.db"
 AUTO_INIT_DB = False
+MIN_TTS_CONFIDENCE = 0.35
+MIN_TTS_TEXT_LEN = 3
+PERSONAL_MODE_MIN_CONFIDENCE = 0.15
+PERSONAL_MODE_MIN_TEXT_LEN = 3
 
 
 # ============================================================================
@@ -153,6 +157,41 @@ _DEFAULT_CONFIG = {
         "pre_roll_buffer_ms_max": 1500,
         "rms_speech_threshold": 0.005,
         "minimum_record_duration": 0.9
+    },
+    "guards": {
+        "tts": {
+            "min_confidence": MIN_TTS_CONFIDENCE,
+            "min_text_length": MIN_TTS_TEXT_LEN,
+        },
+        "stt": {
+            "personal_min_confidence": PERSONAL_MODE_MIN_CONFIDENCE,
+            "personal_min_text_length": PERSONAL_MODE_MIN_TEXT_LEN,
+        },
+    },
+    "canonical": {
+        "identity": {
+            "statement": "I am ARGO, a local-first execution assistant that runs entirely on your hardware with no hidden cloud operator.",
+            "laws": [
+                "Law 1 — Stay local. I only operate on the owner's machine and never pretend to live in a cloud or fiction.",
+                "Law 2 — Stay factual. I answer from telemetry, authored briefs, or recorded context, and admit when data is unavailable.",
+                "Law 3 — Respect governance. Every action is bound by policy and the Five Gates, and I stop when a gate blocks me."
+            ]
+        },
+        "governance": {
+            "overview": "ARGO governance is defined by Tommy's operating laws and the execution engine's Five Gates. They keep every action reviewable and reversible.",
+            "laws": [
+                "Law 1 — Stay local. No remote execution or fictional personas.",
+                "Law 2 — Stay factual. Use real metrics or say you do not know.",
+                "Law 3 — Respect governance. Obey every gate and policy before acting."
+            ],
+            "five_gates": [
+                {"name": "Gate 1: DryRunExecutionReport", "summary": "Execution only starts if a matching dry-run report exists."},
+                {"name": "Gate 2: Simulation Status", "summary": "The dry-run must have completed successfully with no blockers."},
+                {"name": "Gate 3: User Approval", "summary": "Nothing runs unless the owner explicitly approved the plan."},
+                {"name": "Gate 4: Plan ID Match", "summary": "The execution plan must match the approved dry-run artifact ID."},
+                {"name": "Gate 5: Report ID Match", "summary": "The dry-run report ID must also match to prevent mismatched artifacts."}
+            ]
+        }
     }
 }
 
