@@ -27,7 +27,7 @@ import re
 import logging
 
 from core.app_launch import resolve_app_launch_target
-from core.app_registry import resolve_app_name
+from core.app_registry import resolve_app_name, normalize_app_text
 
 # ============================================================================
 # 2) KEYWORD BANKS (MUSIC)
@@ -1244,7 +1244,7 @@ class RuleBasedIntentParser(IntentParser):
             target = None
             if re.search(r"\b(open|launch)\b", text_lower):
                 action = "open"
-            elif re.search(r"\b(close|quit|exit|shut down|shutdown)\b", text_lower):
+            elif re.search(r"\b(close|quit|exit|shut down|shutdown|shut)\b", text_lower):
                 action = "close"
             elif re.search(r"\bfocus\b", text_lower):
                 action = "focus"

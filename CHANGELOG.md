@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.6.2 — Natural Language Flexibility (2025-02-03)
+
+- Improved natural language handling for counting and app control.
+
+---
+
 ## v1.6.1 — Deterministic Core Stabilization (2025-02-02)
 
 ### Added
