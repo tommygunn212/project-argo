@@ -336,6 +336,8 @@ class Coordinator:
         self.builder = PythonBuilder()
         self._last_built_script: Optional[str] = None
         self.last_response_text: Optional[str] = None
+        self._response_committed = False
+        self._response_interaction_id: Optional[int] = None
 
         # State machine (sleep/listening lifecycle)
         self.state_machine = StateMachine(on_state_change=self._on_state_change)
@@ -1017,7 +1019,7 @@ class Coordinator:
                     self.logger.info(
                         f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but count detected; continuing"
                     )
-                elif stt_conf < 0.15 or not text.strip():
+                elif stt_conf < 0.10 or not text.strip():
                     self.logger.info(
                         f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
                     )
@@ -1065,29 +1067,50 @@ class Coordinator:
             except Exception:
                 stt_metrics = None
             confidence_threshold = get_config().get("speech_to_text.command_confidence_threshold", 0.35)
-            if stt_metrics and intent.intent_type in {
+
+            # Determine if this is a canonical/deterministic or procedural command
+            is_canonical_or_deterministic = intent.intent_type in {
                 IntentType.COMMAND,
                 IntentType.COUNT,
                 IntentType.MUSIC,
                 IntentType.MUSIC_NEXT,
                 IntentType.MUSIC_STOP,
                 IntentType.MUSIC_STATUS,
-            }:
+                IntentType.SYSTEM_HEALTH,
+                IntentType.SYSTEM_INFO,
+                IntentType.APP_CONTROL,
+                IntentType.ARGO_IDENTITY,
+                IntentType.ARGO_GOVERNANCE,
+            } or self.executor.can_execute(text)
+
+            # TTS bypass reason constant
+            TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
+
+            # Only apply STT confidence gate to LLM queries and unknown intents
+            if stt_metrics:
                 stt_conf = float(stt_metrics.get("confidence", 0.0))
                 if stt_conf < confidence_threshold:
-                    msg = "Command suppressed — low STT confidence"
-                    self.logger.warning(
-                        f"[Iteration {self.interaction_count}] {msg} (conf={stt_conf:.2f} < {confidence_threshold:.2f})"
-                    )
-                    log_event(f"COMMAND_SUPPRESSED_LOW_STT conf={stt_conf:.2f} threshold={confidence_threshold:.2f}", stage="stt")
-                    if self.runtime_overrides.get("tts_enabled", True):
-                        self._safe_speak(msg, interaction_id=self.interaction_id)
-                    self.current_probe.mark("llm_end")
-                    self.current_probe.mark("tts_start")
-                    self.current_probe.mark("tts_end")
-                    self.current_probe.log_summary()
-                    self.latency_stats.add_probe(self.current_probe)
-                    return True
+                    if is_canonical_or_deterministic:
+                        # Log bypass for deterministic commands
+                        self.logger.info(
+                            f"[TTS] Allowed despite low STT confidence "
+                            f"(reason={TTS_ALLOWED_REASON_DETERMINISTIC}, "
+                            f"confidence={stt_conf:.2f}, intent={intent.intent_type.value})"
+                        )
+                    else:
+                        msg = "Query suppressed — low STT confidence"
+                        self.logger.warning(
+                            f"[Iteration {self.interaction_count}] {msg} (conf={stt_conf:.2f} < {confidence_threshold:.2f})"
+                        )
+                        log_event(f"QUERY_SUPPRESSED_LOW_STT conf={stt_conf:.2f} threshold={confidence_threshold:.2f}", stage="stt")
+                        if self.runtime_overrides.get("tts_enabled", True):
+                            self._safe_speak(msg, interaction_id=self.interaction_id)
+                        self.current_probe.mark("llm_end")
+                        self.current_probe.mark("tts_start")
+                        self.current_probe.mark("tts_end")
+                        self.current_probe.log_summary()
+                        self.latency_stats.add_probe(self.current_probe)
+                        return True
 
             # 4. Fast-path deterministic commands (before LLM generation)
             # Procedural and deterministic commands must execute immediately without LLM latency
@@ -2509,6 +2532,18 @@ class Coordinator:
             return
         if not self.runtime_overrides.get("tts_enabled", True):
             return
+        current_interaction_id = interaction_id or self.interaction_id
+        if self._response_interaction_id != current_interaction_id:
+            self._response_interaction_id = current_interaction_id
+            self._response_committed = False
+        if self._response_committed:
+            self.logger.warning(
+                "[Response] Duplicate response suppressed (interaction_id=%s)",
+                current_interaction_id,
+            )
+            return
+        self.logger.info(f"Argo: {text}")
+        self._response_committed = True
         try:
             self.acquire_audio("TTS")
         except Exception as e:
