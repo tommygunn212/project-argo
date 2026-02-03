@@ -3,6 +3,7 @@
 ## v1.6.4 — Audio Responsiveness + World Time (2025-02-03)
 
 - **World Time**: "What time is it in Tokyo/London/etc?" now handled deterministically with accurate timezone lookup (100+ cities/countries supported)
+- **Imperative passthrough**: Sentences starting with action verbs (give, tell, show, list, etc.) now pass to LLM instead of being rejected as unclear
 - TTS pre-roll reduced from 100ms to 50ms (faster first-word playback)
 - Inter-sentence gap reduced from max 50ms to max 20ms (continuous-sounding responses)
 - PERSONAL_MODE_MIN_CONFIDENCE loosened from 0.25 to 0.15 (fewer rejection moments)

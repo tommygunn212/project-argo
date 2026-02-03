@@ -315,6 +315,11 @@ class ArgoPipeline:
             return False
         if self._has_interrogative_structure(lower):
             return False
+        # Imperative sentences starting with action verbs should pass through to LLM
+        imperative_verbs = {"give", "tell", "show", "list", "generate", "create", "make", "find", "get", "pick", "choose", "suggest", "recommend", "explain", "describe", "say", "read", "write", "name", "calculate", "compute"}
+        tokens = lower.split()
+        if tokens and tokens[0] in imperative_verbs:
+            return False
         meaningful = self._get_meaningful_tokens(lower)
         if len(meaningful) <= 3:
             return True
