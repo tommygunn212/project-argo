@@ -560,7 +560,7 @@ def main_loop():
             if silence_counter > silence_threshold:
                 # Only allow VAD_END if at least 180 ms of voiced frames have been accumulated
                 if voiced_ms_accumulator < 180:
-                    logger.info(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")
+                    logger.debug(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")
                     continue
                 is_recording = False
                 silence_counter = 0
