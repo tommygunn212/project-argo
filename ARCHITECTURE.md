@@ -53,6 +53,30 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 - **Local music index** supports deterministic resolution without Jellyfin.
 - **Lighting control** is supported via OpenRGB command execution.
 
+### v1.6.1 Additions: Canonical Command Short-Circuit
+
+**Canonical commands bypass STT confidence gates entirely.**
+
+When the IntentParser identifies a canonical/deterministic command (system health, music, lighting, stop), the Coordinator executes immediately without checking STT confidence thresholds. This prevents legitimate commands from being rejected due to Whisper uncertainty.
+
+**Flow:**
+```
+VAD → STT → IntentParser
+              ↓
+    [Canonical?] ──Yes──→ Execute (bypass confidence gate)
+              ↓
+             No
+              ↓
+    [Low confidence?] ──Yes──→ Reject / Clarify
+              ↓
+             No
+              ↓
+         LLM Response
+```
+
+**system_generated Responses:**
+When the pipeline produces a response without calling the LLM (e.g., system health queries, clarification prompts, deterministic commands), the response is marked `system_generated: true` in telemetry. This distinguishes deterministic outputs from LLM-generated content.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ (Coordinator v3: Bounded Loop)                          │

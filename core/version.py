@@ -3,9 +3,9 @@
 Single source of truth for runtime versioning.
 """
 
-CURRENT_VERSION = "1.6.0"
-CURRENT_MILESTONE = "voice-interaction-stability"
-CURRENT_DATE = "2026-02-01"
+CURRENT_VERSION = "1.6.1"
+CURRENT_MILESTONE = "deterministic-core-stabilization"
+CURRENT_DATE = "2026-02-02"
 
 VERSION_HISTORY = [
     {
@@ -25,8 +25,13 @@ VERSION_HISTORY = [
     },
     {
         "version": "1.6.0",
-        "date": CURRENT_DATE,
+        "date": "2026-02-01",
         "notes": "Behavioral stability + UX intelligence release",
+    },
+    {
+        "version": "1.6.1",
+        "date": CURRENT_DATE,
+        "notes": "Deterministic core stabilization; canonical commands bypass STT confidence gates",
     },
 ]
 

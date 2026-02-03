@@ -125,7 +125,31 @@ Examples:
 - “What drive is the fullest?”
 
 ---
+## Deterministic vs LLM Intent Routing (v1.6.1+)
 
+ARGO distinguishes between **canonical commands** and **LLM-routed queries**:
+
+### Canonical Commands (Always Deterministic)
+- System health / hardware queries (CPU, memory, GPU, disk)
+- Music playback commands
+- Lighting control (OpenRGB)
+- Stop / pause / resume commands
+
+These commands **bypass STT confidence gates** entirely. Even if Whisper reports low confidence, canonical commands execute immediately without LLM fallback.
+
+### LLM-Routed Queries
+- General knowledge questions
+- Conversational requests
+- Ambiguous or unstructured input
+
+If a query contains an **unresolved noun phrase** (e.g., "tell me about it" with no prior context), ARGO responds with a clarification prompt instead of LLM speculation.
+
+### Confidence Gating Behavior
+- Canonical/deterministic commands: **No confidence gate** — always execute
+- LLM queries: Subject to STT confidence thresholds
+- Unresolved references: Clarification prompt, no LLM call
+
+---
 ## Milestone: Music + System Health Hardening (Jan 2026)
 
 **Why:** Reduce LLM dependency for system facts and make music control predictable under load.
@@ -164,6 +188,19 @@ Highlights:
 - Always‑listening VAD pipeline
 - UI debugger + WebSocket observability as core runtime components
 - Deterministic system health/specs and local music indexing
+
+---
+
+## Testing
+
+Run the test suite with:
+```bash
+pytest
+```
+
+**Current status (v1.6.1):** 451 tests passing, 12 pre-existing failures (test debt), 5 skipped.
+
+Known test failures are tracked in [TEST_DEBT.md](TEST_DEBT.md). These are non-blocking and do not affect runtime behavior.
 
 ---
 

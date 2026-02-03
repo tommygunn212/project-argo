@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.6.1 — Deterministic Core Stabilization (2026-02-02)
+
+### Added
+- Canonical / deterministic commands now bypass STT confidence gates entirely
+- Unresolved noun phrase detection triggers clarification instead of LLM fallback
+- Six missing method stubs added to pipeline.py for interrogative detection and clarification flow
+- VAD_END minimum voiced speech threshold tunable (lowered to 240ms for faster response)
+
+### Fixed
+- Type annotations corrected across pipeline.py (Optional[str] for nullable returns)
+- focus_app → focus_app_deterministic consistency
+- Guarded None values for add_memory, play_by_genre, play_by_keyword
+- Unbound variable guards for all edge cases in pipeline execution
+- Test harness safety: removed import-time sys.exit() from 4 test files
+- bare except: clauses replaced with logged exceptions throughout codebase
+
+### Known Issues (Not Blocking)
+- 12 pre-existing test failures (test debt) — tracked in TEST_DEBT.md
+- test_stt_hardening.py: outdated function signature
+- test_clarification_gate.py: assertion mismatch
+- test_confirmable_identity_memory.py: harness issues
+- test_piper_integration.py: env configuration
+- test_coordinator_v1/v2: integration test issues
+
+---
+
 ## v1.6.0 — Voice Stability & UX Refinement (Stable)
 
 ### Core Stability
