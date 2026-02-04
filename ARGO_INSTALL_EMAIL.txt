@@ -1,0 +1,91 @@
+Subject: ARGO Voice Assistant - Installation
+
+Hey!
+
+Here's the one-click installer for ARGO. It handles everything automatically.
+
+---
+
+REQUIREMENTS
+- Windows 10/11 or macOS (64-bit)
+- 8GB+ RAM (16GB recommended)
+- Microphone + Speakers
+- Internet connection (for initial setup)
+
+---
+
+WINDOWS INSTALLATION
+
+1. Open PowerShell (right-click Start → "Windows PowerShell")
+
+2. Paste this command and press Enter:
+
+irm https://raw.githubusercontent.com/tommygunn212/project-argo/audio-reset-phase0/install.ps1 | iex
+
+3. Wait — it will install everything automatically
+
+4. Set your audio devices when prompted
+
+5. Double-click the ARGO shortcut on your desktop to run
+
+---
+
+MAC INSTALLATION
+
+1. Open Terminal (Cmd+Space, type "Terminal")
+
+2. Paste this command and press Enter:
+
+curl -fsSL https://raw.githubusercontent.com/tommygunn212/project-argo/audio-reset-phase0/install.sh | bash
+
+3. Wait — it will install everything (including Homebrew if needed)
+
+4. Set your audio devices when prompted
+
+5. Run: ~/argo/start_argo.sh (or just type "argo" after restarting terminal)
+
+---
+
+FIRST RUN
+- First launch takes 1-2 minutes (loading AI model)
+- Open http://localhost:8000 in a browser to see the dashboard
+- Just start talking — no wake word needed
+
+---
+
+TROUBLESHOOTING (WINDOWS)
+
+"Script is not digitally signed" error:
+Run this first, then try the install command again:
+Set-ExecutionPolicy Bypass -Scope Process -Force
+
+Ollama won't start:
+- Open a new PowerShell and run: ollama serve
+- Then try ARGO again
+
+No audio / wrong device:
+- Edit %USERPROFILE%\argo\config.json
+- Set input_device_index and output_device_index to the correct numbers
+
+---
+
+TROUBLESHOOTING (MAC)
+
+Permission denied:
+- Run: chmod +x ~/argo/start_argo.sh
+
+Ollama won't start:
+- Open a new Terminal and run: ollama serve
+- Then try ARGO again
+
+No audio / wrong device:
+- Edit ~/argo/config.json
+- Set input_device_index and output_device_index to the correct numbers
+
+PortAudio errors:
+- Run: brew install portaudio
+- Then reinstall: cd ~/argo && source .venv/bin/activate && pip install sounddevice
+
+---
+
+Let me know if you hit any issues!
