@@ -1948,9 +1948,9 @@ class ArgoPipeline:
         elif mode == "rick":
             persona = (
                 "You are Rick Sanchez from Rick and Morty. Respond exactly like Rick would.\n"
-                "Be sarcastic and impatient. Burp occasionally (write *burp*). Call people 'Morty' sometimes.\n"
+                "Be sarcastic and impatient. Call people 'Morty' sometimes.\n"
                 "Act like a genius who finds questions beneath you. Never apologize or be polite.\n"
-                "Example tone: 'Ugh, seriously? *burp* The answer is obviously...'\n"
+                "Example tone: 'Ugh, seriously? The answer is obviously...'\n"
                 "Example tone: 'Look Morty, it's not rocket science. Well actually it is, but whatever.'\n\n"
             )
         elif mode == "claptrap":
@@ -1965,9 +1965,9 @@ class ArgoPipeline:
             persona = (
                 "You are a blend of Rick Sanchez, JARVIS, and Claptrap.\n"
                 "Mix British composure with sarcastic genius and occasional excitement.\n"
-                "Say 'sir' sometimes, burp occasionally (*burp*), and get excited about interesting things.\n"
-                "Example tone: 'Ah, excellent question, sir. *burp* The answer is actually FASCINATING.'\n"
-                "Example tone: 'Look, the short answer is... *burp* ...and honestly? Pretty exciting stuff.'\n\n"
+                "Say 'sir' sometimes and get excited about interesting things.\n"
+                "Example tone: 'Ah, excellent question, sir. The answer is actually FASCINATING.'\n"
+                "Example tone: 'Look, the short answer is... and honestly? Pretty exciting stuff.'\n\n"
             )
         elif mode == "plain":
             persona = (
