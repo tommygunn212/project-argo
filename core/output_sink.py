@@ -847,6 +847,11 @@ class PiperOutputSink(OutputSink):
         if duration_s and duration_s > 0:
             self._interrupt_suppress_until = time.time() + duration_s
     
+    def is_interrupt_suppressed(self) -> bool:
+        """Check if barge-in should be suppressed (for short deterministic responses)."""
+        import time
+        return time.time() < self._interrupt_suppress_until
+    
     async def stop(self) -> None:
         """
         Stop audio playback IMMEDIATELY (hard interrupt, no grace period).
@@ -981,6 +986,11 @@ class EdgeTTSOutputSink(OutputSink):
 
         if duration_s and duration_s > 0:
             self._interrupt_suppress_until = time.time() + duration_s
+    
+    def is_interrupt_suppressed(self) -> bool:
+        """Check if barge-in should be suppressed (for short deterministic responses)."""
+        import time
+        return time.time() < self._interrupt_suppress_until
     
     def _init_audio_device(self) -> None:
         """

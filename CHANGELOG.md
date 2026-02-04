@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.6.8 — Barge-In Echo Suppression (2026-02-03)
+
+### Fixed
+- **Barge-in echo cancellation**: Short deterministic responses (time queries, system status) now suppress barge-in for 2 seconds
+- **World time cut-off**: "What time is it in London?" no longer gets interrupted by Argo's own voice echoing into the mic
+- **Local time cut-off**: "What time is it?" also protected from echo-triggered barge-in
+
+### Added
+- `is_interrupt_suppressed()` method on TTS sinks to check suppress window
+- `is_barge_in_suppressed()` method on pipeline for main loop to query
+- `suppress_barge_in_seconds` parameter now wired through to world time and local time handlers
+
+---
+
 ## v1.6.7 — Personality Transform Layer (Phase 4) (2025-02-03)
 
 ### Added

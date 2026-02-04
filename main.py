@@ -511,7 +511,9 @@ def main_loop():
             pipeline.transition_state("TRANSCRIBING", interaction_id=current_interaction_id)
         
         # --- BARGE-IN: If speech detected during TTS ---
-        if pipeline.is_speaking and volume >= barge_in_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True):
+        # Skip barge-in if temporarily suppressed (for short deterministic responses like time queries)
+        barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
+        if pipeline.is_speaking and volume >= barge_in_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
             allowed = pipeline.current_state == "SPEAKING"
             logger.info("!!! BARGE-IN TRIGGERED: Interrupting TTS !!!")
             log_event(

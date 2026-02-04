@@ -516,6 +516,15 @@ class ArgoPipeline:
         except Exception:
             pass
 
+    def is_barge_in_suppressed(self) -> bool:
+        """Check if barge-in is temporarily suppressed (for short deterministic responses)."""
+        try:
+            if self._edge_tts is not None and hasattr(self._edge_tts, "is_interrupt_suppressed"):
+                return self._edge_tts.is_interrupt_suppressed()
+        except Exception:
+            pass
+        return False
+
     # PERSONAL MODE CONTRACT:
     # - If text exists, ALWAYS respond.
     # - STT confidence NEVER blocks conversation.
@@ -2575,7 +2584,11 @@ class ArgoPipeline:
             message = "I didn't catch the location. Where would you like to know the time?"
         else:
             message = self._format_world_time(location)
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        # Suppress barge-in for short deterministic responses (prevents echo triggering interrupt)
+        return self._deliver_canonical_response(
+            message, interaction_id, replay_mode, overrides,
+            enforce_confidence=False, force_tts=True, suppress_barge_in_seconds=2.0
+        )
 
     def _format_time_status(self, subintent: str | None) -> str:
         now = datetime.now()
@@ -2589,7 +2602,11 @@ class ArgoPipeline:
     def _respond_with_time_status(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
         subintent = getattr(intent, "subintent", None) if intent else None
         message = self._format_time_status(subintent)
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        # Suppress barge-in for short deterministic responses (prevents echo triggering interrupt)
+        return self._deliver_canonical_response(
+            message, interaction_id, replay_mode, overrides,
+            enforce_confidence=False, force_tts=True, suppress_barge_in_seconds=2.0
+        )
 
     def _has_disallowed_app_launch_tokens(self, text: str) -> bool:
         if not text:
