@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.6.7 — Personality Transform Layer (Phase 4) (2025-02-03)
+
+### Added
+- **Personality as pure transform layer**: Personality shaping applied AFTER facts, BEFORE output — never touches intent, execution, or memory
+- **4 predefined profiles**: tommy_gunn (sharp, 4 sentences), jarvis (calm, 3), rick (chaotic, 5), plain (flat, 2)
+- **Intent-based gating**: NONE (system health), MINIMAL (actions), FULL (questions), NEUTRAL (errors)
+- **Session toggle**: `get_personality_state().toggle(False)` for one-click disable
+- **Profile switching**: `get_personality_state().set_profile('jarvis')` at runtime
+
+### Enforced
+- **Max sentence caps**: Each profile limits response length (2-5 sentences max)
+- **Follow-up stripping**: "How can I help?", "Let me know if...", etc. automatically removed
+- **Forbidden pattern removal**: "As an AI...", "I apologize..." stripped from output
+
+### Architecture
+- `PersonalityProfile` dataclass with tone, verbosity, humor_level, max_sentences, forbidden_patterns
+- `PersonalityFormatter` class with format(), sentence cap, forbidden/follow-up stripping
+- `PersonalityGate` enum (NONE, MINIMAL, FULL, NEUTRAL) mapped to IntentTypes
+- Pipeline integration: Applied after `_strip_disallowed_phrases()`, before TTS
+
+---
+
 ## v1.6.6 — Volume Control + Hardware Info + LLM Confidence (2025-02-03)
 
 ### Fixed

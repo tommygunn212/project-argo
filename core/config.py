@@ -56,6 +56,102 @@ class ActionRisk:
 
 
 # ============================================================================
+# 3B) PERSONALITY PROFILES (Phase 4: Pure Transform Layer)
+# ============================================================================
+from dataclasses import dataclass, field
+from typing import List
+
+
+@dataclass
+class PersonalityProfile:
+    """
+    Personality as a pure text transform layer.
+    
+    Personality NEVER touches:
+    - Intent classification
+    - Command execution
+    - Memory operations
+    
+    Personality ONLY shapes:
+    - Text output (after facts are established)
+    """
+    name: str
+    tone: str                           # "sharp", "calm", "chaotic", "flat"
+    verbosity: int                      # 1-5 scale (1=terse, 5=verbose)
+    humor_level: int                    # 0-3 (0=none, 3=frequent)
+    max_sentences: int                  # Hard cap per response
+    allowed_interjections: List[str] = field(default_factory=list)  # e.g., ["well", "look"]
+    forbidden_patterns: List[str] = field(default_factory=list)     # e.g., ["as an AI", "I cannot"]
+    no_follow_up_questions: bool = True  # Disable "Does that help?" etc.
+
+
+# Predefined profiles
+PERSONALITY_TOMMY_GUNN = PersonalityProfile(
+    name="tommy_gunn",
+    tone="sharp",
+    verbosity=2,
+    humor_level=2,
+    max_sentences=4,
+    allowed_interjections=["look", "well", "here's the thing"],
+    forbidden_patterns=["as an AI", "I cannot", "I'm unable", "I apologize"],
+    no_follow_up_questions=True,
+)
+
+PERSONALITY_JARVIS = PersonalityProfile(
+    name="jarvis",
+    tone="calm",
+    verbosity=2,
+    humor_level=1,
+    max_sentences=3,
+    allowed_interjections=["sir", "indeed", "certainly"],
+    forbidden_patterns=["as an AI", "I cannot", "I'm unable"],
+    no_follow_up_questions=True,
+)
+
+PERSONALITY_RICK = PersonalityProfile(
+    name="rick",
+    tone="chaotic",
+    verbosity=3,
+    humor_level=3,
+    max_sentences=5,
+    allowed_interjections=["look", "listen", "okay so"],
+    forbidden_patterns=["as an AI", "I apologize"],
+    no_follow_up_questions=True,
+)
+
+PERSONALITY_PLAIN = PersonalityProfile(
+    name="plain",
+    tone="flat",
+    verbosity=1,
+    humor_level=0,
+    max_sentences=2,
+    allowed_interjections=[],
+    forbidden_patterns=["as an AI", "I cannot", "I'm unable", "I apologize", "certainly", "indeed"],
+    no_follow_up_questions=True,
+)
+
+# Profile registry
+PERSONALITY_PROFILES = {
+    "tommy_gunn": PERSONALITY_TOMMY_GUNN,
+    "jarvis": PERSONALITY_JARVIS,
+    "rick": PERSONALITY_RICK,
+    "plain": PERSONALITY_PLAIN,
+}
+
+# Default active profile
+DEFAULT_PERSONALITY = "tommy_gunn"
+
+
+# Personality gating by intent category
+class PersonalityGate:
+    """Controls when personality is allowed based on intent type."""
+    NONE = "none"        # System health, errors - no personality at all
+    MINIMAL = "minimal"  # Actions (music, apps) - very light touch
+    FULL = "full"        # Questions, explanations - full personality
+    NEUTRAL = "neutral"  # Clarification, warnings - neutral tone
+
+
+# ============================================================================
 # 4) CONFIG WRAPPER (DOT-NOTATION ACCESS)
 # ============================================================================
 class Config:

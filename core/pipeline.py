@@ -72,6 +72,7 @@ from system_health import (
     get_system_full_report,
 )
 from system_profile import get_system_profile, get_gpu_profile
+from core.personality import format_response as personality_format_response
 
 # ============================================================================
 # 2) PIPELINE ORCHESTRATOR
@@ -4315,6 +4316,13 @@ class ArgoPipeline:
         )
         ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
         ai_text = self._strip_disallowed_phrases(ai_text)
+        
+        # Phase 4: Apply personality transform (pure text shaping, no content changes)
+        if intent:
+            ai_text = personality_format_response(ai_text, intent_type=intent.intent_type)
+        else:
+            ai_text = personality_format_response(ai_text, intent_type=IntentType.QUESTION)
+        
         if not ai_text.strip():
             self.logger.warning("[LLM] Empty response")
             self.broadcast("log", "Argo: [No response]")
