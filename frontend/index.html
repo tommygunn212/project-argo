@@ -79,6 +79,10 @@
             const [currentVoice, setCurrentVoice] = useState('ryan');
             const [activeSolutions, setActiveSolutions] = useState([]);
             
+            // Text input state
+            const [textInput, setTextInput] = useState('');
+            const [turnInfo, setTurnInfo] = useState({ current: 0, limit: 6 });
+            
             // New State for Modules & Metrics
             const [health, setHealth] = useState({ stt: 'Initializing...', llm: 'Initializing...', tts: 'Initializing...' });
             const [modelInfo, setModelInfo] = useState({
@@ -249,6 +253,9 @@
                     else if (data.type === 'barge_in') {
                         setBargeIn(data.payload || null);
                     }
+                    else if (data.type === 'turn_info') {
+                        setTurnInfo(data.payload || { current: 0, limit: 6 });
+                    }
                     else if (data.type === 'illegal_transition') {
                         setIllegalTransition(data.payload || null);
                         setIllegalTransitionOpen(true);
@@ -282,6 +289,22 @@
             const replayInteraction = (id) => {
                 if (!id) return;
                 ws.current?.send(JSON.stringify({ type: 'replay', payload: id }));
+            };
+
+            const sendTextInput = () => {
+                if (!textInput.trim() || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+                ws.current.send(JSON.stringify({
+                    type: 'text_input',
+                    payload: { text: textInput.trim(), source: 'frontend', mode: 'conversation' }
+                }));
+                setTextInput('');
+            };
+
+            const handleTextInputKeyDown = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendTextInput();
+                }
             };
 
             useEffect(() => { connect(); return () => ws.current?.close(); }, []);
@@ -518,6 +541,28 @@
                                 {pipelineStage === 'THINKING' ? <span className="animate-pulse">...Generating Response...</span> : aiText}
                             </div>
                         </div>
+                    </div>
+
+                    {/* Text Input Bar */}
+                    <div className="flex gap-3 items-center bg-slate-900 rounded-xl border border-slate-800 p-3">
+                        <div className={`text-xs font-bold uppercase tracking-wider shrink-0 px-2 py-1 rounded ${turnInfo.current >= turnInfo.limit - 1 ? 'bg-amber-900/50 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                            Turn {turnInfo.current}/{turnInfo.limit}
+                        </div>
+                        <input
+                            type="text"
+                            value={textInput}
+                            onChange={(e) => setTextInput(e.target.value)}
+                            onKeyDown={handleTextInputKeyDown}
+                            placeholder="Type a message... (ENTER to send)"
+                            className="flex-1 h-10 bg-slate-800 border border-slate-700 rounded-lg px-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
+                        />
+                        <button
+                            onClick={sendTextInput}
+                            disabled={!textInput.trim()}
+                            className="h-10 px-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-all"
+                        >
+                            Send
+                        </button>
                     </div>
 
                     {/* VAD Chart */}
