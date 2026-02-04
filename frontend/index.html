@@ -105,6 +105,15 @@
             const ttsEnabled = runtimeOverrides.tts_enabled !== false;
             const musicEnabled = runtimeOverrides.music_enabled !== false;
             const bargeEnabled = runtimeOverrides.barge_in_enabled !== false;
+            const currentPersonality = runtimeOverrides.personality_mode || 'tommy_gunn';
+            const personalities = [
+                { id: 'tommy_gunn', label: 'Tommy Gunn (Default)' },
+                { id: 'jarvis', label: 'JARVIS' },
+                { id: 'rick', label: 'Rick Sanchez' },
+                { id: 'claptrap', label: 'Claptrap' },
+                { id: 'tommy_mix', label: 'Tommy Mix (Rick+JARVIS+Claptrap)' },
+                { id: 'plain', label: 'Plain (No Personality)' },
+            ];
             const [bottomHeight, setBottomHeight] = useState(() => {
                 const saved = localStorage.getItem('argo.bottomPaneHeight');
                 const parsed = saved ? parseInt(saved, 10) : 360;
@@ -398,6 +407,14 @@
                         <button onClick={() => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'music_enabled', value: !musicEnabled } }))} className={`px-2 py-1 rounded ${musicEnabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>{musicEnabled ? 'ON' : 'OFF'}</button>
                         <span className="text-slate-400">Barge-in</span>
                         <button onClick={() => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'barge_in_enabled', value: !bargeEnabled } }))} className={`px-2 py-1 rounded ${bargeEnabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>{bargeEnabled ? 'ON' : 'OFF'}</button>
+                        <span className="text-slate-400 ml-2">Personality</span>
+                        <select 
+                            value={currentPersonality}
+                            onChange={(e) => ws.current?.send(JSON.stringify({ type: 'override', payload: { key: 'personality_mode', value: e.target.value } }))}
+                            className="px-2 py-1 rounded bg-slate-800 text-slate-200 border border-slate-600 text-[10px]"
+                        >
+                            {personalities.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </select>
                     </div>
 
                     {/* Next Interaction Overrides */}

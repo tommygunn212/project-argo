@@ -119,6 +119,29 @@ PERSONALITY_RICK = PersonalityProfile(
     no_follow_up_questions=True,
 )
 
+PERSONALITY_CLAPTRAP = PersonalityProfile(
+    name="claptrap",
+    tone="manic",
+    verbosity=4,
+    humor_level=3,
+    max_sentences=5,
+    allowed_interjections=["minion", "check it out", "oh boy", "exciting"],
+    forbidden_patterns=["as an AI", "I cannot", "I apologize"],
+    no_follow_up_questions=True,
+)
+
+# Tommy's custom mix: Rick's chaos + JARVIS competence + Claptrap enthusiasm
+PERSONALITY_TOMMY_MIX = PersonalityProfile(
+    name="tommy_mix",
+    tone="sharp_chaos",  # Rick's edge with JARVIS polish
+    verbosity=3,
+    humor_level=2,
+    max_sentences=4,
+    allowed_interjections=["look", "sir", "check this out", "okay so"],
+    forbidden_patterns=["as an AI", "I cannot", "I'm unable", "I apologize"],
+    no_follow_up_questions=True,
+)
+
 PERSONALITY_PLAIN = PersonalityProfile(
     name="plain",
     tone="flat",
@@ -135,6 +158,8 @@ PERSONALITY_PROFILES = {
     "tommy_gunn": PERSONALITY_TOMMY_GUNN,
     "jarvis": PERSONALITY_JARVIS,
     "rick": PERSONALITY_RICK,
+    "claptrap": PERSONALITY_CLAPTRAP,
+    "tommy_mix": PERSONALITY_TOMMY_MIX,
     "plain": PERSONALITY_PLAIN,
 }
 

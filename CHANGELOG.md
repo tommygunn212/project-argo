@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.14 — Personality Selector (2026-02-03)
+
+### Added
+- **Personality dropdown in UI**: Switch between personalities from the web interface
+- **New personalities**:
+  - `jarvis` - Calm, competent, British butler AI
+  - `rick` - Rick Sanchez: genius with zero patience
+  - `claptrap` - Over-the-top enthusiastic helper bot
+  - `tommy_mix` - Rick's brain + JARVIS polish + Claptrap energy
+  - `plain` - No personality, just facts
+- **Runtime switchable**: Change personality mid-session via dropdown
+
+### Changed
+- `personality_mode` now settable via runtime override
+- Frontend shows personality selector next to TTS/Music/Barge-in toggles
+
+---
+
 ## v1.6.13 — Session Context Injection + Phase 4 for Guards (2026-02-03)
 
 ### Fixed
