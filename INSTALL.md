@@ -1,72 +1,95 @@
 # ARGO Installation Guide
 
-## Quick Install (Recommended)
+> **Version:** 1.6.4 | **Platform:** Windows 10/11 (x64)
 
-**One-liner for fresh Windows machines:**
+---
+
+## 🚀 Quick Install (5 minutes)
+
+### Step 1: Install Prerequisites
+
+Before running the installer, you need **Python** and **Git** installed.
+
+| Software | Download | Installation Notes |
+|----------|----------|-------------------|
+| **Python 3.11** | [python.org/downloads](https://www.python.org/downloads/) | ⚠️ **CHECK "Add Python to PATH"** during install |
+| **Git** | [git-scm.com/download/win](https://git-scm.com/download/win) | Use default options |
+| **Ollama** | [ollama.ai/download](https://ollama.ai/download) | For AI responses (install after ARGO) |
+
+### Step 2: Run the Installer
+
+1. **Open PowerShell as Administrator**
+   - Press `Win + X`, then click "Windows Terminal (Admin)" or "PowerShell (Admin)"
+
+2. **Copy and paste this command:**
 
 ```powershell
-# Run in PowerShell as Administrator
 powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/tommygunn212/project-argo/audio-reset-phase0/install_argo.ps1 | iex"
 ```
 
-This will:
-- ✅ Check Python 3.10+ and Git
-- ✅ Clone ARGO to `%LOCALAPPDATA%\ARGO`
-- ✅ Create virtual environment
-- ✅ Install all Python dependencies
-- ✅ Download Piper TTS + Ryan voice
-- ✅ Create desktop shortcut
+3. **Wait for installation to complete** (2-5 minutes depending on internet speed)
 
----
+### Step 3: Set Up Ollama
 
-## Requirements
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| **Windows** | 10/11 | x64 only |
-| **Python** | 3.10+ | 3.11 recommended, [download](https://python.org) |
-| **Git** | Any | [download](https://git-scm.com/download/win) |
-| **Ollama** | Latest | For LLM, [download](https://ollama.ai) |
-
----
-
-## Manual Install
-
-If you prefer manual setup:
+After ARGO installs, open a **new** PowerShell window and run:
 
 ```powershell
-# 1. Clone
-git clone https://github.com/tommygunn212/project-argo.git argo
-cd argo
-
-# 2. Create virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# 3. Install dependencies
-pip install -r requirements.txt
-pip install tzdata  # Windows timezone support
-
-# 4. Start Ollama (separate terminal)
 ollama serve
-ollama pull llama3.2
+```
 
-# 5. Run ARGO
+Then in **another** PowerShell window:
+
+```powershell
+ollama pull llama3.2
+```
+
+### Step 4: Start ARGO
+
+- **Double-click the "ARGO" shortcut** on your desktop
+- Or open PowerShell and run:
+
+```powershell
+cd $env:LOCALAPPDATA\ARGO
+.\.venv\Scripts\Activate.ps1
 python main.py
 ```
 
+### Step 5: Open the Web UI
+
+Open your browser to: **http://localhost:8000**
+
 ---
 
-## Post-Install Setup
+## ✅ What the Installer Does
 
-### 1. Configure Audio Devices
+| Step | Description |
+|------|-------------|
+| 1 | Verifies Python 3.10+ is installed |
+| 2 | Verifies Git is installed |
+| 3 | Clones ARGO to `C:\Users\YOU\AppData\Local\ARGO` |
+| 4 | Creates Python virtual environment |
+| 5 | Installs all required Python packages |
+| 6 | Downloads Piper TTS engine (~50MB) |
+| 7 | Downloads Ryan voice model (~100MB) |
+| 8 | Creates config.json from template |
+| 9 | Creates desktop shortcut |
 
-List devices:
+---
+
+## 🔧 Post-Install Configuration
+
+### Audio Devices
+
+ARGO needs to know which microphone and speaker to use.
+
+**List your audio devices:**
 ```powershell
+cd $env:LOCALAPPDATA\ARGO
+.\.venv\Scripts\Activate.ps1
 python -c "import sounddevice; print(sounddevice.query_devices())"
 ```
 
-Edit `config.json`:
+**Edit config.json** with your device numbers:
 ```json
 {
     "audio": {
@@ -76,57 +99,80 @@ Edit `config.json`:
 }
 ```
 
-### 2. API Keys (Optional)
+### API Keys (Optional)
 
-| Key | Purpose | Where to get |
-|-----|---------|--------------|
-| `PORCUPINE_ACCESS_KEY` | Wake word detection | [picovoice.ai](https://picovoice.ai) |
-| `OPENAI_API_KEY` | Cloud STT (optional) | [openai.com](https://openai.com) |
+| Key | Purpose | Get it from |
+|-----|---------|-------------|
+| `PORCUPINE_ACCESS_KEY` | Wake word ("Hey ARGO") | [picovoice.ai](https://picovoice.ai) |
+| `OPENAI_API_KEY` | Cloud speech recognition | [platform.openai.com](https://platform.openai.com) |
 
-Set in environment or `config.json`.
-
-### 3. Web UI
-
-Open http://localhost:8000 after starting ARGO.
+Add to your environment or config.json.
 
 ---
 
-## Updating
+## 🔄 Updating ARGO
+
+To get the latest version:
 
 ```powershell
 cd $env:LOCALAPPDATA\ARGO
 .\update_argo.ps1
 ```
 
-Or manually:
+---
+
+## ❌ Common Problems
+
+### "Python is not recognized"
+
+Python wasn't added to PATH during installation.
+
+**Fix:** Reinstall Python and **CHECK the "Add Python to PATH" box**.
+
+### "Git is not recognized"
+
+Git isn't installed.
+
+**Fix:** Download and install from [git-scm.com](https://git-scm.com/download/win)
+
+### "Scripts cannot be run on this system"
+
+PowerShell is blocking scripts.
+
+**Fix:** Run this first:
 ```powershell
-git pull
-pip install -r requirements.txt
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
----
+### "Connection refused" or "Ollama not running"
 
-## Troubleshooting
+Ollama server isn't running.
 
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues:
-
-- Python/venv problems
-- Audio device issues
-- Ollama connection errors
-- Piper TTS failures
-
----
-
-## LLM Runtime
-
+**Fix:** Open a separate PowerShell window and run:
 ```powershell
-# Start Ollama server
 ollama serve
-
-# Pull a model (choose one)
-ollama pull llama3.2      # Fast, good quality
-ollama pull qwen:latest   # Alternative
 ```
+
+### No sound / wrong microphone
+
+Audio devices not configured.
+
+**Fix:** See "Audio Devices" section above.
+
+### For more issues
+
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — 850+ lines of detailed fixes.
+
+---
+
+## 📁 Installation Location
+
+ARGO installs to:
+```
+C:\Users\YOUR_USERNAME\AppData\Local\ARGO\
+```
+
+You can find this by typing `%LOCALAPPDATA%\ARGO` in File Explorer.
 
 ## Music Indexing (Local-First)
 
