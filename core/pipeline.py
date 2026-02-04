@@ -324,6 +324,23 @@ class ArgoPipeline:
         tokens = lower.split()
         if tokens and tokens[0] in imperative_verbs:
             return False
+        # Identity/personal statements should pass through (potential memory writes)
+        identity_patterns = [
+            r"\bmy name is\b",
+            r"\bi am called\b",
+            r"\bcall me\b",
+            r"\bi like\b",
+            r"\bi love\b",
+            r"\bi prefer\b",
+            r"\bi hate\b",
+            r"\bi live in\b",
+            r"\bi work at\b",
+            r"\bi'm from\b",
+            r"\bmy favorite\b",
+            r"\bmy birthday is\b",
+        ]
+        if any(re.search(pattern, lower) for pattern in identity_patterns):
+            return False
         meaningful = self._get_meaningful_tokens(lower)
         if len(meaningful) <= 3:
             return True
@@ -1071,6 +1088,32 @@ class ArgoPipeline:
         text = user_text.strip()
         original_lower = text.lower()
         lower = original_lower
+        
+        # Check for IMPLICIT identity statements (no trigger word required)
+        # These are direct personal statements like "My name is Tommy"
+        implicit_name = re.search(r"^my name is\s+([a-zA-Z][a-zA-Z\s'-]*)\.?$", lower)
+        if implicit_name:
+            name_value = implicit_name.group(1).strip().title()
+            return {
+                "type": "FACT",
+                "key": "user.name",
+                "value": name_value,
+                "display": f"My name is {name_value}",
+                "implicit": True,  # Flag for softer acknowledgment
+            }
+        
+        implicit_call_me = re.search(r"^call me\s+([a-zA-Z][a-zA-Z\s'-]*)\.?$", lower)
+        if implicit_call_me:
+            name_value = implicit_call_me.group(1).strip().title()
+            return {
+                "type": "FACT",
+                "key": "user.name",
+                "value": name_value,
+                "display": f"Call me {name_value}",
+                "implicit": True,
+            }
+        
+        # Check for EXPLICIT memory writes (require trigger word)
         match = re.search(r"\b(remember that|remember this|remember|save this|don't forget|dont forget|store this|add this to memory)\b", lower)
         if not match:
             return None
@@ -1444,6 +1487,32 @@ class ArgoPipeline:
                 return True
 
             namespace = project_ns if mem_type == "PROJECT" else None
+            
+            # IMPLICIT WRITES: Direct personal statements like "My name is Tommy"
+            # Store immediately with natural acknowledgment (no confirmation needed)
+            if write.get("implicit"):
+                try:
+                    self._memory_store.set_memory(mem_type, key, value, namespace=namespace)
+                    self.logger.info(f"[MEMORY] memory_write_implicit key={key} value={value}")
+                    # Natural acknowledgment based on key type
+                    if key == "user.name":
+                        response = f"Got it, {value}."
+                    else:
+                        response = f"Noted."
+                except Exception as e:
+                    self.logger.warning(f"[MEMORY] Implicit write failed: {e}")
+                    response = "I couldn't save that."
+                self.broadcast("log", f"Argo: {response}")
+                if not self.stop_signal.is_set() and not replay_mode:
+                    tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
+                    tts_override = (overrides or {}).get("suppress_tts", False)
+                    if tts_override:
+                        self.logger.info("[TTS] Suppressed for next interaction override")
+                    elif tts_text:
+                        self.speak(tts_text, interaction_id=interaction_id)
+                return True
+            
+            # EXPLICIT WRITES: Require confirmation
             self._pending_memory_write = {
                 "type": mem_type,
                 "key": key,

@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6.9 — Implicit Memory Writes (2026-02-03)
+
+### Fixed
+- **"My name is Tommy" now works**: Direct identity statements no longer hit NON_PROPOSITIONAL_GUARD
+- **No confirmation needed**: Implicit statements ("My name is X", "Call me X") store immediately with natural acknowledgment ("Got it, Tommy.")
+
+### Added
+- **Implicit memory write detection**: Recognizes "My name is X" and "Call me X" without requiring "remember that"
+- **Identity pattern bypass**: Non-propositional guard now passes through personal statements (my name, I like, I prefer, etc.)
+- **Natural acknowledgment**: Implicit writes respond with "Got it, {name}." instead of asking for confirmation
+
+### Changed
+- `_parse_memory_write()` now handles implicit identity statements
+- `_is_non_propositional_utterance()` bypasses guard for identity patterns
+
+---
+
 ## v1.6.8 — Barge-In Echo Suppression (2026-02-03)
 
 ### Fixed
