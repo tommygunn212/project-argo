@@ -118,7 +118,7 @@ class ArgoPipeline:
         self.illegal_transition = False
         self.ALLOWED_TRANSITIONS = {
             "IDLE": {"LISTENING"},
-            "LISTENING": {"TRANSCRIBING"},
+            "LISTENING": {"TRANSCRIBING", "THINKING"},  # THINKING for text input (skips STT)
             "TRANSCRIBING": {"THINKING", "LISTENING", "IDLE"},
             "THINKING": {"SPEAKING", "LISTENING", "IDLE"},
             "SPEAKING": {"LISTENING", "IDLE"},
@@ -549,6 +549,15 @@ class ArgoPipeline:
         except Exception:
             pass
         return False
+
+    def _broadcast_turn_info(self) -> None:
+        """Broadcast current turn count to frontend."""
+        try:
+            current = self._conversation_buffer.session_turn_count()
+            limit = self._conversation_buffer.SESSION_TURN_LIMIT
+            self.broadcast("turn_info", {"current": current, "limit": limit})
+        except Exception:
+            pass
 
     # PERSONAL MODE CONTRACT:
     # - If text exists, ALWAYS respond.
@@ -3450,6 +3459,7 @@ class ArgoPipeline:
             user_text = self._normalize_music_command_text(user_text)
             self.broadcast("log", f"User: {user_text}")
             self._conversation_buffer.add("User", user_text)
+            self._broadcast_turn_info()
             self._append_convo_ledger("user", user_text)
 
             self.handle_user_text(

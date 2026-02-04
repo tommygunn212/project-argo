@@ -220,6 +220,8 @@ async def websocket_handler(websocket):
             if msg_type == "replay" and pipeline_ref and payload:
                 t = threading.Thread(target=pipeline_ref.replay_interaction, args=(payload,), daemon=True)
                 t.start()
+            if msg_type == "text_input" and pipeline_ref and payload:
+                _handle_text_input(payload)
             if msg_type == "control" and payload:
                 _handle_control(payload)
             if msg_type == "override" and payload:
@@ -365,6 +367,86 @@ def _handle_clear_overrides():
     clear_runtime_overrides()
     log_event("UI_CMD_CLEAR_OVERRIDES", stage="ui")
     broadcast_msg("runtime_overrides", get_runtime_overrides())
+
+
+def _handle_text_input(payload: dict | str):
+    """Handle text input from frontend, bypassing STT entirely.
+    
+    Payload can be:
+      - str: Just the text
+      - dict: {"text": "...", "source": "frontend", "mode": "conversation"}
+    """
+    global pipeline_ref
+    
+    if not pipeline_ref:
+        logger.warning("[TEXT_INPUT] No pipeline available")
+        return
+    
+    # Extract text from payload
+    if isinstance(payload, str):
+        text = payload.strip()
+        source = "frontend"
+        mode = "conversation"
+    else:
+        text = (payload.get("text") or "").strip()
+        source = payload.get("source", "frontend")
+        mode = payload.get("mode", "conversation")
+    
+    if not text:
+        logger.info("[TEXT_INPUT] Empty text, ignoring")
+        return
+    
+    log_event(f'INPUT[source={source}][mode={mode}]: "{text}"', stage="ui")
+    
+    # Check if we should barge-in (text input while speaking)
+    current_state = getattr(pipeline_ref, "current_state", "IDLE")
+    if current_state == "SPEAKING":
+        logger.info("[TEXT_INPUT] Barge-in triggered via text input")
+        try:
+            pipeline_ref.stop_signal.set()
+            pipeline_ref.stop_tts()
+        except Exception as e:
+            logger.warning(f"[TEXT_INPUT] Barge-in error: {e}")
+    
+    # Generate interaction ID
+    interaction_id = str(uuid.uuid4())
+    
+    # Transition to THINKING (skip TRANSCRIBING since we already have text)
+    try:
+        pipeline_ref.transition_state("THINKING", interaction_id=interaction_id, source="text_input")
+    except Exception:
+        pass
+    
+    # Route through pipeline with confidence=1.0 (text input is perfect)
+    def process_text():
+        try:
+            # Normalize text same as voice path
+            from core.stt_normalization import normalize_system_text
+            normalized_text = normalize_system_text(text)
+            normalized_text = pipeline_ref._normalize_music_command_text(normalized_text)
+            
+            pipeline_ref.broadcast("log", f"User: {normalized_text}")
+            pipeline_ref._conversation_buffer.add("User", normalized_text)
+            pipeline_ref._broadcast_turn_info()
+            pipeline_ref._append_convo_ledger("user", normalized_text)
+            
+            pipeline_ref.handle_user_text(
+                user_text=normalized_text,
+                confidence_hint=1.0,  # Text input is always 100% confident
+                interaction_id=interaction_id,
+                replay_mode=False,
+                overrides=dict(NEXT_INTERACTION_OVERRIDES) if NEXT_INTERACTION_OVERRIDES else None,
+                audio_data=None,
+            )
+        except Exception as e:
+            logger.error(f"[TEXT_INPUT] Pipeline error: {e}", exc_info=True)
+            pipeline_ref.broadcast("status", "ERROR")
+        finally:
+            NEXT_INTERACTION_OVERRIDES.clear()
+    
+    # Run in separate thread (same as voice input)
+    t = threading.Thread(target=process_text, daemon=True, name="ARGO.TextInput")
+    t.start()
 
 
 def _start_main_loop_thread():

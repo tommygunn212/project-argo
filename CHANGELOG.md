@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6.24 — Frontend Text Input (2026-02-04)
+
+### Added
+- **Text input in frontend**: Type messages directly instead of speaking
+  - Single-line input with ENTER to send
+  - Bypasses STT completely (confidence=1.0)
+  - Same pipeline as voice (intent → buffer → persona → TTS)
+  - Turn indicator shows [Turn X/Y] based on session limit
+- **Text barge-in**: Sending text while ARGO is speaking interrupts it
+- **WebSocket `text_input` message type** for backend integration
+- **Turn count broadcast** via `turn_info` WebSocket messages
+
+### Changed
+- State machine now allows LISTENING → THINKING (for text input that skips TRANSCRIBING)
+
+---
+
 ## v1.6.23 — SILENCE_OVERRIDE + Config + Architecture (2026-02-04)
 
 ### Added
