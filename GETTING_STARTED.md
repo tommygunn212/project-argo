@@ -125,7 +125,64 @@ Examples:
 - “What drive is the fullest?”
 
 ---
+## Voice Commands
 
+### Silence Override ("Shut Up")
+Tell ARGO to stop talking:
+- "Shut up"
+- "Stop talking"
+- "Enough"
+- "Quiet"
+
+ARGO will deliver one joke, then enter **quiet mode** (TTS disabled).
+
+### Identity
+- "What's your name?" / "Who are you?" — triggers identity response
+- "Tell me about yourself" — same
+
+---
+
+## Text Input (Frontend)
+
+The frontend UI includes a text input bar for testing conversations without a microphone:
+
+1. Open http://localhost:8000
+2. Type in the input field at the bottom of the transcript area
+3. Press ENTER or click SEND
+
+**Features:**
+- Bypasses STT (confidence = 100%)
+- Same pipeline as voice (intent → persona → TTS)
+- **Turn indicator** shows `Turn X/Y` (session limit)
+- **Text barge-in**: Sending text while ARGO is speaking interrupts it
+
+---
+
+## Personas
+
+ARGO supports multiple personality modes configured in `config.json`:
+
+```json
+{
+  "personality": {
+    "default": "tommy_gunn"
+  }
+}
+```
+
+Available personas:
+| Persona | Style |
+|---------|-------|
+| `neutral` | Clean, professional |
+| `tommy_gunn` | Conversational mentor |
+| `rick` | Rick Sanchez (answers only) |
+| `claptrap` | Borderlands robot |
+| `jarvis` | Butler-like assistant |
+| `plain` | No transformation |
+
+Personas are gated by response type — system messages always stay neutral.
+
+---
 ## Milestone: Music + System Health Hardening (Jan 2026)
 
 **Why:** predictable system facts and stable music control under load.
