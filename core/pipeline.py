@@ -3333,8 +3333,16 @@ class ArgoPipeline:
             "who am i talking to",
             "who am i speaking to",
         }
-        if any(p in text for p in identity_phrases):
-            return "ARGO_IDENTITY", {p for p in identity_phrases if p in text}
+        # Word-boundary match to avoid false positives like "tell me about your feet"
+        matched_phrases = set()
+        for p in identity_phrases:
+            # Pattern: phrase must be at word boundary (not followed by more words that change meaning)
+            # "tell me about you" should NOT match "tell me about your feet"
+            pattern = re.escape(p) + r"(?:[.!?\s]|$)"
+            if re.search(pattern, text, re.IGNORECASE):
+                matched_phrases.add(p)
+        if matched_phrases:
+            return "ARGO_IDENTITY", matched_phrases
         identity_specific = tokens & {"argo", "yourself", "identity", "assistant", "agent", "name"}
         question_cue = tokens & {"who", "what"}
         if identity_specific and question_cue:
