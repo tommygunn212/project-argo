@@ -8,6 +8,45 @@ import time
 
 
 # ============================================================================
+# 1B) HARDWARE IDENTIFICATION
+# ============================================================================
+def get_hardware_info():
+    """Get hardware identification: CPU model, GPU name, RAM size, OS."""
+    info = {
+        "os": f"{platform.system()} {platform.release()}",
+        "cpu_name": platform.processor() or "Unknown CPU",
+        "cpu_cores": psutil.cpu_count(logical=False),
+        "cpu_threads": psutil.cpu_count(logical=True),
+        "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 1),
+        "gpu_name": None,
+    }
+    
+    # Try to get better CPU name on Windows
+    if platform.system() == "Windows":
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            info["cpu_name"] = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+    
+    # Try to get GPU name via NVML
+    try:
+        import pynvml  # type: ignore
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        info["gpu_name"] = pynvml.nvmlDeviceGetName(handle)
+        if isinstance(info["gpu_name"], bytes):
+            info["gpu_name"] = info["gpu_name"].decode("utf-8")
+        pynvml.nvmlShutdown()
+    except Exception:
+        pass
+    
+    return info
+
+
+# ============================================================================
 # 2) MEMORY SNAPSHOT
 # ============================================================================
 def get_memory_info():

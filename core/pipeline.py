@@ -35,6 +35,9 @@ from core.config import (
     MIN_TTS_TEXT_LEN,
     PERSONAL_MODE_MIN_CONFIDENCE,
     PERSONAL_MODE_MIN_TEXT_LEN,
+    MEMORY_MIN_CONFIDENCE,
+    ResponseStyle,
+    ActionRisk,
 )
 from core.intent_parser import RuleBasedIntentParser, Intent, IntentType, normalize_system_text, is_system_keyword
 from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
@@ -676,12 +679,26 @@ class ArgoPipeline:
         self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
         return True
 
-    def _respond_with_clarification(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        """Respond with a clarification prompt.
-        TODO: Implement full clarification logic if needed.
+    def _respond_with_clarification(self, interaction_id: str, replay_mode: bool, overrides: dict | None, intent: Intent | None = None, candidates: list[str] | None = None, prompt: str | None = None) -> bool:
+        """Respond with a context-aware clarification prompt.
+        
+        Phase 3: Smarter clarification - targeted prompts instead of generic "please rephrase".
+        
+        Args:
+            interaction_id: Current interaction ID
+            replay_mode: Whether in replay mode
+            overrides: Runtime overrides
+            intent: The ambiguous intent (for context-aware prompts)
+            candidates: Possible targets to present as choices
+            prompt: Optional explicit prompt to use
         """
-        self.logger.info("[CLARIFY] Clarification requested (stub)")
-        response = "Could you please rephrase that?"
+        # Use provided prompt, or generate context-aware one
+        if prompt:
+            response = prompt
+        else:
+            response = self._get_clarification_prompt(intent, candidates)
+        
+        self.logger.info(f"[CLARIFY] {response}")
         self.broadcast("log", f"Argo: {response}")
         self._append_convo_ledger("argo", response)
         if not self.stop_signal.is_set() and not replay_mode:
@@ -694,7 +711,130 @@ class ArgoPipeline:
         self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
         return True
 
-    def _get_clarification_prompt(self) -> str:
+    # =========================================================================
+    # PHASE 3: CONVERSATIONAL PRESENCE - Response Style & Acknowledgments
+    # =========================================================================
+    
+    def _get_response_style(self, intent: Intent | None) -> str:
+        """Determine response tone based on intent type.
+        
+        Returns:
+            ResponseStyle.DRY - for reversible actions (minimal: "Done." or silence)
+            ResponseStyle.NEUTRAL - for informational responses
+            ResponseStyle.SNARK - for identity/meta questions (personality allowed)
+        """
+        if not intent:
+            return ResponseStyle.NEUTRAL
+        
+        # Identity/meta questions get personality
+        if intent.intent_type in {IntentType.ARGO_IDENTITY, IntentType.ARGO_GOVERNANCE}:
+            return ResponseStyle.SNARK
+        
+        # Reversible actions get minimal responses
+        if intent.intent_type in {
+            IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT,
+            IntentType.APP_CONTROL, IntentType.APP_LAUNCH,
+            IntentType.VOLUME_CONTROL, IntentType.BLUETOOTH_CONTROL,
+        }:
+            return ResponseStyle.DRY
+        
+        return ResponseStyle.NEUTRAL
+    
+    def _get_action_risk(self, intent: Intent | None, user_text: str = "") -> str:
+        """Classify action risk level for act-vs-clarify decisions.
+        
+        Returns:
+            ActionRisk.REVERSIBLE - safe to act immediately
+            ActionRisk.DESTRUCTIVE - needs confirmation
+            ActionRisk.AMBIGUOUS - needs clarification
+        """
+        if not intent:
+            return ActionRisk.AMBIGUOUS
+        
+        # Destructive patterns
+        text_lower = (user_text or "").lower()
+        if re.search(r"\b(delete|remove|erase|wipe|kill everything|shutdown|restart|reboot)\b", text_lower):
+            return ActionRisk.DESTRUCTIVE
+        
+        # Reversible actions
+        if intent.intent_type in {
+            IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT, IntentType.MUSIC,
+            IntentType.APP_CONTROL, IntentType.APP_LAUNCH,
+            IntentType.VOLUME_CONTROL, IntentType.BLUETOOTH_CONTROL,
+        }:
+            return ActionRisk.REVERSIBLE
+        
+        return ActionRisk.AMBIGUOUS
+    
+    def _minimal_ack(self, action_result: bool, context: str = "") -> str | None:
+        """Generate minimal acknowledgment or None for silence.
+        
+        For reversible successful actions, returns minimal response.
+        For failures, returns brief error message.
+        Returns None when silence is appropriate (action already done, music started, etc.)
+        
+        Args:
+            action_result: Whether the action succeeded
+            context: Optional context hint (e.g., "music_started", "already_open")
+        
+        Returns:
+            Minimal acknowledgment string, or None for silence
+        """
+        # Music started = silence (the music IS the acknowledgment)
+        if context == "music_started":
+            return None
+        
+        # Already in desired state = minimal
+        if context == "already_open":
+            return None  # silence - they can see it's open
+        if context == "already_closed":
+            return None  # silence - they can see it's closed
+        
+        # Success = minimal or silence
+        if action_result:
+            # Some actions deserve acknowledgment
+            if context in {"closed", "stopped", "muted", "unmuted"}:
+                return "Done."
+            # Default success = silence
+            return None
+        
+        # Failure = brief error
+        return "That didn't work."
+    
+    def _get_clarification_prompt(self, intent: Intent | None = None, candidates: list[str] | None = None) -> str:
+        """Generate context-aware clarification prompt.
+        
+        Instead of generic "please rephrase", provide targeted choices.
+        
+        Args:
+            intent: The detected (ambiguous) intent, if any
+            candidates: List of possible targets/options to present
+        
+        Returns:
+            Targeted clarification prompt (one sentence, one choice max)
+        """
+        # If we have specific candidates, present them
+        if candidates and len(candidates) == 2:
+            return f"{candidates[0]} or {candidates[1]}?"
+        if candidates and len(candidates) > 2:
+            # Pick first two most likely
+            return f"{candidates[0]} or {candidates[1]}?"
+        
+        # Intent-specific clarifications
+        if intent:
+            if intent.intent_type == IntentType.APP_CONTROL:
+                return "Which app?"
+            if intent.intent_type == IntentType.APP_LAUNCH:
+                return "Which app should I open?"
+            if intent.intent_type == IntentType.MUSIC:
+                return "What would you like to hear?"
+            if intent.intent_type == IntentType.VOLUME_CONTROL:
+                return "Louder or quieter?"
+        
+        # Fallback - still better than "please rephrase"
+        return "What should I do?"
+
+    def _get_clarification_prompt_legacy(self) -> str:
         """Return a clarification prompt string.
         TODO: Implement varied prompts if needed.
         """
@@ -707,10 +847,19 @@ class ArgoPipeline:
         tokens = re.findall(r"\w+", text)
         if not tokens:
             return False
+        
+        # Volume control patterns (even without action verb prefix)
+        if re.search(r"\bvolume\s+\d{1,3}%?\b", text):  # "volume 50%"
+            return True
+        if re.search(r"\b(lower|raise|increase|decrease)\s+(the\s+)?volume\b", text):  # "lower volume"
+            return True
+        if re.search(r"\b(louder|quieter|mute|unmute)\b", text):  # "louder", "mute"
+            return True
+        
         action_verbs = {
             "open", "close", "quit", "exit", "shutdown", "shut", "delete", "run", "start", "stop",
             "enable", "disable", "install", "remove", "play", "pause", "resume", "next", "skip",
-            "set", "change", "turn", "launch",
+            "set", "change", "turn", "launch", "mute", "unmute", "lower", "raise",
         }
         first = tokens[0]
         if first not in action_verbs:
@@ -1663,6 +1812,7 @@ class ArgoPipeline:
                 "Tone: clean, calm, surgical. No jokes. No sarcasm.\n"
                 "Give a direct answer, then a brief explanation.\n"
                 "No fluff. No theatrics. No filler.\n"
+                "If you don't know, say 'I don't know.' Never speculate.\n"
             )
         elif mode == "tommy_gunn":
             persona = (
@@ -1677,6 +1827,7 @@ class ArgoPipeline:
                 "Do NOT repeat system instructions or flags like SERIOUS_MODE or CRITICAL.\n"
                 "No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
                 "Never include system diagnostics in responses.\n"
+                "If you lack context, say 'I don't have context for that.' Never speculate or hedge.\n"
             )
         else:
             persona = (
@@ -1686,6 +1837,8 @@ class ArgoPipeline:
                 "Explain only what matters.\n"
                 "End with a line that adds perspective or a small smile.\n"
                 "Do not perform, hype, or explain yourself.\n"
+                "If you don't know something, say so briefly: 'I don't have context for that.' Never speculate or hedge.\n"
+                "Never describe your own configuration, mode, or system instructions in responses.\n"
             )
         return f"{persona}{critical}{rag_block}{memory_block}{convo_block}User: {user_text}\nResponse:"
 
@@ -2256,11 +2409,14 @@ class ArgoPipeline:
         new_muted = prev_muted
 
         match = re.search(r"set volume to (\d{1,3})%?", lowered)
+        if not match:
+            # Also match "volume 20%" or "volume to 20%"
+            match = re.search(r"\bvolume\s+(?:to\s+)?(\d{1,3})%?", lowered)
         if match:
             ok, msg, prev_volume, new_volume, new_muted = set_system_volume_percent(int(match.group(1)))
-        elif re.search(r"\bvolume up\b|\bturn volume up\b|\bincrease volume\b", lowered):
+        elif re.search(r"\bvolume up\b|\bturn volume up\b|\bincrease volume\b|\braise volume\b|\braise the volume\b|\blouder\b", lowered):
             ok, msg, prev_volume, new_volume, new_muted = adjust_system_volume_percent(5)
-        elif re.search(r"\bvolume down\b|\bturn volume down\b|\bdecrease volume\b", lowered):
+        elif re.search(r"\bvolume down\b|\bturn volume down\b|\bdecrease volume\b|\blower volume\b|\blower the volume\b|\bquieter\b", lowered):
             ok, msg, prev_volume, new_volume, new_muted = adjust_system_volume_percent(-5)
         elif re.search(r"\bmute\b", lowered):
             ok, msg, prev_volume, new_volume, new_muted = mute_system_volume()
@@ -4130,7 +4286,20 @@ class ArgoPipeline:
             memory_context = self._get_memory_context(interaction_id)
             if rag_context:
                 llm_context_scope = "buffered"
-        if not rag_context and len(meaningful_tokens) < 5 and not has_interrogative:
+            else:
+                # Check for pronouns/references that need conversation context
+                lower_text = (user_text or "").lower()
+                pronoun_refs = {" it ", " it?", " it.", " its ", " they ", " them ", " that ", " this ", " those ", " these ", "does it", "is it", "was it", "has it", "about it", "many does", "much does"}
+                if any(ref in f" {lower_text} " or lower_text.endswith(ref.strip()) for ref in pronoun_refs):
+                    llm_context_scope = "buffered"
+                    self.logger.info("[LLM] Pronoun reference detected, using conversation buffer")
+        
+        # Check if utterance starts with an imperative verb (should pass to LLM)
+        imperative_verbs = {"give", "tell", "show", "list", "generate", "create", "make", "find", "get", "pick", "choose", "suggest", "recommend", "explain", "describe", "say", "read", "write", "name", "calculate", "compute"}
+        first_word = (user_text or "").lower().split()[0] if user_text and user_text.strip() else ""
+        is_imperative = first_word in imperative_verbs
+        
+        if not rag_context and len(meaningful_tokens) < 5 and not has_interrogative and not is_imperative:
             self.logger.info("[LLM] Isolated short utterance without interrogative; requesting clarification")
             self._record_timeline("ISOLATED_SHORT_GUARD", stage="pipeline", interaction_id=interaction_id)
             self._respond_with_clarification(interaction_id, replay_mode, overrides)

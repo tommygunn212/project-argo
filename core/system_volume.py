@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-from ctypes import cast, POINTER
 
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+from pycaw.pycaw import AudioUtilities
 
 LOGGER = logging.getLogger("ARGO.SystemVolume")
 
@@ -14,9 +12,8 @@ _LAST_NONZERO_VOLUME = 20
 
 
 def _get_endpoint_volume():
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioEndpointVolume))
+    device = AudioUtilities.GetSpeakers()
+    return device.EndpointVolume
 
 
 def _clamp(percent: int) -> int:

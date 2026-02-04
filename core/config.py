@@ -37,6 +37,23 @@ MIN_TTS_TEXT_LEN = 3
 PERSONAL_MODE_MIN_CONFIDENCE = 0.15
 PERSONAL_MODE_MIN_TEXT_LEN = 3
 
+# Memory persistence threshold - don't store if STT confidence below this
+MEMORY_MIN_CONFIDENCE = 0.20
+
+# Response style gating
+class ResponseStyle:
+    """Response tone governor - controls verbosity and personality."""
+    DRY = "dry"          # Minimal: "Done." / silence
+    NEUTRAL = "neutral"  # Standard: clear, no personality
+    SNARK = "snark"      # Personality allowed: dry wit, identity responses
+
+# Action risk classification for act-vs-clarify decisions
+class ActionRisk:
+    """Risk level for actions - determines if we act or clarify."""
+    REVERSIBLE = "reversible"    # Act immediately (music stop, app close)
+    DESTRUCTIVE = "destructive"  # Clarify first (delete, shutdown)
+    AMBIGUOUS = "ambiguous"      # Need more context
+
 
 # ============================================================================
 # 4) CONFIG WRAPPER (DOT-NOTATION ACCESS)

@@ -806,10 +806,6 @@ class MusicDatabase:
             where_clause = "WHERE " + where_clause
 
         exact_title_param = title or ""
-        year_match_clause = "0"
-        if year_start is not None and year_end is not None:
-            year_match_clause = "CASE WHEN t.year BETWEEN ? AND ? THEN 1 ELSE 0 END"
-            params.extend([year_start, year_end])
 
         sql = f"""
             SELECT
@@ -837,11 +833,12 @@ class MusicDatabase:
             LIMIT ?
         """
 
-        params = [exact_title_param] + params + [limit]
+        # WHERE clause params first, then ORDER BY params, then LIMIT
+        final_params = params + [exact_title_param, limit]
         conn = self._ensure_connection()
         with self._lock:
             cur = conn.cursor()
-            cur.execute(sql, params)
+            cur.execute(sql, final_params)
             rows = cur.fetchall()
 
         results = []

@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.6.6 — Volume Control + Hardware Info + LLM Confidence (2025-02-03)
+
+### Fixed
+- **System volume control**: Updated pycaw API usage (`.EndpointVolume` property instead of deprecated `.Activate()`)
+- **Volume command patterns**: "volume 50%", "lower volume", "louder", "quieter" now recognized
+- **SQL parameter binding**: Fixed era-based music queries ("play 80s music") parameter order mismatch
+- **Imperative verb guard**: "give me three numbers" now passes to LLM instead of hitting ISOLATED_SHORT_GUARD
+
+### Added
+- **Hardware identification**: "What kind of CPU/GPU/motherboard do I have?" now returns actual hardware info via WMI
+- **Pronoun context detection**: Questions with "it", "they", "this" now include conversation buffer for context
+- **Expanded query patterns**: More natural phrasing for CPU, motherboard, volume queries
+
+### Improved
+- **LLM confidence**: Prompts now instruct "If you don't know, say so briefly" — no speculation or hedging
+- **No prompt leakage**: LLM won't describe its own configuration/mode in responses
+
+---
+
+## v1.6.5 — Conversational Presence (2025-02-03)
+
+- **Response style gating**: DRY (minimal/"Done."), NEUTRAL, SNARK modes based on intent type
+- **Action risk classification**: REVERSIBLE actions execute immediately, DESTRUCTIVE actions prompt confirmation
+- **Smarter clarification**: Context-aware prompts ("Notepad or browser?") instead of generic rephrasing requests
+- **Minimal acknowledgments**: Silent success path for reversible actions; terse responses for routine tasks
+- Added `ResponseStyle` and `ActionRisk` enums to config.py
+- Added helper methods: `_get_response_style`, `_get_action_risk`, `_minimal_ack`, `_get_clarification_prompt`
+- MEMORY_MIN_CONFIDENCE threshold (0.20) defined for future memory persistence filtering
+
+---
+
 ## v1.6.4 — Audio Responsiveness + World Time (2025-02-03)
 
 - **World Time**: "What time is it in Tokyo/London/etc?" now handled deterministically with accurate timezone lookup (100+ cities/countries supported)

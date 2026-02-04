@@ -213,16 +213,26 @@ VOLUME_STATUS_PHRASES = [
 
 VOLUME_CONTROL_PATTERNS = [
     r"\bset volume to \d{1,3}%?\b",
+    r"\bvolume\s+\d{1,3}%?\b",  # "volume 50%" or "volume 50"
+    r"\bvolume\s+to\s+\d{1,3}%?\b",  # "volume to 50%"
     r"\bvolume up\b",
     r"\bvolume down\b",
     r"\bturn volume up\b",
     r"\bturn volume down\b",
     r"\bincrease volume\b",
     r"\bdecrease volume\b",
+    r"\blower volume\b",  # "lower volume"
+    r"\blower the volume\b",
+    r"\braise volume\b",
+    r"\braise the volume\b",
+    r"\bquieter\b",
+    r"\blouder\b",
     r"\bmute volume\b",
     r"\bunmute volume\b",
     r"\bmute sound\b",
     r"\bunmute sound\b",
+    r"\bmute\b",
+    r"\bunmute\b",
 ]
 
 TIME_STATUS_PHRASES = [
@@ -313,11 +323,24 @@ SYSTEM_MEMORY_QUERIES = [
 
 SYSTEM_CPU_QUERIES = [
     "what cpu do i have",
+    "what kind of cpu",
+    "what type of cpu",
+    "what's my cpu",
+    "whats my cpu",
     "cpu model",
     "cpu name",
     "what processor do i have",
+    "what kind of processor",
+    "what type of processor",
+    "what's my processor",
+    "whats my processor",
     "processor model",
     "processor name",
+    "which cpu",
+    "which processor",
+    "my cpu",
+    "tell me about my cpu",
+    "tell me about my processor",
 ]
 
 SYSTEM_GPU_QUERIES = [
@@ -344,8 +367,17 @@ SYSTEM_OS_QUERIES = [
 
 SYSTEM_MOTHERBOARD_QUERIES = [
     "what motherboard",
-    "motherboard",
+    "what kind of motherboard",
+    "what type of motherboard",
+    "what's my motherboard",
+    "whats my motherboard",
+    "which motherboard",
+    "motherboard model",
+    "motherboard name",
+    "my motherboard",
+    "tell me about my motherboard",
     "mainboard",
+    "what mainboard",
 ]
 
 SYSTEM_NORMALIZE = {
@@ -424,6 +456,27 @@ DISK_QUERY_PHRASES = [
 def detect_system_health(text: str) -> bool:
     t = text.lower()
     return any(p in t for p in SYSTEM_HEALTH_TRIGGERS)
+
+
+def detect_hardware_info(text: str) -> bool:
+    """Detect hardware identification queries: what CPU/GPU/RAM do I have."""
+    t = text.lower()
+    # Must have an identification phrase
+    id_phrases = [
+        "what kind of", "what type of", "what is my", "what's my", "whats my",
+        "which", "do i have", "have i got", "tell me about my", "specs",
+        "specifications", "what cpu", "what gpu", "what processor", "what graphics",
+    ]
+    hw_keywords = ["cpu", "processor", "gpu", "graphics card", "video card", "ram", "memory", "hardware"]
+    
+    has_id = any(p in t for p in id_phrases)
+    has_hw = any(k in t for k in hw_keywords)
+    
+    # "specs" or "specifications" alone is enough
+    if "specs" in t or "specification" in t:
+        return True
+    
+    return has_id and has_hw
 
 
 def detect_temperature_query(text: str) -> bool:
