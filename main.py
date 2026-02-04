@@ -421,7 +421,7 @@ def _handle_text_input(payload: dict | str):
     def process_text():
         try:
             # Normalize text same as voice path
-            from core.stt_normalization import normalize_system_text
+            from core.intent_parser import normalize_system_text
             normalized_text = normalize_system_text(text)
             normalized_text = pipeline_ref._normalize_music_command_text(normalized_text)
             

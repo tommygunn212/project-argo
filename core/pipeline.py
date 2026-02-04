@@ -117,11 +117,11 @@ class ArgoPipeline:
         self.current_state = "IDLE"
         self.illegal_transition = False
         self.ALLOWED_TRANSITIONS = {
-            "IDLE": {"LISTENING"},
+            "IDLE": {"LISTENING", "THINKING"},  # THINKING for text input when idle
             "LISTENING": {"TRANSCRIBING", "THINKING"},  # THINKING for text input (skips STT)
             "TRANSCRIBING": {"THINKING", "LISTENING", "IDLE"},
             "THINKING": {"SPEAKING", "LISTENING", "IDLE"},
-            "SPEAKING": {"LISTENING", "IDLE"},
+            "SPEAKING": {"LISTENING", "IDLE", "THINKING"},  # THINKING for text barge-in
         }
         
         # Concurrency Lock
