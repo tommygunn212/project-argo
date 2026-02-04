@@ -148,7 +148,8 @@ class ArgoPipeline:
                 convo_size = int(self._config.get("conversation.buffer_size", 8))
         except Exception:
             convo_size = 8
-        self._conversation_buffer = ConversationBuffer(max_turns=convo_size)
+        session_memory_enabled = self.runtime_overrides.get("session_memory_enabled", True)
+        self._conversation_buffer = ConversationBuffer(max_turns=convo_size, enabled=session_memory_enabled)
         ledger_size = 10
         try:
             if self._config is not None:
@@ -359,6 +360,8 @@ class ArgoPipeline:
         cleaned = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", cleaned)
         # Remove list bullets
         cleaned = re.sub(r"^\s*[-*•]\s+", "", cleaned, flags=re.MULTILINE)
+        # Pronunciation fixes for TTS
+        cleaned = re.sub(r"\bArgo\b", "Ar-go", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
         cleaned = cleaned.strip()
         if not cleaned:
@@ -710,6 +713,7 @@ class ArgoPipeline:
         """Respond with a context-aware clarification prompt.
         
         Phase 3: Smarter clarification - targeted prompts instead of generic "please rephrase".
+        Phase 5: Errors/clarifications reset session context.
         
         Args:
             interaction_id: Current interaction ID
@@ -719,6 +723,9 @@ class ArgoPipeline:
             candidates: Possible targets to present as choices
             prompt: Optional explicit prompt to use
         """
+        # Phase 5: Clarification resets session context (error-like state)
+        self._conversation_buffer.clear(reason="clarification/error")
+        
         # Use provided prompt, or generate context-aware one
         if prompt:
             response = prompt
@@ -3677,6 +3684,8 @@ class ArgoPipeline:
         stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
         user_text_lower = user_text.lower()
         if any(term in user_text_lower for term in stop_terms):
+            # Phase 5: STOP clears session context
+            self._conversation_buffer.clear(reason="STOP detected")
             music_player = get_music_player()
             if music_player.is_playing():
                 self.logger.info("[ARGO] Active music detected")
@@ -3770,6 +3779,11 @@ class ArgoPipeline:
             intent_title,
             safe_utterance,
         )
+        
+        # Phase 5: Commands bypass session context entirely
+        if request_kind == "ACTION":
+            self._conversation_buffer.clear(reason="command intent")
+        
         if intent is None:
             music_keywords = {
                 "play",

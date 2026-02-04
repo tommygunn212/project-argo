@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.6.10 — Phase 5: Bounded Session Continuity (2026-02-03)
+
+### Added
+- **Session memory (bounded, ephemeral)**: Conversation buffer now constrained to 3-turn session window
+- **Turn limit enforcement**: Auto-clears after 3 conversation exchanges to prevent unbounded context growth
+- **Command bypass**: ACTION intents clear session context (commands ignore conversation history)
+- **STOP clears context**: "stop", "pause", "cancel" keywords reset session immediately
+- **Error clears context**: Clarification/error responses reset session state
+- **Toggle support**: `session_memory_enabled` runtime override for one-click disable
+
+### Changed
+- `ConversationBuffer` now tracks session turn count with `SESSION_TURN_LIMIT = 3`
+- Buffer logs: `[SESSION] Context appended (turn 2/3)`, `[SESSION] Context cleared: STOP`
+- Clarification responses now clear session context (error-like state)
+
+### Architecture
+- Phase 5 wraps and disciplines existing `convo_buffer` — no new abstraction layer
+- Clear triggers: STOP, command, error, turn limit, toggle OFF, restart
+- Session context never affects: intent classification, command execution, system health
+
+---
+
 ## v1.6.9 — Implicit Memory Writes (2026-02-03)
 
 ### Fixed
