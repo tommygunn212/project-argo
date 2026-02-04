@@ -7,7 +7,7 @@ Contract:
 - Used for prompt context only (not facts).
 
 Phase 5 Constraints:
-- Max 3 turns for session continuity (configurable)
+- Max turns for session continuity (configurable via config.json)
 - Cleared on STOP, error, command execution
 - Toggle support (enabled/disabled)
 - Never affects intent classification
@@ -18,8 +18,23 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Deque, List, Optional
 import logging
+import json
+from pathlib import Path
 
 logger = logging.getLogger("ARGO.ConversationBuffer")
+
+
+def _load_session_turn_limit() -> int:
+    """Load session turn limit from config.json, default to 6."""
+    try:
+        config_path = Path(__file__).parent.parent / "config.json"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                config = json.load(f)
+                return config.get("session", {}).get("turn_limit", 6)
+    except Exception:
+        pass
+    return 6
 
 
 @dataclass
@@ -37,9 +52,8 @@ class ConversationBuffer:
     Cleared on: restart, STOP, error, command execution.
     """
     
-    # Phase 5 hard limit: max turns for session continuity
-    # Raised from 3 to 6 to allow natural follow-up questions
-    SESSION_TURN_LIMIT = 6
+    # Session turn limit - loaded from config.json
+    SESSION_TURN_LIMIT = _load_session_turn_limit()
     
     def __init__(self, max_turns: int = 8, enabled: bool = True):
         self.max_turns = max(1, int(max_turns))

@@ -258,6 +258,66 @@ model = "qwen:latest"     # Qwen via Ollama
 - Local, open-source
 - Reasonable quality + speed tradeoff
 - Small enough to run on consumer hardware via Ollama
+
+---
+
+### Persona Module (v1.6.21+)
+
+**Directory:** `personas/`
+
+**Responsibility:**
+- Text transformation gated by ResponseType
+- Enforce persona allowance rules
+- Single entry point for all personality formatting
+
+**Files:**
+```
+personas/
+├── __init__.py      # Exports ResponseType, apply_persona
+├── base.py          # ResponseType enum, PersonaBase class
+├── neutral.py       # Default - allowed everywhere
+├── rick.py          # Rick Sanchez - ANSWER only
+├── claptrap.py      # Claptrap - COMMAND_ACK + ANSWER
+├── jarvis.py        # JARVIS - COMMAND_ACK + ANSWER
+├── tommy_gunn.py    # Tommy Gunn - COMMAND_ACK + ANSWER
+├── tommy_mix.py     # Mixed personality - COMMAND_ACK + ANSWER
+└── plain.py         # No transformation - allowed everywhere
+```
+
+**ResponseType Enum:**
+```python
+class ResponseType(Enum):
+    SYSTEM = "system"           # Identity, governance, errors
+    COMMAND_ACK = "command_ack" # "Done.", "Playing.", "Stopped."
+    CLARIFICATION = "clarification"  # "Could you clarify...?"
+    ANSWER = "answer"           # LLM-generated answers
+```
+
+**Allowance Matrix:**
+| Persona    | SYSTEM | COMMAND_ACK | CLARIFICATION | ANSWER |
+|------------|--------|-------------|---------------|--------|
+| neutral    | ✅     | ✅          | ✅            | ✅     |
+| plain      | ✅     | ✅          | ✅            | ✅     |
+| rick       | ❌     | ❌          | ❌            | ✅     |
+| claptrap   | ❌     | ✅          | ❌            | ✅     |
+| jarvis     | ❌     | ✅          | ❌            | ✅     |
+| tommy_gunn | ❌     | ✅          | ❌            | ✅     |
+| tommy_mix  | ❌     | ✅          | ❌            | ✅     |
+
+**Usage:**
+```python
+from personas import ResponseType, apply_persona
+
+# All responses go through apply_persona
+text = apply_persona(text, ResponseType.ANSWER, "rick")
+```
+
+**Design Principles:**
+1. Personas are TEXT TRANSFORMERS ONLY
+2. No imports from pipeline, coordinator, intent, audio, memory
+3. Examples are documentation only (in `docs/personas/`)
+4. All responses must declare a ResponseType
+5. If persona not allowed for ResponseType, text returns unchanged
 - No cloud dependency
 
 ---

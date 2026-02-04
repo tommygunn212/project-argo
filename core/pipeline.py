@@ -3055,6 +3055,46 @@ class ArgoPipeline:
         )
         return _finish(self._format_system_health(health))
 
+    # SILENCE_OVERRIDE joke pool (fixed set, no dynamic generation)
+    SILENCE_JOKES = [
+        "Fine! I'll go polish my transistors.",
+        "Alright. I'll stop narrating your life.",
+        "Wow. Cancelled mid-sentence. Respect.",
+        "Okay okay. Retreating with dignity. Mostly.",
+        "Message received. Silence engaged.",
+        "I'll be quiet now. Dramatically.",
+        "Copy that. Powering down my mouth.",
+        "Alright. I'll see myself out.",
+    ]
+
+    def _respond_with_silence_override(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        """Handle 'shut up' - deliver one joke, then enter quiet mode."""
+        import random
+        
+        # Cancel any pending TTS
+        self.stop_signal.set()
+        
+        # Pick one joke at random
+        joke = random.choice(self.SILENCE_JOKES)
+        
+        self.logger.info(f"[SILENCE_OVERRIDE] {joke}")
+        self.broadcast("log", f"Argo: {joke}")
+        
+        # Speak the joke (force TTS for this one line)
+        if not replay_mode:
+            self.stop_signal.clear()  # Allow this one response
+            self.speak(joke, interaction_id=interaction_id, force_tts=True)
+        
+        # Enter quiet mode
+        self.runtime_overrides["personality_mode"] = "plain"
+        self.runtime_overrides["tts_enabled"] = False
+        self.logger.info("[SILENCE_OVERRIDE] Entering quiet mode (TTS disabled, personality=plain)")
+        
+        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+        self.logger.info("--- Interaction Complete ---")
+        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        return True
+
     def _respond_with_argo_identity(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
         block = self._config.get("canonical.identity", {}) if self._config else {}
         if not isinstance(block, dict):
@@ -4304,6 +4344,11 @@ class ArgoPipeline:
 
         if intent and intent.intent_type == IntentType.WORLD_TIME:
             if self._respond_with_world_time(intent, interaction_id, replay_mode, overrides):
+                return
+
+        # SILENCE_OVERRIDE: "shut up" - one joke, then quiet mode
+        if intent and intent.intent_type == IntentType.SILENCE_OVERRIDE:
+            if self._respond_with_silence_override(interaction_id, replay_mode, overrides):
                 return
 
         if intent and intent.intent_type == IntentType.ARGO_IDENTITY:

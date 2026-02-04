@@ -619,6 +619,7 @@ class IntentType(Enum):
     MUSIC_NEXT = "music_next"
     MUSIC_STATUS = "music_status"
     SLEEP = "sleep"
+    SILENCE_OVERRIDE = "silence_override"  # "shut up" - jokey but obedient
     SYSTEM_HEALTH = "system_health"
     SYSTEM_STATUS = "system_status"
     SYSTEM_INFO = "system_info"
@@ -1099,6 +1100,16 @@ class RuleBasedIntentParser(IntentParser):
         first_word = tokens[0] if tokens else ""
 
         # SERIOUS_MODE signal already computed above
+
+        # Rule -1: SILENCE_OVERRIDE - "shut up" and equivalents (highest priority)
+        silence_phrases = {"shut up", "stop talking", "enough", "ok stop", "okay stop", "quiet", "be quiet"}
+        if any(phrase in text_lower for phrase in silence_phrases):
+            return Intent(
+                intent_type=IntentType.SILENCE_OVERRIDE,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=False,  # Never serious mode for this
+            )
 
         # Rule 0: SLEEP keywords (highest priority - short-circuit)
         if (

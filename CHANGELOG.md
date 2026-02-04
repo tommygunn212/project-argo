@@ -1,5 +1,78 @@
 # Changelog
 
+## v1.6.23 — SILENCE_OVERRIDE + Config + Architecture (2026-02-04)
+
+### Added
+- **SILENCE_OVERRIDE ("shut up")**: Say "shut up", "stop talking", "enough", "quiet"
+  - One random joke from fixed pool (8 options)
+  - Then enters quiet mode (TTS disabled, personality=plain)
+  - Respects obedience-first design
+- **Configurable session turn limit**: Now reads from config.json
+- **Personality defaults in config.json**
+
+### Changed
+- Session turn limit raised from 3 → 6 turns
+
+---
+
+## v1.6.22 — Conversational Tommy Gunn (2026-02-04)
+
+### Changed
+- **Tommy Gunn prompt rewritten for dialogue**:
+  - Removed rigid flow structure (hook/correction/explanation/close)
+  - Added engagement phrases ("That's not far off...", "Interesting angle...")
+  - Now ends with thoughts that invite response, not conclusions
+- Prompt trimmed from 10 lines to 7 (cleaner, less prescriptive)
+
+---
+
+## v1.6.21 — Persona Architecture Refactor (2026-02-04)
+
+### Added
+- **New `personas/` module**: Text transformers gated by ResponseType
+  - `ResponseType` enum: SYSTEM, COMMAND_ACK, CLARIFICATION, ANSWER
+  - Personas: neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, plain
+  - Each persona defines ALLOWED_TYPES
+  - `apply_persona()` is single entry point for all formatting
+
+### Behavior
+- SYSTEM/CLARIFICATION: Always neutral (Rick/Claptrap blocked)
+- COMMAND_ACK: Tommy/JARVIS/Claptrap allowed (short acks)
+- ANSWER: All personas allowed
+
+### Docs
+- `docs/personas/*.md` - examples for each persona (documentation only, NOT loaded at runtime)
+
+---
+
+## v1.6.20 — ARGO_IDENTITY Word Boundary Fix (2026-02-04)
+
+### Fixed
+- **"Tell me about your feet" no longer triggers identity response**
+  - Changed from substring match to word-boundary regex
+  - "tell me about you" must end at word boundary (punctuation/space/EOL)
+  - "tell me about your X" now goes to LLM correctly
+
+---
+
+## v1.6.19 — Remove Burps from Prompts (2026-02-04)
+
+### Changed
+- Removed *burp* markers from Rick and tommy_mix personality prompts
+- Cleaner tone examples without sound effects
+
+---
+
+## v1.6.18 — Tone Examples Instead of Q&A (2026-02-04)
+
+### Fixed
+- **LLM no longer copies example responses literally**
+  - Changed from Q&A format to tone-only examples
+  - Added clear separator before actual question (`---\nNow respond to this question:`)
+  - Prevents model from regurgitating "line 47, sir. Null reference."
+
+---
+
 ## v1.6.17 — Memory Fix + LLM Temperature (2026-02-04)
 
 ### Fixed
