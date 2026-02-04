@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.6.12 — Session Context Always-On for Questions (2026-02-03)
+
+### Changed
+- **All questions now use session context**: If the conversation buffer has content, it's always passed to the LLM
+- **Removed fragile pronoun detection**: No longer guessing whether user needs context based on specific words
+- **Simpler logic**: `buffer.size() > 0` → use buffered mode for questions
+
+### Rationale
+- Pronoun-based detection was missing too many follow-up patterns ("what about the wings?", "why?", "and the beak?")
+- Buffer is already bounded to 3 turns (Phase 5), so always including it is safe
+- Better to give LLM context it might not need than to miss obvious follow-ups
+
+---
+
 ## v1.6.11 — Session Context Pronoun Fix (2026-02-03)
 
 ### Fixed
