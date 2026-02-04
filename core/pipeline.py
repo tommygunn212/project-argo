@@ -1502,7 +1502,7 @@ class ArgoPipeline:
             # Store immediately with natural acknowledgment (no confirmation needed)
             if write.get("implicit"):
                 try:
-                    self._memory_store.set_memory(mem_type, key, value, namespace=namespace)
+                    self._memory_store.add_memory(mem_type, key, value, source="implicit", namespace=namespace)
                     self.logger.info(f"[MEMORY] memory_write_implicit key={key} value={value}")
                     # Natural acknowledgment based on key type
                     if key == "user.name":
@@ -1717,6 +1717,7 @@ class ArgoPipeline:
         convo_context = self._conversation_buffer.as_context_block() if use_convo_buffer else ""
         prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, memory_context, convo_context)
         self.logger.info(f"[LLM] Prompt: '{text}'")
+        self.logger.debug(f"[LLM] Full prompt (first 500 chars): {prompt[:500]}")
         full_response = ""
         try:
             model_name = "qwen:latest"
@@ -1726,7 +1727,16 @@ class ArgoPipeline:
             self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
             start = time.perf_counter()
             first_token_ms = None
-            stream = client.generate(model=model_name, prompt=prompt, stream=True)
+            # Add options to prevent caching and encourage personality variation
+            stream = client.generate(
+                model=model_name, 
+                prompt=prompt, 
+                stream=True,
+                options={
+                    "temperature": 0.7,  # Some variability
+                    "num_predict": 256,  # Reasonable limit
+                }
+            )
             for chunk in stream:
                 if self.stop_signal.is_set():
                     break

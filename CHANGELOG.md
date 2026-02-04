@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.6.17 — Memory Fix + LLM Temperature (2026-02-04)
+
+### Fixed
+- **"My name is Tommy" now works**: Fixed `set_memory` → `add_memory` method call
+- **Implicit memory writes**: Personal statements now save correctly to database
+
+### Changed
+- LLM generate now uses `temperature=0.7` to encourage personality variation
+- Added `num_predict=256` to prevent overly long responses
+- Added debug logging for full prompt (first 500 chars)
+
+---
+
 ## v1.6.15 — Personality Actually Works Now (2026-02-03)
 
 ### Fixed
