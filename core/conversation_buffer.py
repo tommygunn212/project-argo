@@ -38,7 +38,8 @@ class ConversationBuffer:
     """
     
     # Phase 5 hard limit: max turns for session continuity
-    SESSION_TURN_LIMIT = 3
+    # Raised from 3 to 6 to allow natural follow-up questions
+    SESSION_TURN_LIMIT = 6
     
     def __init__(self, max_turns: int = 8, enabled: bool = True):
         self.max_turns = max(1, int(max_turns))

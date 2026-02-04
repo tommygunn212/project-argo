@@ -74,6 +74,11 @@ from system_health import (
 from system_profile import get_system_profile, get_gpu_profile
 from core.personality import format_response as personality_format_response, get_personality_state
 
+# Persona module - text transformers gated by response type
+from personas import ResponseType, apply_persona, PERSONA_REGISTRY
+# Import all persona modules to register them
+from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, plain
+
 # ============================================================================
 # 2) PIPELINE ORCHESTRATOR
 # ============================================================================
@@ -732,8 +737,9 @@ class ArgoPipeline:
         else:
             response = self._get_clarification_prompt(intent, candidates)
         
-        # FIX 2: All responses must pass through Phase 4 (Personality Transform)
-        response = personality_format_response(response, intent_type=IntentType.QUESTION)
+        # Apply persona formatting - CLARIFICATION type enforces neutral persona
+        persona_name = self._resolve_personality_mode()
+        response = apply_persona(response, ResponseType.CLARIFICATION, persona_name)
         
         self.logger.info(f"[CLARIFY] {response}")
         self.broadcast("log", f"Argo: {response}")
@@ -2832,7 +2838,12 @@ class ArgoPipeline:
         deterministic: bool = True,
         stt_conf: float | None = None,
         intent_type: str | None = None,
+        response_type: ResponseType = ResponseType.SYSTEM,
     ) -> bool:
+        # Apply persona formatting based on response type
+        persona_name = self._resolve_personality_mode()
+        message = apply_persona(message, response_type, persona_name)
+        
         # Log when TTS is allowed despite low STT confidence for deterministic commands
         if deterministic and stt_conf is not None and stt_conf < self._personal_mode_min_confidence:
             self.logger.info(
@@ -4484,11 +4495,9 @@ class ArgoPipeline:
         ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
         ai_text = self._strip_disallowed_phrases(ai_text)
         
-        # Phase 4: Apply personality transform (pure text shaping, no content changes)
-        if intent:
-            ai_text = personality_format_response(ai_text, intent_type=intent.intent_type)
-        else:
-            ai_text = personality_format_response(ai_text, intent_type=IntentType.QUESTION)
+        # Apply persona formatting for ANSWER type responses
+        persona_name = self._resolve_personality_mode()
+        ai_text = apply_persona(ai_text, ResponseType.ANSWER, persona_name)
         
         if not ai_text.strip():
             self.logger.warning("[LLM] Empty response")
