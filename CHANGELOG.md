@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.6.15 — Personality Actually Works Now (2026-02-03)
+
+### Fixed
+- **Personality state sync**: Phase 4 formatter now uses same profile as LLM prompt
+- **Example-driven prompts**: Added concrete example responses for each personality
+  - Rick now actually burps and says "Morty"
+  - JARVIS now actually says "sir" and sounds British
+  - Claptrap now actually yells and says "minion"
+- **Default changed**: `mild` → `tommy_gunn` as default personality
+
+### Technical
+- `_resolve_personality_mode()` now calls `get_personality_state().set_profile(mode)`
+- Persona prompts use example responses (more effective for local LLMs)
+
+---
+
 ## v1.6.14 — Personality Selector (2026-02-03)
 
 ### Added
