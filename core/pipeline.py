@@ -732,6 +732,9 @@ class ArgoPipeline:
         else:
             response = self._get_clarification_prompt(intent, candidates)
         
+        # FIX 2: All responses must pass through Phase 4 (Personality Transform)
+        response = personality_format_response(response, intent_type=IntentType.QUESTION)
+        
         self.logger.info(f"[CLARIFY] {response}")
         self.broadcast("log", f"Argo: {response}")
         self._append_convo_ledger("argo", response)
@@ -1891,7 +1894,11 @@ class ArgoPipeline:
             )
         convo_block = ""
         if convo_context:
-            convo_block = f"{convo_context}\n"
+            convo_block = (
+                "Previous conversation:\n"
+                f"{convo_context}\n\n"
+                "Current question:\n"
+            )
         if serious_mode:
             persona = (
                 "You are ARGO in SERIOUS_MODE.\n"

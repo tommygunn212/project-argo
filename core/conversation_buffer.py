@@ -93,7 +93,8 @@ class ConversationBuffer:
             return ""
         if not self._turns:
             return ""
-        lines: List[str] = ["Conversation context (RAM-only):"]
+        # Output verbatim turns - no header, no compression
+        lines: List[str] = []
         for turn in self._turns:
             lines.append(f"{turn.role}: {turn.content}")
         return "\n".join(lines)

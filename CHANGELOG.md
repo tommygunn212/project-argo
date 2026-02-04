@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.13 — Session Context Injection + Phase 4 for Guards (2026-02-03)
+
+### Fixed
+- **FIX 1: Buffered context now properly injected into LLM prompt**
+  - Previous: convo_context was appended but not structured
+  - Now: Clear `Previous conversation:` / `Current question:` format
+  - LLM sees full turns verbatim, no summarization
+  
+- **FIX 2: Clarification responses now pass through Phase 4**
+  - All guard responses (low confidence, non-propositional, turn-limit) go through `personality_format_response`
+  - Prevents forbidden phrases from reaching TTS
+
+### Changed
+- `as_context_block()` returns raw turns without header (header now in prompt builder)
+- `_respond_with_clarification()` applies Phase 4 transform before TTS
+
+---
+
 ## v1.6.12 — Session Context Always-On for Questions (2026-02-03)
 
 ### Changed
