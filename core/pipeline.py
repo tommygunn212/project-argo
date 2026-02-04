@@ -4390,7 +4390,15 @@ class ArgoPipeline:
             else:
                 # Check for pronouns/references that need conversation context
                 lower_text = (user_text or "").lower()
-                pronoun_refs = {" it ", " it?", " it.", " its ", " they ", " them ", " that ", " this ", " those ", " these ", "does it", "is it", "was it", "has it", "about it", "many does", "much does"}
+                # Include possessive pronouns (their, its) and demonstratives
+                pronoun_refs = {
+                    " it ", " it?", " it.", " its ", " their ", " theirs ",
+                    " they ", " them ", " that ", " this ", " those ", " these ",
+                    " he ", " she ", " him ", " her ", " his ", " hers ",
+                    "does it", "is it", "was it", "has it", "about it",
+                    "about them", "about their", "about those",
+                    "many does", "much does",
+                }
                 if any(ref in f" {lower_text} " or lower_text.endswith(ref.strip()) for ref in pronoun_refs):
                     llm_context_scope = "buffered"
                     self.logger.info("[LLM] Pronoun reference detected, using conversation buffer")

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.6.11 — Session Context Pronoun Fix (2026-02-03)
+
+### Fixed
+- **"Tell me about their feet" now uses session context**: Possessive pronouns (`their`, `theirs`, `his`, `hers`) now trigger buffered context mode
+- **Follow-up questions work**: Session memory is correctly passed to LLM when pronoun references are detected
+- **Expanded pronoun detection**: Added `he`, `she`, `him`, `her`, `his`, `hers`, `their`, `theirs`, `about them`, `about their`, `about those`
+
+### Root Cause
+- Pronoun detection list was missing possessive pronouns like "their"
+- `context_scope=isolated` was being used instead of `context_scope=buffered` for follow-up questions
+
+---
+
 ## v1.6.10 — Phase 5: Bounded Session Continuity (2026-02-03)
 
 ### Added
