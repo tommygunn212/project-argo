@@ -10,11 +10,18 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - Whisper STT integration
 - Ollama LLM (neural network) for response generation
 - Piper TTS for audio output
+- **OpenAI Cloud STT** (`gpt-4o-mini-transcribe`) — fast cloud transcription with prompt support
+- **OpenAI Cloud TTS** (`gpt-4o-mini-tts`) — low-latency streaming synthesis with 13 voices and `instructions` parameter
+- **Multi-engine STT switching**: OpenAI Cloud, Azure, Faster Whisper, OpenAI Whisper — selectable at runtime
+- **Multi-engine TTS switching**: OpenAI TTS, Edge TTS, Azure Neural — selectable at runtime
+- **Frontend V2** (`/v2`): Full-featured cyberpunk UI with 6 tabs (Dashboard, Chat, Voice, Home, Tools, System)
+- **14 gate tuning sliders**: Real-time adjustment of VAD, barge-in, confidence, token, and verbosity gates
+- **Engine configuration panel**: Switch STT/TTS engine, model, and voice from the UI
 - Deterministic system health and hardware queries
 - Local music index and deterministic music resolution
 - OpenRGB lighting control (optional)
 - State machine enforcement for all transitions
-- Barge-in and audio ownership logic
+- Barge-in and audio ownership logic (overhauled — both engines, buffer clearing, suppression guards)
 - Timeline event capture for replay/debug
 - Structured session and memory management
 - Canonical law and 5 Gates enforcement

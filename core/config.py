@@ -89,23 +89,23 @@ class PersonalityProfile:
 PERSONALITY_TOMMY_GUNN = PersonalityProfile(
     name="tommy_gunn",
     tone="sharp",
-    verbosity=2,
+    verbosity=4,
     humor_level=2,
-    max_sentences=4,
+    max_sentences=10,
     allowed_interjections=["look", "well", "here's the thing"],
     forbidden_patterns=["as an AI", "I cannot", "I'm unable", "I apologize"],
-    no_follow_up_questions=True,
+    no_follow_up_questions=False,
 )
 
 PERSONALITY_JARVIS = PersonalityProfile(
     name="jarvis",
     tone="calm",
-    verbosity=2,
+    verbosity=4,
     humor_level=1,
-    max_sentences=3,
+    max_sentences=8,
     allowed_interjections=["sir", "indeed", "certainly"],
     forbidden_patterns=["as an AI", "I cannot", "I'm unable"],
-    no_follow_up_questions=True,
+    no_follow_up_questions=False,
 )
 
 PERSONALITY_RICK = PersonalityProfile(
@@ -134,12 +134,12 @@ PERSONALITY_CLAPTRAP = PersonalityProfile(
 PERSONALITY_TOMMY_MIX = PersonalityProfile(
     name="tommy_mix",
     tone="sharp_chaos",  # Rick's edge with JARVIS polish
-    verbosity=3,
+    verbosity=4,
     humor_level=2,
-    max_sentences=4,
+    max_sentences=10,
     allowed_interjections=["look", "sir", "check this out", "okay so"],
     forbidden_patterns=["as an AI", "I cannot", "I'm unable", "I apologize"],
-    no_follow_up_questions=True,
+    no_follow_up_questions=False,
 )
 
 PERSONALITY_PLAIN = PersonalityProfile(

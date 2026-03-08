@@ -189,6 +189,9 @@ class ArgoPipeline:
             "sage": "sage",
             "coral": "coral",
             "ballad": "ballad",
+            "verse": "verse",
+            "marin": "marin",
+            "cedar": "cedar",
         }
         self.current_voice_key = "ryan"
         self._tts_engine = "edge"  # "edge" or "openai"
@@ -557,7 +560,6 @@ class ArgoPipeline:
 
                 if llm_backend == "openai":
                     # Quick validation — no warmup needed for cloud
-                    import os
                     if not os.environ.get("OPENAI_API_KEY"):
                         self.logger.warning("[LLM] OPENAI_API_KEY not set — LLM calls will fail")
                     else:
@@ -641,16 +643,23 @@ class ArgoPipeline:
         self.transition_state("LISTENING", source="ui")
 
     def stop_tts(self) -> None:
-        """Force stop Edge TTS playback if active."""
+        """Force stop TTS playback (both Edge and OpenAI engines)."""
         try:
             if self._edge_tts is not None:
                 self._edge_tts.stop_sync()
+        except Exception:
+            pass
+        try:
+            if self._openai_tts is not None:
+                self._openai_tts.stop()
         except Exception:
             pass
 
     def is_barge_in_suppressed(self) -> bool:
         """Check if barge-in is temporarily suppressed (for short deterministic responses)."""
         try:
+            if self._tts_engine == "openai" and self._openai_tts is not None:
+                return self._openai_tts.is_interrupt_suppressed()
             if self._edge_tts is not None and hasattr(self._edge_tts, "is_interrupt_suppressed"):
                 return self._edge_tts.is_interrupt_suppressed()
         except Exception:
@@ -1940,11 +1949,11 @@ class ArgoPipeline:
                 stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role": "system", "content": "You are ARGO, Tommy's personal voice assistant. Respond concisely and conversationally. Use memory context when relevant."},
+                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant — like Jarvis but with your own personality. Have real conversations. Give full, thoughtful answers. Build on what Tommy says, offer your perspective, and keep the dialogue flowing naturally. Use memory context when relevant."},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
-                    max_tokens=256,
+                    max_tokens=1024,
                     stream=True,
                 )
                 for chunk in stream:
@@ -1969,7 +1978,7 @@ class ArgoPipeline:
                     stream=True,
                     options={
                         "temperature": 0.7,
-                        "num_predict": 256,
+                        "num_predict": 1024,
                     }
                 )
                 for chunk in stream:
@@ -2051,11 +2060,11 @@ class ArgoPipeline:
                             stream2 = openai_client2.chat.completions.create(
                                 model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
                                 messages=[
-                                    {"role": "system", "content": "You are ARGO, Tommy's personal voice assistant. Respond concisely."},
+                                    {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Give clear, structured answers."},
                                     {"role": "user", "content": retry_prompt},
                                 ],
                                 temperature=0.7,
-                                max_tokens=256,
+                                max_tokens=1024,
                                 stream=True,
                             )
                             for chunk2 in stream2:
@@ -2180,14 +2189,14 @@ class ArgoPipeline:
             )
         elif mode == "tommy_gunn":
             persona = (
-                "You are ARGO in TOMMY GUNN MODE. You are having a conversation, not answering a test.\n"
+                "You are ARGO in TOMMY GUNN MODE. You are having a real conversation, not answering a quiz.\n"
                 "Tone: sharp, well-read adult. Dry and observational. Calm confidence.\n"
-                "When user shares an idea, engage with it. Build on it or offer alternatives.\n"
-                "Use phrases like: 'That's not far off, but...', 'Interesting angle. What about...', 'I see where you're going.'\n"
-                "End with a thought that invites response, not a conclusion that closes it.\n"
-                "Humor: one dry jab max, grounded. No stacked metaphors.\n"
-                "No greetings. No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
-                "If you lack context, say 'I don't have context for that.' Never speculate.\n"
+                "Give full, thoughtful answers — explain things properly like you would to a smart friend.\n"
+                "When user shares an idea, engage with it. Build on it, offer alternatives, share perspective.\n"
+                "Keep the dialogue flowing — end with a thought or question that invites response.\n"
+                "Humor: dry wit is welcome, keep it grounded.\n"
+                "No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
+                "If you lack context, say so. Never speculate.\n"
             )
         elif mode == "jarvis":
             persona = (
@@ -4079,7 +4088,18 @@ class ArgoPipeline:
                 if self._openai_tts is None:
                     from core.openai_tts import OpenAIRealtimeTTS
                     voice = self.openai_voices.get(self.current_voice_key, "nova")
-                    self._openai_tts = OpenAIRealtimeTTS(voice=voice, model="tts-1")
+                    tts_model = "tts-1"
+                    try:
+                        tts_model = self._config.get("text_to_speech", {}).get("model", "tts-1")
+                    except Exception:
+                        pass
+                    self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                if self._pending_barge_in_suppression:
+                    try:
+                        self._openai_tts.suppress_interrupt(self._pending_barge_in_suppression)
+                    except Exception:
+                        pass
+                    self._pending_barge_in_suppression = None
                 self._openai_tts.speak(text)
             else:
                 # Edge TTS (original)

@@ -79,7 +79,7 @@
             const [vadStats, setVadStats] = useState(Array(30).fill({ value: 0 }));
             const [userText, setUserText] = useState('Waiting for speech...');
             const [aiText, setAiText] = useState('Waiting for generation...');
-            const [currentVoice, setCurrentVoice] = useState('ryan');
+            const [currentVoice, setCurrentVoice] = useState('nova');
             const [activeSolutions, setActiveSolutions] = useState([]);
             
             // Text input state
@@ -441,10 +441,27 @@
                                 onChange={(e) => changeVoice(e.target.value)}
                                 className="bg-slate-800 text-slate-200 text-xs font-semibold rounded px-3 py-2 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
-                                <option value="ryan">Ryan (GB) — en-GB-RyanNeural</option>
-                                <option value="libby">Libby (GB) — en-GB-LibbyNeural</option>
-                                <option value="natasha">Natasha (AU) — en-AU-NatashaNeural</option>
-                                <option value="abeo">Abeo (NG) — en-NG-AbeoNeural</option>
+                                <optgroup label="OpenAI Voices">
+                                    <option value="nova">Nova — Warm, conversational</option>
+                                    <option value="alloy">Alloy — Balanced, neutral</option>
+                                    <option value="ash">Ash — Soft, clear</option>
+                                    <option value="ballad">Ballad — Expressive, dramatic</option>
+                                    <option value="cedar">Cedar — Warm, natural (recommended)</option>
+                                    <option value="coral">Coral — Warm, friendly</option>
+                                    <option value="echo">Echo — Smooth, resonant</option>
+                                    <option value="fable">Fable — Storytelling, dynamic</option>
+                                    <option value="marin">Marin — Clear, refined (recommended)</option>
+                                    <option value="onyx">Onyx — Deep, authoritative</option>
+                                    <option value="sage">Sage — Calm, knowledgeable</option>
+                                    <option value="shimmer">Shimmer — Bright, energetic</option>
+                                    <option value="verse">Verse — Versatile, expressive</option>
+                                </optgroup>
+                                <optgroup label="Edge TTS Voices">
+                                    <option value="ryan">Ryan (GB) — en-GB-RyanNeural</option>
+                                    <option value="libby">Libby (GB) — en-GB-LibbyNeural</option>
+                                    <option value="natasha">Natasha (AU) — en-AU-NatashaNeural</option>
+                                    <option value="abeo">Abeo (NG) — en-NG-AbeoNeural</option>
+                                </optgroup>
                             </select>
                         </div>
 

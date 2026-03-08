@@ -169,7 +169,7 @@ class STTEngineManager:
             raise
 
     def _load_openai_cloud(self):
-        """Load OpenAI Cloud Whisper API engine."""
+        """Load OpenAI Cloud transcription API engine."""
         try:
             from core.openai_stt import OpenAIWhisperSTT
         except ImportError:
@@ -178,19 +178,26 @@ class STTEngineManager:
                 "Ensure core/openai_stt.py exists and openai is installed."
             )
 
-        self.logger.info("[STT_ENGINE] Loading OpenAI Cloud Whisper API...")
+        # Use configured model_size as the API model name
+        # Valid: gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1
+        model_name = self.model_size if self.model_size in (
+            "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"
+        ) else "gpt-4o-mini-transcribe"
+
+        self.logger.info(f"[STT_ENGINE] Loading OpenAI Cloud API (model={model_name})...")
 
         try:
             self.model = OpenAIWhisperSTT(
-                model="whisper-1",
+                model=model_name,
                 language="en",
+                prompt="ARGO, Tommy, Home Assistant, Jellyfin",
             )
             self.logger.info(
-                "[STT_ENGINE] OpenAI Cloud Whisper loaded successfully "
-                "(engine=openai_cloud, model=whisper-1)"
+                f"[STT_ENGINE] OpenAI Cloud STT loaded successfully "
+                f"(engine=openai_cloud, model={model_name})"
             )
         except Exception as e:
-            self.logger.error(f"[STT_ENGINE] Failed to load OpenAI Cloud Whisper: {e}")
+            self.logger.error(f"[STT_ENGINE] Failed to load OpenAI Cloud STT: {e}")
             raise
 
     def _normalize_segments(self, raw_segments) -> list:

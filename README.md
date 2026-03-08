@@ -1,17 +1,20 @@
 # ARGO — Local Voice AI (VAD-Only)
 
-**ARGO** is a fully local, always-listening voice assistant with a first‑class UI debugger. It runs entirely on your machine and streams live status + logs to the dashboard.
+**ARGO** is a fully local, always-listening voice assistant with a first‑class UI debugger and a comprehensive control surface. It runs entirely on your machine and streams live status + logs to the dashboard.
 
 **Key points**
 - **Wake word removed by design** — ARGO is VAD‑only (always listening).
-- **UI debugger is required** — it is the primary visibility surface.
-- **Local‑first** — no cloud dependencies for speech or TTS.
+- **Dual UI surfaces** — original debugger (`/`) and full-featured Frontend V2 (`/v2`).
+- **Multi-engine STT** — OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime.
+- **Multi-engine TTS** — OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime.
+- **14 gate tuning sliders** — adjust VAD, barge-in, confidence, tokens, and verbosity in real time.
 - **Deterministic system facts** — system health/specs never call the LLM.
-- **Natural language flexibility** — supports colloquial phrasing for core commands (e.g., "how's my computer doing", "close the browser", "give me 5 numbers").
+- **Natural language flexibility** — supports colloquial phrasing for core commands.
 - **Self-diagnostics** — ARGO can check its own health and propose fixes.
 - **Security hardened** — localhost-only, no exposed secrets.
 
-**Web UI:** http://localhost:8000  
+**Web UI (Classic):** http://localhost:8000  
+**Web UI (V2):** http://localhost:8000/v2  
 **WebSocket:** ws://localhost:8001/ws
 
 **Version:** see [core/version.py](core/version.py)
@@ -33,13 +36,13 @@
 
 ```
 Audio → VAD → STT → LLM → TTS
-              ↘︎ WebSocket (live status + logs) → UI Debugger
+              ↘︎ WebSocket (live status + logs) → UI (v1 + v2)
 ```
 
 - Audio frames are continuously monitored by **VAD**.
-- Detected speech is transcribed with **Whisper** (STT).
-- Prompts are sent to **Ollama** (LLM).
-- Responses are synthesized with **Piper** (TTS).
+- Detected speech is transcribed by **STT** (OpenAI Cloud, Faster Whisper, or Azure).
+- Prompts are sent to **GPT-4o-mini** (LLM) with streaming.
+- Responses are synthesized by **TTS** (OpenAI, Edge, or Azure Neural).
 - The UI receives **live logs + status** over WebSocket.
 
 ---
@@ -177,6 +180,21 @@ Highlights:
 - All servers bound to localhost (no network exposure)
 - Secrets moved to environment variables
 - Requirements pinned for reproducible builds
+
+---
+
+## Milestone: Frontend V2, Engine Upgrades & Barge-In Overhaul (Mar 2026)
+
+**Why:** Give ARGO a production-quality control surface with runtime engine switching and reliable interrupt handling.
+
+Highlights:
+- Frontend V2 at `/v2` — 6-tab cyberpunk UI with full WebSocket integration
+- 14 gate tuning sliders for real-time audio/STT/response adjustment
+- STT/TTS engine switching: choose engine, model, and voice at runtime
+- STT upgraded to `gpt-4o-mini-transcribe`, TTS to `gpt-4o-mini-tts`
+- 13 OpenAI TTS voices (including verse, marin, cedar)
+- Barge-in overhaul: multi-engine stop, suppression guards, buffer clearing
+- Response quality: max_tokens 1024, max_sentences 10, rewritten system prompt
 
 ---
 

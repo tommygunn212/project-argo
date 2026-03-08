@@ -167,6 +167,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 content = (Path(__file__).parent / 'index.html').read_bytes()
             self.wfile.write(content)
+        elif self.path == '/v2' or self.path == '/v2/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            content = (Path(__file__).parent / 'frontend-v2' / 'index.html').read_bytes()
+            self.wfile.write(content)
         else:
             self.send_response(404)
             self.end_headers()
@@ -414,6 +420,11 @@ def _handle_text_input(payload: dict | str):
         try:
             pipeline_ref.stop_signal.set()
             pipeline_ref.stop_tts()
+            if audio_ref is not None:
+                audio_ref.force_release_audio("TEXT_BARGE_IN", interaction_id=getattr(pipeline_ref, 'current_interaction_id', ''))
+                audio_ref.stop_playback()
+                audio_ref.clear_buffers()
+            pipeline_ref.is_speaking = False
         except Exception as e:
             logger.warning(f"[TEXT_INPUT] Barge-in error: {e}")
     
@@ -723,6 +734,11 @@ def main_loop():
             audio.stop_playback() # Kill audio immediately
             try:
                 pipeline.stop_tts()
+            except Exception:
+                pass
+            # Flush input buffers to discard any TTS echo bleed-through
+            try:
+                audio.clear_buffers()
             except Exception:
                 pass
             pipeline.is_speaking = False

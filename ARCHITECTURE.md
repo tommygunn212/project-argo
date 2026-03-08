@@ -2,15 +2,51 @@
 
 ## Current Runtime Summary (Mar 2026)
 
-The current runtime is **VAD-only** and runs from main.py with the UI debugger as the primary control surface.
+The current runtime is **VAD-only** and runs from main.py with dual UI surfaces.
 
 - Always-listening VAD pipeline (no wake word)
-- Whisper STT, Ollama LLM, Piper TTS
+- **Multi-engine STT**: OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime
+- **Multi-engine TTS**: OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime
+- OpenAI GPT-4o-mini LLM with streaming responses
+- **Frontend V1** (`/`): Original UI debugger
+- **Frontend V2** (`/v2`): Full-featured cyberpunk UI with 6 tabs, gate tuning, and engine switching
 - Deterministic system health + hardware queries (no LLM)
 - Local music index (data/music_index.json) with deterministic resolution
 - Optional OpenRGB lighting control via command executor
 - Self-diagnostics and assisted recovery (Phase 1 & 2)
 - Security-hardened: localhost-only binding, no exposed secrets
+
+### Frontend V2 Architecture
+
+Frontend V2 is a single-file HTML/CSS/JS application served at `/v2`. It communicates with the backend over the same WebSocket (`ws://localhost:8001/ws`).
+
+**6 Tabs:**
+1. **Dashboard** — State orb, latency chart, audio waveform, recent logs
+2. **Chat** — Conversation view with text input and barge-in
+3. **Voice** — Engine switching (STT/TTS engine, model, voice), 14 gate tuning sliders, personality picker
+4. **Home** — Home Assistant quick commands and entity status
+5. **Tools** — 12 tool launch cards (music, lighting, diagnostics, etc.)
+6. **System** — Diagnostics, recovery proposals, system log, runtime overrides
+
+**Gate Tuning Sliders (3 groups, 14 total):**
+- Audio Input: VAD Threshold, Barge-in Threshold, Min RMS, Silence Timeout, VAD Silence Pad, Min Speech Duration
+- Speech Recognition: TTS Min Confidence, Silence Ratio Gate, Personal Mode Confidence, Memory Min Confidence
+- Response Output: Max Tokens, Max Sentences, Verbosity, Temperature
+
+**Engine Switching:**
+- STT Engine → STT Model (context-sensitive optgroups per engine)
+- TTS Engine → TTS Voice (context-sensitive groups) + TTS Model (for OpenAI)
+- Active Pipeline display shows full STT→LLM→TTS combination
+
+### Barge-In Architecture (v1.7.0)
+
+Barge-in detection and handling was overhauled to support multiple TTS engines:
+
+1. **Detection**: VAD detects speech while TTS is active (threshold configurable via slider)
+2. **Stop**: `stop_tts()` checks which engine is active and stops the correct one
+3. **Suppression**: `suppress_interrupt()` / `is_interrupt_suppressed()` prevent false barge-ins during initial playback
+4. **Cleanup**: `audio.clear_buffers()` flushes residual audio after stop
+5. **State Reset**: Force audio ownership release → state machine → LISTENING
 
 Note: Several sections below describe legacy wake-word and Edge-TTS/LiveKit designs kept for historical reference.
 

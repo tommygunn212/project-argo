@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.7.0 — Frontend V2, OpenAI Engine Upgrades & Barge-In Overhaul (2026-03-08)
+
+### Added
+- **Frontend V2 (`/v2`)**: Complete new single-page UI with 6 tabs (Dashboard, Chat, Voice, Home, Tools, System)
+  - Sci-fi/cyberpunk dark theme with animated state orb and latency visualization
+  - Conversation interface with text input and barge-in support
+  - 14 gate tuning sliders in 3 groups: Audio Input (6), Speech Recognition (4), Response Output (4)
+  - Reset All to Defaults button with amber/red color coding when values drift from defaults
+  - Full STT/TTS engine switching: select engine, model, and voice at runtime
+  - STT engines: OpenAI Cloud, Azure, Faster Whisper, OpenAI Whisper
+  - TTS engines: OpenAI TTS (13 voices), Edge TTS, Azure Neural
+  - TTS models: gpt-4o-mini-tts, tts-1, tts-1-hd
+  - Active Pipeline display showing full STT→LLM→TTS combo
+  - Personality picker, waveform canvas, HA quick commands, 12 tool launch cards
+  - Diagnostics, recovery, system log, and runtime overrides display
+  - WebSocket integration handling 13+ event types
+- **3 new OpenAI TTS voices**: verse, marin, cedar (total: 13 voices)
+- **`/v2` HTTP route** in main.py FrontendHandler
+
+### Changed
+- **STT upgraded to `gpt-4o-mini-transcribe`**: Faster, cheaper cloud STT with prompt support
+- **TTS upgraded to `gpt-4o-mini-tts`**: Lower-latency cloud TTS with `instructions` parameter
+- **OpenAI TTS streaming rewritten**: True streaming with 100ms initial buffer and 10ms polling loop for responsive barge-in
+- **Barge-in overhaul** (10 fixes):
+  - `stop_tts()` now handles both Edge TTS and OpenAI TTS engines
+  - `suppress_interrupt()` / `is_interrupt_suppressed()` guards added
+  - `audio.clear_buffers()` called after every barge-in
+  - Text barge-in performs full cleanup (stop TTS + force release + stop playback + clear buffers)
+- **Response quality improved**: max_tokens 256→1024, max_sentences 4→10, follow-up questions enabled
+- **System prompt rewritten** for more natural, conversational responses
+- **Persona profiles loosened**: tommy_gunn verbosity=4, max_sentences=8–10
+- **STT engine manager** now reads configured model name (no longer hardcoded to whisper-1)
+- **Frontend v1 voice dropdown** updated with all 13 OpenAI + 4 Edge voices
+
+### Fixed
+- **Self-hearing barge-in loop**: Raised barge_in_threshold to 3.0
+- **Shadowed `os` import** at line 560 in main.py
+- **Double-docstring syntax error** in openai_stt.py
+- **Test assertion** in test_stt_engine_manager.py (engine count 2→3)
+
+---
+
 ## v1.6.25 — Self-Diagnostics + Security Hardening (2026-03-07)
 
 ### Added

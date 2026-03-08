@@ -18,12 +18,13 @@ from unittest.mock import patch, MagicMock
 
 
 def test_stt_engine_manager_supported_engines():
-    """Engine manager knows only two supported engines."""
+    """Engine manager knows supported engines including openai_cloud."""
     from core.stt_engine_manager import STTEngineManager
     
     assert "openai" in STTEngineManager.SUPPORTED_ENGINES
     assert "faster" in STTEngineManager.SUPPORTED_ENGINES
-    assert len(STTEngineManager.SUPPORTED_ENGINES) == 2
+    assert "openai_cloud" in STTEngineManager.SUPPORTED_ENGINES
+    assert len(STTEngineManager.SUPPORTED_ENGINES) == 3
     assert STTEngineManager.DEFAULT_ENGINE == "openai"
 
 

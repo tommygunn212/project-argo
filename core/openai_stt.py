@@ -1,8 +1,12 @@
-"""
-OpenAI Whisper API — Cloud STT Engine for ARGO (Personal Edition)
+"""OpenAI Cloud STT Engine for ARGO (Personal Edition)
 
-Uses OpenAI's Whisper API endpoint for fast, high-quality transcription.
-Trades local-only principle for dramatically lower latency and better accuracy.
+Uses OpenAI's transcription API (gpt-4o-mini-transcribe or whisper-1)
+for fast, high-quality speech-to-text.
+
+Models:
+  gpt-4o-mini-transcribe — faster, cheaper, supports streaming
+  gpt-4o-transcribe — highest quality
+  whisper-1 — legacy (verbose_json, timestamps, translations)
 
 Requires: OPENAI_API_KEY environment variable
 """
@@ -18,11 +22,15 @@ logger = logging.getLogger("OPENAI_STT")
 
 
 class OpenAIWhisperSTT:
-    """Cloud-based STT using OpenAI's Whisper API."""
+    """Cloud-based STT using OpenAI's transcription API."""
 
-    def __init__(self, model: str = "whisper-1", language: str = "en"):
+    # Models that use the newer GPT-4o transcribe path
+    GPT4O_MODELS = {"gpt-4o-transcribe", "gpt-4o-mini-transcribe"}
+
+    def __init__(self, model: str = "gpt-4o-mini-transcribe", language: str = "en", prompt: str = ""):
         self.model = model
         self.language = language
+        self.prompt = prompt
         self._client = None
         self._init_client()
 
@@ -80,22 +88,32 @@ class OpenAIWhisperSTT:
         audio_file.name = "audio.wav"
 
         try:
-            # Use verbose_json for segment-level detail
-            response = self._client.audio.transcriptions.create(
-                model=self.model,
-                file=audio_file,
-                language=language,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
+            # Build API call params based on model type
+            api_params = {
+                "model": self.model,
+                "file": audio_file,
+                "language": language,
+            }
+
+            if self.model in self.GPT4O_MODELS:
+                # gpt-4o-transcribe models support json or text, and prompt
+                api_params["response_format"] = "json"
+                if self.prompt:
+                    api_params["prompt"] = self.prompt
+            else:
+                # whisper-1 supports verbose_json with timestamps
+                api_params["response_format"] = "verbose_json"
+                api_params["timestamp_granularities"] = ["segment"]
+
+            response = self._client.audio.transcriptions.create(**api_params)
 
             duration_ms = (time.perf_counter() - start) * 1000
 
             text = response.text.strip() if response.text else ""
 
-            # Extract segments if available
+            # Extract segments if available (whisper-1 only)
             segments = []
-            confidence = 0.95  # OpenAI Whisper API doesn't return logprobs; high baseline
+            confidence = 0.95  # Default high confidence for cloud models
             if hasattr(response, "segments") and response.segments:
                 for seg in response.segments:
                     segments.append({
