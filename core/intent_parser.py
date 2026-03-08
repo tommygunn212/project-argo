@@ -676,6 +676,16 @@ class IntentType(Enum):
     KNOWLEDGE_PHYSICS = "knowledge_physics"
     KNOWLEDGE_FINANCE = "knowledge_finance"
     KNOWLEDGE_TIME_SYSTEM = "knowledge_time_system"
+    # Writing & productivity intents
+    WRITE_EMAIL = "write_email"
+    WRITE_BLOG = "write_blog"
+    WRITE_NOTE = "write_note"
+    EDIT_DRAFT = "edit_draft"
+    LIST_DRAFTS = "list_drafts"
+    READ_DRAFT = "read_draft"
+    SEND_EMAIL = "send_email"
+    SEARCH_DOCS = "search_docs"
+    EXPORT_DATA = "export_data"
 
 
 # ============================================================================
@@ -1168,7 +1178,9 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.05: SYSTEM_HEALTH temperature queries (hard deterministic)
-        if detect_temperature_query(text_lower):
+        # Guard: skip if text is clearly about writing/email/blog (e.g., "photo" contains "hot")
+        _writing_guard = re.search(r"\b(email|e-mail|mail|blog|draft|note|memo|compose|article)\b", text_lower)
+        if not _writing_guard and detect_temperature_query(text_lower):
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
@@ -1178,7 +1190,9 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.06: SYSTEM_HEALTH disk queries (hard deterministic)
-        if detect_disk_query(text_lower):
+        # Guard: skip if text is clearly about writing/email/blog (e.g., "photo drives" in email context)
+        _writing_guard = re.search(r"\b(email|e-mail|mail|blog|draft|note|memo|compose|article)\b", text_lower)
+        if not _writing_guard and detect_disk_query(text_lower):
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
@@ -1435,6 +1449,93 @@ class RuleBasedIntentParser(IntentParser):
                 subintent=subintent,
             )
 
+        # ── Writing & Productivity intents (BEFORE system health / hardware) ──
+
+        # SEND_EMAIL: "send that email", "send the email", "send the last email"
+        if re.search(r"\bsend\b.*\b(email|mail|draft)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.SEND_EMAIL,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # WRITE_EMAIL: "write an email to…", "draft an email…", "email Paul about…"
+        if re.search(r"\b(write|draft|compose|create)\b.*\b(email|e-mail|mail)\b", text_lower) or \
+           re.search(r"^email\s+\w+", text_lower):
+            return Intent(
+                intent_type=IntentType.WRITE_EMAIL,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # WRITE_BLOG: "write a blog post about…", "draft a blog…"
+        if re.search(r"\b(write|draft|compose|create)\b.*\b(blog|article|post)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.WRITE_BLOG,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # WRITE_NOTE: "take a note", "save a note", "note that…", "jot down…"
+        if re.search(r"\b(take|save|make|jot|write)\b.*\b(note|memo)\b", text_lower) or \
+           re.search(r"^note\s+that\b", text_lower) or \
+           re.search(r"\bjot\s+(this\s+)?down\b", text_lower):
+            return Intent(
+                intent_type=IntentType.WRITE_NOTE,
+                confidence=0.95,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # EDIT_DRAFT: "edit the draft", "make it shorter", "revise the email"
+        if re.search(r"\b(edit|revise|rewrite|rework|shorten|lengthen|fix)\b.*\b(draft|email|blog|note|post)\b", text_lower) or \
+           re.search(r"\bmake\s+(it|the\s+\w+)\s+(shorter|longer|funnier|more\s+\w+|less\s+\w+|formal|casual|professional)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.EDIT_DRAFT,
+                confidence=0.95,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # LIST_DRAFTS: "list my drafts", "show drafts", "what drafts do I have"
+        if re.search(r"\b(list|show|what)\b.*\b(draft|drafts)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.LIST_DRAFTS,
+                confidence=0.95,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # READ_DRAFT: "read my last draft", "read the draft", "open the draft"
+        if re.search(r"\b(read|open)\b.*\b(last|latest|recent)?\s*(draft)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.READ_DRAFT,
+                confidence=0.94,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # SEARCH_DOCS: "search my documents", "find the email about…", "search drafts for…"
+        if re.search(r"\b(search|find|look\s+for|look\s+up)\b.*\b(documents?|drafts?|emails?|blogs?|notes?|files?|writings?)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.SEARCH_DOCS,
+                confidence=0.94,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # EXPORT_DATA: "export to spreadsheet", "create a spreadsheet", "export my facts"
+        if re.search(r"\b(export|spreadsheet|csv)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.EXPORT_DATA,
+                confidence=0.94,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
         # Rule 0.09: SYSTEM_STATUS (full telemetry)
         if any(phrase in text_lower for phrase in FULL_SYSTEM_PHRASES):
             return Intent(
@@ -1586,8 +1687,6 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text_original,
                 serious_mode=serious_mode,
             )
-
-
 
         # --- PRIORITY: Specific knowledge domains over generic question ---
         # Physics (robust pattern)

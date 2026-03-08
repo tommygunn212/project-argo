@@ -64,6 +64,13 @@ from core.conversation_buffer import ConversationBuffer
 from core.brain import get_brain
 from core.registries import is_capability_enabled, is_permission_allowed, is_module_enabled
 from core.runtime_constants import GATES_ORDER, Gate
+from tools.writing import (
+    draft_email, draft_blog, save_note, get_latest_draft, list_drafts,
+    search_drafts, update_draft, export_brain_facts_to_csv, export_drafts_to_csv,
+    parse_email_request, parse_blog_request, parse_edit_instruction, parse_spreadsheet_request,
+    build_email_prompt, build_blog_prompt, build_edit_prompt, build_note_expansion_prompt,
+)
+from tools.email_sender import send_email, send_draft, is_email_configured
 from system_health import (
     get_system_health,
     get_memory_info,
@@ -3085,6 +3092,259 @@ class ArgoPipeline:
         self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
         return True
 
+    # ── Writing & Productivity Handlers ───────────────────────────────
+
+    def _writing_llm_call(self, prompt: str, interaction_id: str) -> str:
+        """Quick LLM generation for writing tasks (emails, blogs, edits)."""
+        try:
+            return self.generate_response(
+                prompt,
+                interaction_id=interaction_id,
+                use_convo_buffer=False,
+            )
+        except Exception as e:
+            self.logger.error(f"[WRITING] LLM call failed: {e}")
+            return ""
+
+    def _respond_with_write_email(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Draft an email using LLM and voice input."""
+        self.logger.info(f"[WRITING] Write email: {user_text}")
+        parsed = parse_email_request(user_text)
+        to_name = parsed.get("to", "")
+        subject = parsed.get("subject", "")
+
+        if not subject:
+            subject = user_text  # fallback to full text as subject hint
+
+        prompt = build_email_prompt(to_name=to_name or "someone", subject=subject)
+        self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
+        body = self._writing_llm_call(prompt, interaction_id)
+        if not body.strip():
+            return self._deliver_canonical_response(
+                "I couldn't generate the email. Try again?",
+                interaction_id, replay_mode, overrides,
+            )
+
+        draft = draft_email(
+            to=to_name or "TBD",
+            subject=subject,
+            body=body.strip(),
+        )
+        response = f"Email draft saved. Subject: {subject}."
+        if to_name:
+            response = f"Email to {to_name} drafted. Subject: {subject}."
+        response += f" {draft.word_count} words. Say 'read the draft' to hear it, or 'send the email' when ready."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_write_blog(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Draft a blog post using LLM."""
+        self.logger.info(f"[WRITING] Write blog: {user_text}")
+        parsed = parse_blog_request(user_text)
+        title = parsed.get("title", "")
+        if not title:
+            title = user_text
+
+        prompt = build_blog_prompt(title=title)
+        self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
+        body = self._writing_llm_call(prompt, interaction_id)
+        if not body.strip():
+            return self._deliver_canonical_response(
+                "I couldn't generate the blog post. Try again?",
+                interaction_id, replay_mode, overrides,
+            )
+
+        draft = draft_blog(title=title, body=body.strip())
+        response = f"Blog post drafted: {title}. {draft.word_count} words. Say 'read the draft' to hear it, or 'edit the blog' to revise."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_write_note(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Save a quick voice note."""
+        self.logger.info(f"[WRITING] Save note: {user_text}")
+        # Strip the trigger words to get the note content
+        import re as _re
+        content = _re.sub(
+            r"^(take\s+a\s+note|save\s+a\s+note|make\s+a\s+note|note\s+that|jot\s+(this\s+)?down)\s*[:\-]?\s*",
+            "", user_text, flags=_re.IGNORECASE,
+        ).strip()
+        if not content:
+            content = user_text
+
+        draft = save_note(content)
+        response = f"Note saved. {draft.word_count} words."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_edit_draft(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Edit the most recent draft using LLM."""
+        self.logger.info(f"[WRITING] Edit draft: {user_text}")
+        parsed = parse_edit_instruction(user_text)
+        category = parsed.get("category") or None
+        instruction = parsed.get("instruction", user_text)
+
+        draft = get_latest_draft(category=category)
+        if not draft:
+            return self._deliver_canonical_response(
+                "No drafts found to edit. Write something first!",
+                interaction_id, replay_mode, overrides,
+            )
+
+        prompt = build_edit_prompt(draft.content, instruction)
+        self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
+        new_content = self._writing_llm_call(prompt, interaction_id)
+        if not new_content.strip():
+            return self._deliver_canonical_response(
+                "I couldn't apply that edit. Try again?",
+                interaction_id, replay_mode, overrides,
+            )
+
+        update_draft(draft, new_content.strip())
+        response = f"Draft updated. Now {draft.word_count} words. Say 'read the draft' to hear changes."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_list_drafts(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """List recent drafts."""
+        self.logger.info(f"[WRITING] List drafts: {user_text}")
+        import re as _re
+        category = None
+        if _re.search(r"\bemail", user_text, _re.IGNORECASE):
+            category = "email"
+        elif _re.search(r"\bblog", user_text, _re.IGNORECASE):
+            category = "blog"
+        elif _re.search(r"\bnote", user_text, _re.IGNORECASE):
+            category = "note"
+
+        drafts = list_drafts(category=category, limit=5)
+        if not drafts:
+            cat_label = f"{category} " if category else ""
+            return self._deliver_canonical_response(
+                f"No {cat_label}drafts found.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        lines = []
+        for i, d in enumerate(drafts, 1):
+            lines.append(f"{i}. {d.category}: {d.name}, {d.word_count} words")
+        response = f"You have {len(drafts)} recent drafts. " + ". ".join(lines) + "."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_read_draft(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Read back the most recent draft."""
+        self.logger.info(f"[WRITING] Read draft: {user_text}")
+        import re as _re
+        category = None
+        if _re.search(r"\bemail", user_text, _re.IGNORECASE):
+            category = "email"
+        elif _re.search(r"\bblog", user_text, _re.IGNORECASE):
+            category = "blog"
+        elif _re.search(r"\bnote", user_text, _re.IGNORECASE):
+            category = "note"
+
+        draft = get_latest_draft(category=category)
+        if not draft:
+            return self._deliver_canonical_response(
+                "No drafts to read.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        # Truncate for TTS (long documents shouldn't be fully read aloud)
+        content = draft.content
+        words = content.split()
+        if len(words) > 150:
+            content = " ".join(words[:150]) + "... That's the first 150 words. The full draft is saved."
+
+        response = f"Here's your latest {draft.category} draft: {content}"
+        return self._deliver_canonical_response(
+            response, interaction_id, replay_mode, overrides,
+            enforce_confidence=False,
+            suppress_barge_in_seconds=2.0,
+        )
+
+    def _respond_with_send_email(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Send the most recent email draft."""
+        self.logger.info(f"[WRITING] Send email: {user_text}")
+        if not is_email_configured():
+            return self._deliver_canonical_response(
+                "Email sending isn't configured yet. Add your email settings to config dot json first.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        draft = get_latest_draft(category="email")
+        if not draft:
+            return self._deliver_canonical_response(
+                "No email draft to send. Write an email first.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        # Parse out the To field from the draft
+        to_address = ""
+        for line in draft.content.split("\n"):
+            if line.startswith("To:"):
+                to_address = line[3:].strip()
+                break
+
+        if not to_address or "@" not in to_address:
+            return self._deliver_canonical_response(
+                f"The email draft is addressed to '{to_address}' but I need a full email address to send it. "
+                f"Update the draft with the recipient's email address.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        success = send_draft(str(draft.path), to_address)
+        if success:
+            response = f"Email sent to {to_address} successfully."
+        else:
+            response = "Email sending failed. Check the logs for details."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_search_docs(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Search across drafts and documents."""
+        self.logger.info(f"[WRITING] Search docs: {user_text}")
+        import re as _re
+        # Extract the search query (remove trigger words)
+        query = _re.sub(
+            r"^(search|find|look\s+for|look\s+up)\s+(my\s+)?(documents?|drafts?|emails?|blogs?|notes?|files?|writings?)\s*(for|about|on)?\s*",
+            "", user_text, flags=_re.IGNORECASE,
+        ).strip()
+        if not query:
+            query = user_text
+
+        results = search_drafts(query, limit=5)
+        if not results:
+            return self._deliver_canonical_response(
+                f"No documents found matching '{query}'.",
+                interaction_id, replay_mode, overrides,
+            )
+
+        lines = []
+        for i, d in enumerate(results, 1):
+            lines.append(f"{i}. {d.category}: {d.name}")
+        response = f"Found {len(results)} matches for '{query}'. " + ". ".join(lines) + "."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_export_data(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Export data to CSV spreadsheet."""
+        self.logger.info(f"[WRITING] Export data: {user_text}")
+        parsed = parse_spreadsheet_request(user_text)
+        source = parsed.get("data_source", "brain_facts")
+
+        try:
+            if source == "brain_facts":
+                path = export_brain_facts_to_csv()
+                response = f"Brain facts exported to spreadsheet: {path.name}."
+            elif source == "drafts":
+                path = export_drafts_to_csv()
+                response = f"Draft list exported to spreadsheet: {path.name}."
+            elif source == "notes":
+                path = export_drafts_to_csv(category="note")
+                response = f"Notes exported to spreadsheet: {path.name}."
+            else:
+                path = export_brain_facts_to_csv()
+                response = f"Data exported to spreadsheet: {path.name}."
+        except Exception as e:
+            self.logger.error(f"[WRITING] Export failed: {e}")
+            response = "Export failed. Check the logs for details."
+
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
     def _respond_with_system_health(self, user_text, intent, interaction_id, replay_mode, overrides) -> bool:
         """Answer system health questions without invoking the LLM."""
 
@@ -4682,6 +4942,43 @@ class ArgoPipeline:
             if self._respond_with_self_diagnostics(interaction_id, replay_mode, overrides):
                 return
 
+        # ── Writing & Productivity ────────────────────────────────────
+        if intent and intent.intent_type == IntentType.WRITE_EMAIL:
+            if self._respond_with_write_email(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.WRITE_BLOG:
+            if self._respond_with_write_blog(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.WRITE_NOTE:
+            if self._respond_with_write_note(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.EDIT_DRAFT:
+            if self._respond_with_edit_draft(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.LIST_DRAFTS:
+            if self._respond_with_list_drafts(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.READ_DRAFT:
+            if self._respond_with_read_draft(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.SEND_EMAIL:
+            if self._respond_with_send_email(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.SEARCH_DOCS:
+            if self._respond_with_search_docs(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.EXPORT_DATA:
+            if self._respond_with_export_data(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
         if intent and intent.intent_type == IntentType.SYSTEM_INFO:
             allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
             if not allowed:
@@ -4771,6 +5068,16 @@ class ArgoPipeline:
             IntentType.WORLD_TIME,
             IntentType.ARGO_IDENTITY,
             IntentType.ARGO_GOVERNANCE,
+            # Writing & productivity
+            IntentType.WRITE_EMAIL,
+            IntentType.WRITE_BLOG,
+            IntentType.WRITE_NOTE,
+            IntentType.EDIT_DRAFT,
+            IntentType.LIST_DRAFTS,
+            IntentType.READ_DRAFT,
+            IntentType.SEND_EMAIL,
+            IntentType.SEARCH_DOCS,
+            IntentType.EXPORT_DATA,
         }
         if intent and intent.intent_type in restricted_llm_intents:
             leak_messages = {
@@ -4795,6 +5102,15 @@ class ArgoPipeline:
                 IntentType.WORLD_TIME: "World time is handled locally. Ask again.",
                 IntentType.ARGO_IDENTITY: "Identity answers are deterministic. Ask again if needed.",
                 IntentType.ARGO_GOVERNANCE: "Governance answers are deterministic. Ask again if needed.",
+                IntentType.WRITE_EMAIL: "Email drafting failed to route. Say it again.",
+                IntentType.WRITE_BLOG: "Blog writing failed to route. Say it again.",
+                IntentType.WRITE_NOTE: "Note saving failed to route. Say it again.",
+                IntentType.EDIT_DRAFT: "Draft editing failed to route. Say it again.",
+                IntentType.LIST_DRAFTS: "Draft listing failed to route. Say it again.",
+                IntentType.READ_DRAFT: "Draft reading failed to route. Say it again.",
+                IntentType.SEND_EMAIL: "Email sending failed to route. Say it again.",
+                IntentType.SEARCH_DOCS: "Document search failed to route. Say it again.",
+                IntentType.EXPORT_DATA: "Export failed to route. Say it again.",
             }
             leak_msg = leak_messages.get(intent.intent_type, "Routing error. Please repeat the request.")
             safe_text = safe_utterance or (user_text or "")
