@@ -440,8 +440,8 @@ class ArgoPipeline:
             self.stt_model_name = f"{stt_model_size}"
             self.stt_engine = stt_engine
             
-            # Warmup the engine
-            self.stt_engine_manager.warmup(duration_s=1.0)
+            # Skip warmup to avoid native crash in threaded context
+            # self.stt_engine_manager.warmup(duration_s=1.0)
             self.logger.info(
                 f"[STT] STT engine ready (engine={stt_engine}, "
                 f"model={stt_model_size}, device={stt_device})"
@@ -3064,6 +3064,79 @@ class ArgoPipeline:
         )
         return _finish(self._format_system_health(health))
 
+    def _respond_with_self_diagnostics(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
+        """Phase 1 & 2: ARGO checks itself and reports status.
+        
+        Runs diagnostics on all components (Ollama, Piper, Whisper, audio).
+        If problems found, proposes assisted recovery (requires user permission).
+        """
+        from core.self_diagnostics import SystemDiagnostics, AssistedRecovery
+        
+        def _finish(message: str) -> bool:
+            return self._deliver_canonical_response(
+                message,
+                interaction_id,
+                replay_mode,
+                overrides,
+                enforce_confidence=False,
+                force_tts=True,
+            )
+        
+        try:
+            diag = SystemDiagnostics()
+            diag.check_all()
+            summary = diag.get_summary()
+            
+            # Broadcast full results to UI
+            self.broadcast("diagnostics_result", summary)
+            
+            # Build spoken response
+            overall = summary.get("overall", "unknown")
+            if overall == "ok":
+                response = f"All systems operational. {summary.get('ok_count', 0)} components checked, all healthy."
+            elif overall == "warning":
+                warnings = summary.get("warnings", [])
+                if warnings:
+                    warn_names = ", ".join(w["name"] for w in warnings[:3])
+                    response = f"Systems mostly okay. Warnings on: {warn_names}."
+                else:
+                    response = "Systems okay with minor warnings."
+            elif overall == "error":
+                errors = summary.get("errors", [])
+                if errors:
+                    # Report first error with fix
+                    first_error = errors[0]
+                    err_name = first_error.get("name", "component")
+                    err_msg = first_error.get("message", "has an issue")
+                    err_fix = first_error.get("fix", "")
+                    
+                    response = f"Problem detected: {err_name} {err_msg}."
+                    if err_fix:
+                        response += f" Suggested fix: {err_fix}."
+                    
+                    # Propose recovery if available
+                    for comp_name, comp_health in diag.last_check.items():
+                        if comp_health.status.value == "error" and comp_health.recovery_action:
+                            recovery = AssistedRecovery(pipeline=self, broadcast_fn=self.broadcast)
+                            proposal = recovery.propose(
+                                comp_health.recovery_action,
+                                comp_health.message
+                            )
+                            if proposal:
+                                response += f" Want me to try restarting {err_name}?"
+                            break
+                else:
+                    response = "There's a problem but I couldn't identify it."
+            else:
+                response = "Diagnostics complete but status unclear."
+            
+            self.logger.info(f"[SELF_DIAGNOSTICS] {overall}: {summary.get('summary', '')}")
+            return _finish(response)
+            
+        except Exception as e:
+            self.logger.error(f"[SELF_DIAGNOSTICS] Failed: {e}", exc_info=True)
+            return _finish("I tried to check myself but something went wrong.")
+
     # SILENCE_OVERRIDE joke pool (fixed set, no dynamic generation)
     SILENCE_JOKES = [
         "Fine! I'll go polish my transistors.",
@@ -4386,6 +4459,11 @@ class ArgoPipeline:
 
         if intent and intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_STATUS}:
             if self._respond_with_system_health(user_text, intent, interaction_id, replay_mode, overrides):
+                return
+
+        # Phase 1 & 2: Self-diagnostics - ARGO checks itself
+        if intent and intent.intent_type == IntentType.SELF_DIAGNOSTICS:
+            if self._respond_with_self_diagnostics(interaction_id, replay_mode, overrides):
                 return
 
         if intent and intent.intent_type == IntentType.SYSTEM_INFO:

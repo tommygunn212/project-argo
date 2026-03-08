@@ -129,14 +129,8 @@ def get_system_profile():
         irqs = None
         try:
             if _IRQ_PROFILE is None:
-                irq_list = []
-                for irq in c.Win32_IRQResource():
-                    irq_list.append({
-                        "irq": getattr(irq, "IRQNumber", None),
-                        "name": getattr(irq, "Name", None),
-                        "description": getattr(irq, "Description", None),
-                    })
-                _IRQ_PROFILE = irq_list
+                # Skip IRQ profiling - it can hang on some systems
+                _IRQ_PROFILE = []
             irqs = _IRQ_PROFILE
         except Exception:
             irqs = None

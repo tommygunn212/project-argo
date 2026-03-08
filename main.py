@@ -50,6 +50,7 @@ from core.pipeline import ArgoPipeline
 from core.startup_checks import check_ollama
 from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
+from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.instrumentation import log_event
 from system_profile import get_system_profile, get_gpu_profile
 from core.version import CURRENT_VERSION, CURRENT_MILESTONE
@@ -74,6 +75,10 @@ audio_ref = None
 LISTENING_ENABLED = False
 SERVER_ENABLED = True
 main_loop_thread = None
+
+# Self-diagnostics and assisted recovery (Phase 1 & 2)
+diagnostics_ref = None
+recovery_ref = None
 
 # ============================================================================
 # 5) LOGGING
@@ -222,6 +227,10 @@ async def websocket_handler(websocket):
                 t.start()
             if msg_type == "text_input" and pipeline_ref and payload:
                 _handle_text_input(payload)
+            if msg_type == "run_diagnostics":
+                await _handle_diagnostics(websocket)
+            if msg_type == "recovery_response" and payload:
+                await _handle_recovery_response(payload)
             if msg_type == "control" and payload:
                 _handle_control(payload)
             if msg_type == "override" and payload:
@@ -449,6 +458,96 @@ def _handle_text_input(payload: dict | str):
     t.start()
 
 
+# ============================================================================
+# PHASE 1 & 2: Self-Diagnostics and Assisted Recovery
+# ============================================================================
+
+async def _handle_diagnostics(websocket):
+    """Run diagnostics and send results to requesting client.
+    
+    Phase 1: Detect and explain problems.
+    """
+    global diagnostics_ref
+    
+    try:
+        if diagnostics_ref is None:
+            diagnostics_ref = SystemDiagnostics()
+        
+        # Run all health checks
+        diagnostics_ref.check_all()
+        summary = diagnostics_ref.get_summary()
+        
+        # Send results to UI
+        await websocket.send(json.dumps({
+            "type": "diagnostics_result",
+            "payload": summary
+        }))
+        
+        # Log for visibility
+        log_event(f"DIAGNOSTICS: {summary['summary']}", stage="diagnostics")
+        
+        # If there are errors with recovery actions, propose them
+        if recovery_ref and summary.get("errors"):
+            for error in summary["errors"]:
+                if "recovery_action" in diagnostics_ref.last_check.get(error["name"], {}).__dict__:
+                    action = diagnostics_ref.last_check[error["name"]].recovery_action
+                    if action:
+                        recovery_ref.propose(action, error["message"])
+        
+    except Exception as e:
+        logger.error(f"Diagnostics failed: {e}", exc_info=True)
+        await websocket.send(json.dumps({
+            "type": "diagnostics_result",
+            "payload": {"overall": "error", "summary": f"Diagnostics failed: {e}"}
+        }))
+
+
+async def _handle_recovery_response(payload: dict):
+    """Handle user's response to a recovery proposal.
+    
+    Phase 2: Execute recovery ONLY if user approved.
+    
+    Payload:
+      {"action_id": "restart_ollama", "approved": true}
+    """
+    global recovery_ref
+    
+    if not recovery_ref:
+        logger.warning("[RECOVERY] No recovery manager initialized")
+        return
+    
+    action_id = payload.get("action_id")
+    approved = payload.get("approved", False)
+    
+    if not action_id:
+        logger.warning("[RECOVERY] No action_id in response")
+        return
+    
+    log_event(f"RECOVERY_RESPONSE: {action_id} = {'APPROVED' if approved else 'DECLINED'}", stage="recovery")
+    
+    # Execute only if approved
+    result = await recovery_ref.execute_if_approved(action_id, approved)
+    
+    # Broadcast result
+    broadcast_msg("recovery_result", {
+        "action_id": action_id,
+        "approved": approved,
+        "result": result
+    })
+
+
+def _init_recovery_system():
+    """Initialize assisted recovery system with pipeline reference."""
+    global recovery_ref, diagnostics_ref
+    
+    diagnostics_ref = SystemDiagnostics()
+    recovery_ref = AssistedRecovery(
+        pipeline=pipeline_ref,
+        broadcast_fn=broadcast_msg
+    )
+    logger.info("[RECOVERY] Assisted recovery system initialized")
+
+
 def _start_main_loop_thread():
     global main_loop_thread, SERVER_ENABLED
     if main_loop_thread and main_loop_thread.is_alive():
@@ -464,8 +563,12 @@ async def start_server():
     logger.info("UI Server running on ws://localhost:8001/ws")
     while True:
         try:
-            async with websockets.serve(websocket_handler, "localhost", 8001) as server:
+            async with websockets.serve(websocket_handler, "127.0.0.1", 8001) as server:
+                logger.info("WebSocket server started, waiting for connections...")
                 await asyncio.Future()
+        except asyncio.CancelledError:
+            logger.info("WebSocket server cancelled")
+            raise
         except Exception as e:
             logger.error(f"WebSocket server error: {e}", exc_info=True)
             await asyncio.sleep(1)
@@ -489,6 +592,9 @@ def main_loop():
     pipeline_ref = pipeline
     global audio_ref
     audio_ref = audio
+    
+    # Initialize assisted recovery system (Phase 1 & 2)
+    _init_recovery_system()
     
     try:
         audio.start()
@@ -519,9 +625,11 @@ def main_loop():
         return
     
     # --- VAD SETTINGS ---
-    # Lower threshold = Easier to interrupt / easier to trigger
-    vad_threshold = 3.0
-    barge_in_threshold = float(os.getenv("ARGO_BARGE_IN_THRESHOLD", "4.0"))
+    # Higher threshold = Less sensitive to background noise
+    # Lower threshold = Easier to trigger (more false positives)
+    # Default: 5.0, Quiet room: 3.0, Noisy environment: 7.0-10.0
+    vad_threshold = float(config.get("audio.vad_threshold", os.getenv("ARGO_VAD_THRESHOLD", "5.0")))
+    barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
     
     if LISTENING_ENABLED:
         logger.info("Starting in always-listening mode (VAD-based)")
@@ -686,15 +794,29 @@ def main_loop():
                     audio.clear_buffers()
 
 if __name__ == "__main__":
+    # Pre-load whisper model BEFORE any async/threading to avoid native crashes
+    logger.info("Pre-loading Whisper model...")
+    try:
+        import whisper
+        _preloaded_whisper = whisper.load_model("small")
+        logger.info("Whisper model pre-loaded successfully")
+    except Exception as e:
+        logger.warning(f"Whisper pre-load failed: {e}")
+        _preloaded_whisper = None
+    
     _start_main_loop_thread()
     
     from http.server import HTTPServer
-    server = HTTPServer(('localhost', 8000), FrontendHandler)
+    server = HTTPServer(('127.0.0.1', 8000), FrontendHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    logger.info("Frontend HTTP server running on http://localhost:8000")
+    logger.info("Frontend HTTP server running on http://127.0.0.1:8000")
     
     try:
         asyncio.run(start_server())
     except KeyboardInterrupt:
-        pass
+        logger.info("Shutdown requested via keyboard interrupt")
+    except Exception as e:
+        logger.error(f"Asyncio loop exited with error: {e}", exc_info=True)
+    finally:
+        logger.info("Main thread exiting")

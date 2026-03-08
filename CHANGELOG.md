@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.6.25 — Self-Diagnostics + Security Hardening (2026-03-07)
+
+### Added
+- **Self-diagnostics system (Phase 1 & 2)**: ARGO can check its own components
+  - New `core/self_diagnostics.py` module with `SystemDiagnostics` and `AssistedRecovery`
+  - Intent detection for "run diagnostics", "check yourself", "health check", etc.
+  - Pipeline handler `_respond_with_self_diagnostics()` — spoken status report
+  - WebSocket `run_diagnostics` / `recovery_response` message types
+  - Recovery proposals require explicit user approval (no autonomous actions)
+- **Frontend diagnostics panel (v2.8)**: Run diagnostics button, status display, recovery prompts
+- **SECURITY_AUDIT.md**: Full home-use security review with findings and fixes
+- **docs/SELF_HEALING_ROADMAP.md**: Vision document for self-repairing ARGO
+
+### Security
+- **Network binding hardened**: WebSocket and HTTP servers now bind to `127.0.0.1` instead of `0.0.0.0`
+- **Vite dev servers hardened**: Monitor apps bound to `127.0.0.1`
+- **LiveKit secrets moved to env vars**: No more hardcoded API keys in source
+- **SQL injection prevention**: `check_db.py` now uses a table name whitelist
+- **Porcupine key removed from repo**: Added to `.gitignore`, deleted from tree
+- **ARGO_SLIM_CONTEXT.txt removed**: Large context dump removed from repo
+
+### Fixed
+- **STT warmup crash**: Skipped `stt_engine_manager.warmup()` to avoid native crash in threaded context
+- **IRQ profiling hang**: Disabled `Win32_IRQResource` enumeration (hangs on some systems)
+- **Unicode encoding errors**: Removed debug `print()` statements with emoji from `intent_parser.py`
+
+### Changed
+- **Requirements pinned**: All dependencies changed from `>=` to `==` for reproducible installs
+- **Frontend WebSocket**: Now connects to `window.location.hostname` instead of hardcoded `localhost`
+- **Frontend cache headers**: Added `no-cache` meta tags to prevent stale UI
+
+---
+
 ## v1.6.24 — Frontend Text Input (2026-02-04)
 
 ### Added

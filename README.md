@@ -8,6 +8,8 @@
 - **Local‑first** — no cloud dependencies for speech or TTS.
 - **Deterministic system facts** — system health/specs never call the LLM.
 - **Natural language flexibility** — supports colloquial phrasing for core commands (e.g., "how's my computer doing", "close the browser", "give me 5 numbers").
+- **Self-diagnostics** — ARGO can check its own health and propose fixes.
+- **Security hardened** — localhost-only, no exposed secrets.
 
 **Web UI:** http://localhost:8000  
 **WebSocket:** ws://localhost:8001/ws
@@ -161,6 +163,20 @@ Highlights:
 - Music playback preempts safely and resolves with stricter matching
 - Local music index available for fast playback without Jellyfin
 - OpenRGB lighting control supported via deterministic commands
+
+---
+
+## Milestone: Self-Diagnostics + Security Hardening (Mar 2026)
+
+**Why:** ARGO should know when its own subsystems are failing and be able to help fix them — and do it securely.
+
+Highlights:
+- Self-diagnostics module checks Ollama, Piper, Whisper, and audio health
+- Assisted recovery proposes fixes and executes only with user approval
+- Frontend diagnostics panel with recovery prompts
+- All servers bound to localhost (no network exposure)
+- Secrets moved to environment variables
+- Requirements pinned for reproducible builds
 
 ---
 

@@ -27,6 +27,28 @@
 
 ---
 
+## ✅ Milestone: Self-Diagnostics + Security Hardening (v1.6.25 — 2026-03-07)
+
+**Goal:** Enable ARGO to detect its own component failures, propose recovery actions with user approval, and harden security for home-network use.
+
+### Completed
+- [✔] Self-diagnostics module (`core/self_diagnostics.py`) — Phase 1 detect & explain
+- [✔] Assisted recovery system — Phase 2 propose & execute with user permission
+- [✔] Intent detection for diagnostics phrases (24 natural-language triggers)
+- [✔] Pipeline handler for spoken diagnostics report
+- [✔] WebSocket diagnostics and recovery message types
+- [✔] Frontend diagnostics panel (v2.8) with recovery prompts
+- [✔] Network binding hardened to 127.0.0.1 (WebSocket, HTTP, Vite)
+- [✔] LiveKit secrets moved to environment variables
+- [✔] SQL injection prevention in check_db.py
+- [✔] Porcupine key and ARGO_SLIM_CONTEXT removed from repo
+- [✔] STT warmup crash fix (threaded context)
+- [✔] IRQ profiling hang fix
+- [✔] Requirements pinned to exact versions
+- [✔] Security audit documented (SECURITY_AUDIT.md)
+
+---
+
 ## Upcoming
 
 [ ] Mode Discipline

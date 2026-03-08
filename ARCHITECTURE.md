@@ -1,6 +1,6 @@
 # ARGO Architecture
 
-## Current Runtime Summary (Jan 2026)
+## Current Runtime Summary (Mar 2026)
 
 The current runtime is **VAD-only** and runs from main.py with the UI debugger as the primary control surface.
 
@@ -9,6 +9,8 @@ The current runtime is **VAD-only** and runs from main.py with the UI debugger a
 - Deterministic system health + hardware queries (no LLM)
 - Local music index (data/music_index.json) with deterministic resolution
 - Optional OpenRGB lighting control via command executor
+- Self-diagnostics and assisted recovery (Phase 1 & 2)
+- Security-hardened: localhost-only binding, no exposed secrets
 
 Note: Several sections below describe legacy wake-word and Edge-TTS/LiveKit designs kept for historical reference.
 
@@ -52,6 +54,9 @@ ARGO is a 7-layer voice system designed for predictability, debuggability, and c
 - **System health & disk queries** are deterministic and never routed to the LLM.
 - **Local music index** supports deterministic resolution without Jellyfin.
 - **Lighting control** is supported via OpenRGB command execution.
+- **Self-diagnostics** (`core/self_diagnostics.py`) checks Ollama, Piper, Whisper, and audio health on demand.
+- **Assisted recovery** proposes fixes (e.g., restart Ollama) and executes only with user approval.
+- **Security hardening** — all servers bind to `127.0.0.1`, no secrets in source, SQL injection prevention.
 
 ### v1.6.1 Additions: Canonical Command Short-Circuit
 

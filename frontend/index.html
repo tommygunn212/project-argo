@@ -4,7 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGO Deep Debugger v2.6</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>ARGO Deep Debugger v2.8</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
@@ -83,6 +86,11 @@
             const [textInput, setTextInput] = useState('');
             const [turnInfo, setTurnInfo] = useState({ current: 0, limit: 6 });
             
+            // Phase 1 & 2: Self-diagnostics and assisted recovery
+            const [diagnostics, setDiagnostics] = useState(null);
+            const [recoveryPrompt, setRecoveryPrompt] = useState(null);
+            const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+            
             // New State for Modules & Metrics
             const [health, setHealth] = useState({ stt: 'Initializing...', llm: 'Initializing...', tts: 'Initializing...' });
             const [modelInfo, setModelInfo] = useState({
@@ -129,7 +137,7 @@
 
             const connect = () => {
                 if (ws.current?.readyState === WebSocket.OPEN) return;
-                ws.current = new WebSocket('ws://localhost:8001/ws');
+                ws.current = new WebSocket(`ws://${window.location.hostname}:8001/ws`);
                 ws.current.onopen = () => console.log("Connected");
                 ws.current.onclose = () => setTimeout(connect, 3000);
                 ws.current.onmessage = (e) => {
@@ -278,7 +286,38 @@
                             setHealth({ stt: 'Ready', llm: 'Ready', tts: 'Ready' });
                         }
                     }
+                    // Phase 1 & 2: Self-diagnostics and assisted recovery
+                    else if (data.type === 'diagnostics_result') {
+                        setDiagnostics(data.payload || null);
+                        setDiagnosticsLoading(false);
+                    }
+                    else if (data.type === 'recovery_proposal') {
+                        setRecoveryPrompt(data.payload || null);
+                    }
+                    else if (data.type === 'recovery_result') {
+                        // Clear prompt after result
+                        setRecoveryPrompt(null);
+                        // Refresh diagnostics after recovery attempt
+                        if (data.payload?.status === 'success') {
+                            setTimeout(() => runDiagnostics(), 1000);
+                        }
+                    }
                 };
+            };
+
+            // Run diagnostics function
+            const runDiagnostics = () => {
+                setDiagnosticsLoading(true);
+                ws.current?.send(JSON.stringify({ type: 'run_diagnostics' }));
+            };
+
+            // Respond to recovery proposal
+            const respondToRecovery = (actionId, approved) => {
+                ws.current?.send(JSON.stringify({ 
+                    type: 'recovery_response', 
+                    payload: { action_id: actionId, approved } 
+                }));
+                if (!approved) setRecoveryPrompt(null);
             };
 
             const changeVoice = (v) => {
@@ -449,10 +488,74 @@
 
                     {/* Recovery Controls */}
                     <div className="flex gap-2">
+                        <button onClick={runDiagnostics} disabled={diagnosticsLoading} className={`px-3 py-2 rounded text-xs font-bold ${diagnosticsLoading ? 'bg-slate-700 text-slate-400' : 'bg-cyan-700 text-white hover:bg-cyan-600'}`}>
+                            {diagnosticsLoading ? '⏳ RUNNING...' : '🔍 RUN DIAGNOSTICS'}
+                        </button>
                         <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'RESET_INTERACTION' } }))} className="px-3 py-2 rounded text-xs font-bold bg-amber-700 text-white">RESET INTERACTION</button>
                         <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'FORCE_RELEASE_AUDIO' } }))} className="px-3 py-2 rounded text-xs font-bold bg-amber-900 text-white">FORCE RELEASE AUDIO</button>
                         <button onClick={() => ws.current?.send(JSON.stringify({ type: 'control', payload: { command: 'FULL_RESET' } }))} className="px-3 py-2 rounded text-xs font-bold bg-red-700 text-white">FULL RESET</button>
                     </div>
+
+                    {/* Diagnostics Results */}
+                    {diagnostics && (
+                        <div className={`p-3 rounded-xl text-xs border ${
+                            diagnostics.overall === 'ok' ? 'bg-emerald-950/30 border-emerald-800 text-emerald-200' :
+                            diagnostics.overall === 'warning' ? 'bg-amber-950/30 border-amber-800 text-amber-200' :
+                            'bg-red-950/30 border-red-800 text-red-200'
+                        }`}>
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="font-bold tracking-wide">
+                                    {diagnostics.overall === 'ok' ? '✅' : diagnostics.overall === 'warning' ? '⚠️' : '❌'} {diagnostics.summary}
+                                </span>
+                                <button onClick={() => setDiagnostics(null)} className="text-slate-400 hover:text-white">✕</button>
+                            </div>
+                            {diagnostics.errors?.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                    {diagnostics.errors.map((e, i) => (
+                                        <div key={i} className="font-mono text-[10px]">
+                                            <span className="text-red-400">{e.name}:</span> {e.message}
+                                            {e.fix && <span className="text-slate-400 ml-2">→ {e.fix}</span>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {diagnostics.warnings?.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                    {diagnostics.warnings.map((w, i) => (
+                                        <div key={i} className="font-mono text-[10px] text-amber-300">
+                                            <span className="text-amber-400">{w.name}:</span> {w.message}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Recovery Prompt (Phase 2: Assisted Recovery) */}
+                    {recoveryPrompt && (
+                        <div className="bg-blue-950/40 border border-blue-700 p-4 rounded-xl text-sm">
+                            <div className="font-bold text-blue-200 mb-2">🔧 Recovery Available</div>
+                            <div className="text-blue-100 mb-1"><strong>Problem:</strong> {recoveryPrompt.problem}</div>
+                            <div className="text-blue-100 mb-1"><strong>Proposed fix:</strong> {recoveryPrompt.proposal}</div>
+                            <div className="text-[10px] text-slate-400 mb-3 font-mono">
+                                Command: {recoveryPrompt.command_preview} | Risk: {recoveryPrompt.risk} | Reversible: {recoveryPrompt.reversible ? 'Yes' : 'No'}
+                            </div>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => respondToRecovery(recoveryPrompt.action_id, true)}
+                                    className="px-4 py-2 rounded bg-green-700 text-white font-bold hover:bg-green-600"
+                                >
+                                    ✅ Yes, do it
+                                </button>
+                                <button 
+                                    onClick={() => respondToRecovery(recoveryPrompt.action_id, false)}
+                                    className="px-4 py-2 rounded bg-slate-700 text-slate-200 font-bold hover:bg-slate-600"
+                                >
+                                    ❌ No, I'll handle it
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Illegal Transition Banner */}
                     {illegalTransition && (

@@ -13,8 +13,7 @@ Does NOT:
 - Call external services (completely local)
 """
 
-print("🔥 REAL INTENT PARSER LOADED 🔥")
-print("🔥 INTENT_PARSER MODULE LOADED 🔥", __file__)
+# Debug prints removed to avoid Unicode encoding issues
 
 # ============================================================================
 # 1) IMPORTS
@@ -96,6 +95,33 @@ FULL_SYSTEM_PHRASES = [
     "anything wrong with my computer",
     "is anything wrong with my system",
     "is anything wrong with my computer",
+]
+
+# ARGO self-check / diagnostics phrases (Phase 1)
+SELF_DIAGNOSTICS_PHRASES = [
+    "run diagnostics",
+    "check yourself",
+    "self check",
+    "self-check",
+    "selfcheck",
+    "are you okay",
+    "are you ok",
+    "are you working",
+    "are you broken",
+    "what's wrong with you",
+    "whats wrong with you",
+    "check your systems",
+    "diagnose yourself",
+    "argo diagnostics",
+    "run self test",
+    "self test",
+    "health check",
+    "check your health",
+    "anything wrong",
+    "is something wrong",
+    "are you having problems",
+    "what's your status",
+    "whats your status",
 ]
 
 BLUETOOTH_STATUS_PHRASES = [
@@ -458,6 +484,12 @@ def detect_system_health(text: str) -> bool:
     return any(p in t for p in SYSTEM_HEALTH_TRIGGERS)
 
 
+def detect_self_diagnostics(text: str) -> bool:
+    """Detect ARGO self-check / diagnostics requests (Phase 1)."""
+    t = text.lower()
+    return any(p in t for p in SELF_DIAGNOSTICS_PHRASES)
+
+
 def detect_hardware_info(text: str) -> bool:
     """Detect hardware identification queries: what CPU/GPU/RAM do I have."""
     t = text.lower()
@@ -623,6 +655,7 @@ class IntentType(Enum):
     SYSTEM_HEALTH = "system_health"
     SYSTEM_STATUS = "system_status"
     SYSTEM_INFO = "system_info"
+    SELF_DIAGNOSTICS = "self_diagnostics"  # ARGO checks itself
     AUDIO_ROUTING_STATUS = "audio_routing_status"
     AUDIO_ROUTING_CONTROL = "audio_routing_control"
     APP_STATUS = "app_status"
@@ -1120,6 +1153,15 @@ class RuleBasedIntentParser(IntentParser):
         ):
             return Intent(
                 intent_type=IntentType.SLEEP,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # Rule 0.045: SELF_DIAGNOSTICS - ARGO checks itself (Phase 1)
+        if detect_self_diagnostics(text_lower):
+            return Intent(
+                intent_type=IntentType.SELF_DIAGNOSTICS,
                 confidence=1.0,
                 raw_text=text_original,
                 serious_mode=serious_mode,

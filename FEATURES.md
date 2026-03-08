@@ -5,7 +5,7 @@
 This document tracks all current and planned features for ARGO, the neural network command diagnostic system. It is canonical and should be referenced for all self-knowledge and deterministic responses about ARGO's capabilities.
 
 
-### Current Features (Jan 2026)
+### Current Features (Mar 2026)
 - Always-listening VAD pipeline
 - Whisper STT integration
 - Ollama LLM (neural network) for response generation
@@ -18,6 +18,11 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - Timeline event capture for replay/debug
 - Structured session and memory management
 - Canonical law and 5 Gates enforcement
+- Frontend text input (bypass STT, type commands directly)
+- Self-diagnostics: ARGO checks its own components (Ollama, Piper, Whisper, audio)
+- Assisted recovery: Proposes fixes and executes only with user approval
+- Security hardened: localhost-only binding, no secrets in source, SQL injection prevention
+- Pinned dependencies for reproducible installs
 
 #### Codebase Statistics (Jan 2026)
 - Approximate total Python lines of code: 3,701,021

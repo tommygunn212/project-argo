@@ -17,6 +17,8 @@ config.json
 .env.local
 .env.*.local
 config.json 2.template.txt
+ARGO_SLIM_CONTEXT.txt
+porcupine_key/
 
 # Runtime / generated state
 runtime/

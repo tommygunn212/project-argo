@@ -14,6 +14,7 @@ Pure transport test.
 
 import asyncio
 import logging
+import os
 import pytest
 
 # Setup logging
@@ -25,9 +26,9 @@ try:
     from livekit import api
 except Exception:
     pytest.skip("livekit API not available", allow_module_level=True)
-LIVEKIT_URL = "ws://localhost:7880"
-LIVEKIT_API_KEY = "devkey"
-LIVEKIT_API_SECRET = "secretsecretsecretsecretsecretsecretsecretsecret"
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 ROOM_NAME = "test_room"
 
 async def main():
