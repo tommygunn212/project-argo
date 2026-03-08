@@ -23,10 +23,13 @@ ARGO is a voice-first AI assistant built to run locally on your machine. This gu
 11. [Smart Home Control](#smart-home-control)
 12. [Reminders](#reminders)
 13. [Calendar](#calendar)
-14. [ARGO Identity & Governance](#argo-identity--governance)
-15. [Self-Diagnostics](#self-diagnostics)
-16. [Audio Routing](#audio-routing)
-17. [Configuration Reference](#configuration-reference)
+14. [Computer Vision](#computer-vision)
+15. [File System Agent](#file-system-agent)
+16. [Task Planner](#task-planner)
+17. [ARGO Identity & Governance](#argo-identity--governance)
+18. [Self-Diagnostics](#self-diagnostics)
+19. [Audio Routing](#audio-routing)
+20. [Configuration Reference](#configuration-reference)
 
 ---
 
@@ -642,6 +645,130 @@ ARGO includes a local calendar system for scheduling events and appointments.
 ### Storage
 
 Calendar events are stored in `data/reminders.db` alongside reminders (same SQLite database, separate table).
+
+---
+
+## Computer Vision
+
+ARGO can see your screen. Using screenshot capture and GPT-4o vision analysis, ARGO reads errors, describes what's on screen, and answers questions about what you're looking at.
+
+### Requirements
+
+- **mss** package: `pip install mss` (screenshot capture)
+- **OpenAI API key** with GPT-4o access (vision analysis)
+
+### Voice Commands
+
+| Voice Command | What Happens |
+|---|---|
+| "What's on my screen?" | Captures screenshot, describes content |
+| "Describe what you see" | Full visual description of screen |
+| "Take a screenshot" | Capture and analyze screen |
+| "Read the error on my screen" | Finds and reads error messages verbatim |
+| "What does this exception mean?" | Reads error and explains with fix suggestions |
+| "How many tabs do I have open?" | Answers specific questions about screen content |
+
+### How It Works
+
+1. ARGO captures your primary monitor using `mss`
+2. Screenshot is base64-encoded and sent to GPT-4o vision API
+3. GPT-4o analyzes the image and returns a concise answer
+4. Answer is spoken via TTS
+
+### Implementation
+
+- Module: `tools/vision.py`
+- Intents: `VISION_DESCRIBE`, `VISION_READ_ERROR`, `VISION_QUESTION`
+- Model: GPT-4o (supports image input natively)
+
+---
+
+## File System Agent
+
+ARGO can search your drives, find files by name or type, locate large files eating disk space, and show recent downloads — all by voice.
+
+### Voice Commands
+
+| Voice Command | What Happens |
+|---|---|
+| "Find my tax documents on D drive" | Searches by name across specified drive |
+| "Search for PDF files" | Searches by file extension |
+| "Locate my photos on E drive" | Searches for image files on a drive |
+| "Find large files on C drive" | Lists files over 100MB (configurable) |
+| "Show me the biggest files" | Finds largest files across drives |
+| "What did I download today?" | Shows recently modified Downloads files |
+| "Latest downloads" | Lists recent downloads |
+| "Recent files this week" | Files modified in last 7 days |
+
+### Supported File Categories
+
+ARGO understands natural language file types:
+
+- **Documents**: PDF, DOC, DOCX, TXT, RTF, MD
+- **Images**: JPG, PNG, GIF, SVG, WEBP, BMP
+- **Videos**: MP4, MKV, AVI, MOV, WMV
+- **Audio**: MP3, WAV, FLAC, AAC, OGG
+- **Spreadsheets**: XLSX, XLS, CSV
+- **Code**: PY, JS, TS, Java, C, CPP, Go, Rust
+- **Archives**: ZIP, RAR, 7Z, TAR, GZ
+
+### Safety
+
+- Scans are read-only — ARGO never moves, deletes, or modifies files
+- Skips system directories (`$Recycle.Bin`, `System Volume Information`, `Windows`)
+- Time-limited scans (15s max) to prevent hanging on large drives
+- Depth-limited traversal (8 levels max)
+
+### Implementation
+
+- Module: `tools/filesystem.py`
+- Intents: `FILE_SEARCH`, `FILE_LARGE`, `FILE_RECENT`, `FILE_INFO`
+
+---
+
+## Task Planner
+
+ARGO can execute multi-step tasks. When you chain actions with "and then" or "and also", ARGO breaks the request into steps and executes them sequentially, passing results between steps.
+
+### Voice Commands
+
+| Voice Command | What Happens |
+|---|---|
+| "Research quantum computing and then email the summary to Sarah" | LLM research → draft email |
+| "Find my PDF files and then remind me to review them tomorrow" | File search → set reminder |
+| "Look at my screen and then email what you see to Sarah" | Screenshot → draft email |
+| "Remind me about the dentist and also schedule it on my calendar" | Set reminder → add calendar event |
+
+### How It Works
+
+1. **Detection**: ARGO detects multi-step requests via connector words ("and then", "and also", "after that") spanning 2+ action domains
+2. **Planning**: Rule-based decomposition for common patterns, LLM-based planning for novel requests
+3. **Execution**: Steps run sequentially; each step's result feeds into the next via `use_previous`
+4. **Reporting**: ARGO summarizes what was completed and what (if anything) failed
+
+### Available Actions
+
+The planner can chain any of ARGO's capabilities:
+
+| Action | Description |
+|---|---|
+| `search_files` | Search for files by name or type |
+| `describe_screen` | Capture and describe screen |
+| `read_screen_error` | Read error messages on screen |
+| `draft_email` | Draft an email |
+| `send_email` | Send an email |
+| `save_note` | Save a note |
+| `set_reminder` | Set a reminder |
+| `add_calendar_event` | Add a calendar event |
+| `smart_home` | Control smart home devices |
+| `llm_generate` | Generate text with the LLM |
+| `summarize` | Summarize text |
+
+### Implementation
+
+- Module: `tools/task_planner.py`
+- Intent: `TASK_PLAN`
+- Planning: Rule-based patterns + LLM fallback (GPT-4o-mini)
 
 ---
 

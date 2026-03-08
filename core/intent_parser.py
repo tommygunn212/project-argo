@@ -696,6 +696,17 @@ class IntentType(Enum):
     CALENDAR_ADD = "calendar_add"
     CALENDAR_QUERY = "calendar_query"
     CANCEL_CALENDAR = "cancel_calendar"
+    # Computer vision intents
+    VISION_DESCRIBE = "vision_describe"
+    VISION_READ_ERROR = "vision_read_error"
+    VISION_QUESTION = "vision_question"
+    # File system intents
+    FILE_SEARCH = "file_search"
+    FILE_LARGE = "file_large"
+    FILE_RECENT = "file_recent"
+    FILE_INFO = "file_info"
+    # Task planner intent
+    TASK_PLAN = "task_plan"
 
 
 # ============================================================================
@@ -1190,7 +1201,8 @@ class RuleBasedIntentParser(IntentParser):
         # Rule 0.05: SYSTEM_HEALTH temperature queries (hard deterministic)
         # Guard: skip if text is clearly about writing/email/blog (e.g., "photo" contains "hot")
         _writing_guard = re.search(r"\b(email|e-mail|mail|blog|draft|note|memo|compose|article)\b", text_lower)
-        if not _writing_guard and detect_temperature_query(text_lower):
+        _vision_fs_guard = re.search(r"\b(screenshot|screen\s*shot|photos?|files?|downloads?|locate|folder)\b", text_lower)
+        if not _writing_guard and not _vision_fs_guard and detect_temperature_query(text_lower):
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
@@ -1200,9 +1212,10 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.06: SYSTEM_HEALTH disk queries (hard deterministic)
-        # Guard: skip if text is clearly about writing/email/blog (e.g., "photo drives" in email context)
+        # Guard: skip if text is clearly about writing/email/blog or filesystem search
         _writing_guard = re.search(r"\b(email|e-mail|mail|blog|draft|note|memo|compose|article)\b", text_lower)
-        if not _writing_guard and detect_disk_query(text_lower):
+        _fs_guard = re.search(r"\b(files?|downloads?|documents?|photos?|images?|videos?|find|search|locate|large|big|biggest)\b", text_lower)
+        if not _writing_guard and not _fs_guard and detect_disk_query(text_lower):
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
@@ -1529,7 +1542,9 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # SEARCH_DOCS: "search my documents", "find the email about…", "search drafts for…"
-        if re.search(r"\b(search|find|look\s+for|look\s+up)\b.*\b(documents?|drafts?|emails?|blogs?|notes?|files?|writings?)\b", text_lower):
+        # Guard: skip if clearly a filesystem query (drive reference, file types, size words)
+        _fs_search_guard = re.search(r"\bon\s+[a-z]\s*drive\b|\b(pdf|xlsx|csv|mp3|mp4|jpg|png|exe|zip)\b|\b(large|big|huge|biggest|largest|recent|latest|downloaded)\b|\b(photos?|images?|videos?|music|spreadsheets?)\b", text_lower)
+        if not _fs_search_guard and re.search(r"\b(search|find|look\s+for|look\s+up)\b.*\b(documents?|drafts?|emails?|blogs?|notes?|files?|writings?)\b", text_lower):
             return Intent(
                 intent_type=IntentType.SEARCH_DOCS,
                 confidence=0.94,
@@ -1545,6 +1560,26 @@ class RuleBasedIntentParser(IntentParser):
                 raw_text=text_original,
                 serious_mode=serious_mode,
             )
+
+        # ── Task Planner (must be before individual Smart Home/Reminder/Calendar/Vision/File rules) ──
+
+        # TASK_PLAN: multi-step requests with connectors across domains
+        if (" and then " in text_lower or " then " in text_lower or " and also " in text_lower or " after that " in text_lower or " followed by " in text_lower):
+            # Must touch at least 2 different action domains
+            _domains = 0
+            for _dp in [r"\b(email|send|draft|write)\b", r"\b(remind|reminder)\b",
+                        r"\b(calendar|schedule|event|appointment)\b", r"\b(search|find|look for|locate)\b",
+                        r"\b(screen|screenshot|describe)\b", r"\b(note|save|jot)\b",
+                        r"\b(research|look up|summarize)\b", r"\b(lights?|thermostat|smart\s*home|turn\s+on|turn\s+off)\b"]:
+                if re.search(_dp, text_lower):
+                    _domains += 1
+            if _domains >= 2:
+                return Intent(
+                    intent_type=IntentType.TASK_PLAN,
+                    confidence=0.94,
+                    raw_text=text_original,
+                    serious_mode=serious_mode,
+                )
 
         # ── Smart Home ──────────────────────────────────────────────
 
@@ -1629,6 +1664,62 @@ class RuleBasedIntentParser(IntentParser):
            re.search(r"\bschedule\s+(?:for\s+)?(?:today|tomorrow|this\s+week)\b", text_lower):
             return Intent(
                 intent_type=IntentType.CALENDAR_QUERY,
+                confidence=0.95,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # ── Computer Vision ────────────────────────────────────────
+
+        # VISION_READ_ERROR: "read the error on my screen", "what error is that"
+        if re.search(r"\b(read|what)\b.*\b(error|warning|exception|traceback|crash)\b.*\b(screen|see|display)?\b", text_lower) or \
+           re.search(r"\b(error|warning|exception)\b.*\b(screen|say|mean)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.VISION_READ_ERROR,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # VISION_DESCRIBE: "what's on my screen", "describe my screen", "take a screenshot"
+        if re.search(r"\b(describe|what(?:'s| is))\b.*\b(screen|see|looking|display|monitor|desktop)\b", text_lower) or \
+           re.search(r"\b(look(?:ing)?|see)\b.*\b(screen|monitor|display)\b", text_lower) or \
+           re.search(r"\b(take|grab|capture)\b.*\b(screenshot|screen\s?shot|snap|picture)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.VISION_DESCRIBE,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # ── File System ────────────────────────────────────────────
+
+        # FILE_LARGE: "find large files on D drive", "biggest files"
+        if re.search(r"\b(large|big|huge|biggest|largest)\b.*\bfiles?\b", text_lower) or \
+           re.search(r"\bfiles?\b.*\b(large|big|huge|biggest|largest|taking\s+space)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.FILE_LARGE,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # FILE_RECENT: "what did I download today", "recent files", "latest downloads"
+        if re.search(r"\b(recent|latest|new|today)\b.*\b(files?|downloads?)\b", text_lower) or \
+           re.search(r"\bdownloads?\b.*\b(today|recent|latest|new)\b", text_lower) or \
+           re.search(r"\bwhat\b.*\bdownload", text_lower):
+            return Intent(
+                intent_type=IntentType.FILE_RECENT,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # FILE_SEARCH: "find my tax documents", "search for PDF files", "locate the report"
+        if re.search(r"\b(find|search|look\s+for|locate|where(?:'s| is| are))\b.*\b(files?|documents?|folders?|pdf|doc|spreadsheet|photos?|images?|videos?|music)\b", text_lower) or \
+           re.search(r"\b(find|search|look\s+for|locate)\b.*\bon\s+[a-z]\s*(?:drive|:)", text_lower):
+            return Intent(
+                intent_type=IntentType.FILE_SEARCH,
                 confidence=0.95,
                 raw_text=text_original,
                 serious_mode=serious_mode,
