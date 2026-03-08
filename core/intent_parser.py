@@ -686,6 +686,16 @@ class IntentType(Enum):
     SEND_EMAIL = "send_email"
     SEARCH_DOCS = "search_docs"
     EXPORT_DATA = "export_data"
+    # Smart home intents
+    SMART_HOME_CONTROL = "smart_home_control"
+    SMART_HOME_STATUS = "smart_home_status"
+    # Reminders & calendar intents
+    SET_REMINDER = "set_reminder"
+    LIST_REMINDERS = "list_reminders"
+    CANCEL_REMINDER = "cancel_reminder"
+    CALENDAR_ADD = "calendar_add"
+    CALENDAR_QUERY = "calendar_query"
+    CANCEL_CALENDAR = "cancel_calendar"
 
 
 # ============================================================================
@@ -1532,6 +1542,94 @@ class RuleBasedIntentParser(IntentParser):
             return Intent(
                 intent_type=IntentType.EXPORT_DATA,
                 confidence=0.94,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # ── Smart Home ──────────────────────────────────────────────
+
+        # SMART_HOME_STATUS: "is the living room light on", "status of the thermostat"
+        if re.search(r"\b(status|state|check)\b.*\b(lights?|lamps?|switches?|plugs?|fans?|thermostats?|ac|tvs?|locks?|blinds?|smart\s*home)\b", text_lower) or \
+           (re.search(r"\bis\s+(?:the\s+)?\w+.+?\s+(on|off|open|closed|locked|unlocked)\b", text_lower) and \
+           re.search(r"\b(lights?|lamps?|switches?|fans?|thermostats?|ac|tvs?|locks?|blinds?|doors?|garage)\b", text_lower)):
+            return Intent(
+                intent_type=IntentType.SMART_HOME_STATUS,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # SMART_HOME_CONTROL: "turn on the lights", "set thermostat to 72", "dim the bedroom"
+        if re.search(r"\b(turn\s+on|turn\s+off|switch\s+on|switch\s+off|toggle|dim|brighten)\b.*\b(lights?|lamps?|switches?|plugs?|fans?|tvs?|thermostats?|ac|blinds?|garage|smart|bulbs?|strips?)\b", text_lower) or \
+           re.search(r"\bset\s+(?:the\s+)?(?:thermostat|ac|a\.?c|temperature|heat)\b", text_lower) or \
+           re.search(r"\b(?:lights?|lamps?|bulbs?|switches?|fans?|tvs?|plugs?)\s+(on|off)\b", text_lower) or \
+           re.search(r"\b(activate|trigger)\b.*\bscene\b", text_lower) or \
+           (re.search(r"\b(lock|unlock)\s+(?:the\s+)?\w+", text_lower) and \
+           re.search(r"\b(door|lock|deadbolt|front|back|garage)\b", text_lower)) or \
+           re.search(r"\b(list|show)\b.*\b(devices?|smart\s*home|lights?|switches?)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.SMART_HOME_CONTROL,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # ── Reminders ──────────────────────────────────────────────
+
+        # CANCEL_REMINDER: "cancel the reminder about Sarah"
+        if re.search(r"\b(cancel|delete|remove)\b.*\breminder\b", text_lower):
+            return Intent(
+                intent_type=IntentType.CANCEL_REMINDER,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # SET_REMINDER: "remind me to…", "set a reminder…"
+        if re.search(r"\bremind\s+me\b", text_lower) or \
+           re.search(r"\bset\s+(?:a\s+)?reminder\b", text_lower):
+            return Intent(
+                intent_type=IntentType.SET_REMINDER,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # LIST_REMINDERS: "what are my reminders", "show reminders", "any reminders"
+        if re.search(r"\b(list|show|what|any)\b.*\breminders?\b", text_lower):
+            return Intent(
+                intent_type=IntentType.LIST_REMINDERS,
+                confidence=0.95,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # ── Calendar ───────────────────────────────────────────────
+
+        # CANCEL_CALENDAR: "cancel the dentist appointment"
+        if re.search(r"\b(cancel|delete|remove)\b.*\b(event|appointment|meeting)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.CANCEL_CALENDAR,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # CALENDAR_ADD: "add a calendar event", "schedule a meeting"
+        if re.search(r"\b(add|schedule|create|put|book)\b.*\b(event|appointment|meeting|calendar)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.CALENDAR_ADD,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        # CALENDAR_QUERY: "what's on my calendar", "schedule for today"
+        if re.search(r"\b(what|show|any|check)\b.*\b(calendar|schedule|agenda)\b", text_lower) or \
+           re.search(r"\bschedule\s+(?:for\s+)?(?:today|tomorrow|this\s+week)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.CALENDAR_QUERY,
+                confidence=0.95,
                 raw_text=text_original,
                 serious_mode=serious_mode,
             )

@@ -17,7 +17,7 @@ import sys
 import uuid
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from faster_whisper import WhisperModel
 import ollama
@@ -71,6 +71,18 @@ from tools.writing import (
     build_email_prompt, build_blog_prompt, build_edit_prompt, build_note_expansion_prompt,
 )
 from tools.email_sender import send_email, send_draft, is_email_configured
+from tools.home_assistant import (
+    execute_smart_home_command, is_home_assistant_configured,
+    list_devices as ha_list_devices, get_entity_state as ha_get_entity_state,
+    resolve_entity as ha_resolve_entity, parse_smart_home_command,
+)
+from tools.reminders import (
+    add_reminder, list_reminders, cancel_reminder,
+    add_calendar_event, list_calendar_events, cancel_calendar_event,
+    parse_reminder_request, parse_calendar_request,
+    format_reminders_for_speech, format_calendar_for_speech,
+    start_reminder_checker, stop_reminder_checker,
+)
 from system_health import (
     get_system_health,
     get_memory_info,
@@ -3345,6 +3357,111 @@ class ArgoPipeline:
 
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
 
+    # ── Smart Home handlers ─────────────────────────────────────────
+
+    def _respond_with_smart_home_control(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Execute a smart home control command via Home Assistant."""
+        self.logger.info(f"[SMART_HOME] Control: {user_text}")
+        try:
+            response = execute_smart_home_command(user_text)
+        except Exception as e:
+            self.logger.error(f"[SMART_HOME] Error: {e}")
+            response = f"Smart home error: {e}"
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_smart_home_status(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Query smart home device status via Home Assistant."""
+        self.logger.info(f"[SMART_HOME] Status: {user_text}")
+        try:
+            response = execute_smart_home_command(user_text)
+        except Exception as e:
+            self.logger.error(f"[SMART_HOME] Error: {e}")
+            response = f"Smart home error: {e}"
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    # ── Reminder handlers ───────────────────────────────────────────
+
+    def _respond_with_set_reminder(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Set a new reminder from voice command."""
+        self.logger.info(f"[REMINDER] Set: {user_text}")
+        parsed = parse_reminder_request(user_text)
+        message = parsed.get("message", "")
+        due_at = parsed.get("due_at")
+        if not message or not due_at:
+            return self._deliver_canonical_response(
+                "I couldn't understand the reminder. Try: remind me to call Sarah in 30 minutes.",
+                interaction_id, replay_mode, overrides,
+            )
+        result = add_reminder(message, due_at)
+        friendly_time = due_at.strftime("%I:%M %p").lstrip("0")
+        if due_at.date() == datetime.now().date():
+            time_desc = f"today at {friendly_time}"
+        elif due_at.date() == (datetime.now() + timedelta(days=1)).date():
+            time_desc = f"tomorrow at {friendly_time}"
+        else:
+            time_desc = due_at.strftime("%A %B %d at %I:%M %p").lstrip("0")
+        response = f"Reminder set: {message}. I'll remind you {time_desc}."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_list_reminders(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """List active reminders."""
+        self.logger.info(f"[REMINDER] List: {user_text}")
+        reminders = list_reminders()
+        response = format_reminders_for_speech(reminders)
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_cancel_reminder(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Cancel a reminder matching spoken text."""
+        self.logger.info(f"[REMINDER] Cancel: {user_text}")
+        # Extract the search term after "cancel reminder about..."
+        import re as _re
+        m = _re.search(r"\b(?:cancel|delete|remove)\b.*?\breminder\b\s*(?:about|for|to)?\s*(.+)", user_text.lower())
+        search = m.group(1).strip(" .,!?") if m else user_text
+        response = cancel_reminder(search)
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    # ── Calendar handlers ───────────────────────────────────────────
+
+    def _respond_with_calendar_add(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Add a calendar event from voice command."""
+        self.logger.info(f"[CALENDAR] Add: {user_text}")
+        parsed = parse_calendar_request(user_text)
+        title = parsed.get("title", "")
+        start_at = parsed.get("start_at")
+        location = parsed.get("location", "")
+        if not title or not start_at:
+            return self._deliver_canonical_response(
+                "I couldn't parse the event. Try: add a calendar event dentist appointment Friday at 2pm.",
+                interaction_id, replay_mode, overrides,
+            )
+        result = add_calendar_event(title, start_at, location=location)
+        friendly_time = start_at.strftime("%A %B %d at %I:%M %p").lstrip("0")
+        response = f"Event added: {title}, {friendly_time}."
+        if location:
+            response = f"Event added: {title} at {location}, {friendly_time}."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_calendar_query(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """List upcoming calendar events."""
+        self.logger.info(f"[CALENDAR] Query: {user_text}")
+        lower = user_text.lower()
+        if "today" in lower:
+            events = list_calendar_events(date=datetime.now())
+        elif "tomorrow" in lower:
+            events = list_calendar_events(date=datetime.now() + timedelta(days=1))
+        else:
+            events = list_calendar_events()
+        response = format_calendar_for_speech(events)
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_cancel_calendar(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Cancel a calendar event matching spoken text."""
+        self.logger.info(f"[CALENDAR] Cancel: {user_text}")
+        m = re.search(r"\b(?:cancel|delete|remove)\b.*?\b(?:event|appointment|meeting)\b\s*(?:about|for|called)?\s*(.+)", user_text.lower())
+        search = m.group(1).strip(" .,!?") if m else user_text
+        response = cancel_calendar_event(search)
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
     def _respond_with_system_health(self, user_text, intent, interaction_id, replay_mode, overrides) -> bool:
         """Answer system health questions without invoking the LLM."""
 
@@ -4979,6 +5096,38 @@ class ArgoPipeline:
             if self._respond_with_export_data(intent, user_text, interaction_id, replay_mode, overrides):
                 return
 
+        if intent and intent.intent_type == IntentType.SMART_HOME_CONTROL:
+            if self._respond_with_smart_home_control(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.SMART_HOME_STATUS:
+            if self._respond_with_smart_home_status(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.SET_REMINDER:
+            if self._respond_with_set_reminder(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.LIST_REMINDERS:
+            if self._respond_with_list_reminders(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.CANCEL_REMINDER:
+            if self._respond_with_cancel_reminder(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.CALENDAR_ADD:
+            if self._respond_with_calendar_add(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.CALENDAR_QUERY:
+            if self._respond_with_calendar_query(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
+        if intent and intent.intent_type == IntentType.CANCEL_CALENDAR:
+            if self._respond_with_cancel_calendar(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
         if intent and intent.intent_type == IntentType.SYSTEM_INFO:
             allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
             if not allowed:
@@ -5078,6 +5227,16 @@ class ArgoPipeline:
             IntentType.SEND_EMAIL,
             IntentType.SEARCH_DOCS,
             IntentType.EXPORT_DATA,
+            # Smart home
+            IntentType.SMART_HOME_CONTROL,
+            IntentType.SMART_HOME_STATUS,
+            # Reminders & calendar
+            IntentType.SET_REMINDER,
+            IntentType.LIST_REMINDERS,
+            IntentType.CANCEL_REMINDER,
+            IntentType.CALENDAR_ADD,
+            IntentType.CALENDAR_QUERY,
+            IntentType.CANCEL_CALENDAR,
         }
         if intent and intent.intent_type in restricted_llm_intents:
             leak_messages = {
@@ -5111,6 +5270,14 @@ class ArgoPipeline:
                 IntentType.SEND_EMAIL: "Email sending failed to route. Say it again.",
                 IntentType.SEARCH_DOCS: "Document search failed to route. Say it again.",
                 IntentType.EXPORT_DATA: "Export failed to route. Say it again.",
+                IntentType.SMART_HOME_CONTROL: "Smart home control failed to route. Say it again.",
+                IntentType.SMART_HOME_STATUS: "Smart home status failed to route. Say it again.",
+                IntentType.SET_REMINDER: "Reminder failed to route. Say it again.",
+                IntentType.LIST_REMINDERS: "Reminder listing failed to route. Say it again.",
+                IntentType.CANCEL_REMINDER: "Reminder cancellation failed to route. Say it again.",
+                IntentType.CALENDAR_ADD: "Calendar event failed to route. Say it again.",
+                IntentType.CALENDAR_QUERY: "Calendar query failed to route. Say it again.",
+                IntentType.CANCEL_CALENDAR: "Calendar cancellation failed to route. Say it again.",
             }
             leak_msg = leak_messages.get(intent.intent_type, "Routing error. Please repeat the request.")
             safe_text = safe_utterance or (user_text or "")
