@@ -59,11 +59,26 @@ def verify_engine_dependencies(engine: str) -> None:
                 "Run: pip install faster-whisper"
             )
 
+    elif engine == "openai_cloud":
+        try:
+            import openai  # noqa: F401
+            logger.info("[STT_ENGINE] Preflight: openai package dependency OK")
+        except ImportError:
+            raise RuntimeError(
+                "STT engine 'openai_cloud' selected but openai package is not installed. "
+                "Run: pip install openai"
+            )
+        import os
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError(
+                "STT engine 'openai_cloud' requires OPENAI_API_KEY environment variable."
+            )
+
 
 class STTEngineManager:
     """Centralized STT engine initialization and selection."""
 
-    SUPPORTED_ENGINES = ["openai", "faster"]
+    SUPPORTED_ENGINES = ["openai", "faster", "openai_cloud"]
     DEFAULT_ENGINE = "openai"
 
     def __init__(self, engine: str = DEFAULT_ENGINE, model_size: str = "base", device: str = "cpu"):
@@ -98,6 +113,8 @@ class STTEngineManager:
             self._load_openai_whisper()
         elif self.engine == "faster":
             self._load_faster_whisper()
+        elif self.engine == "openai_cloud":
+            self._load_openai_cloud()
 
     def _load_openai_whisper(self):
         """Load openai-whisper engine."""
@@ -151,6 +168,31 @@ class STTEngineManager:
             self.logger.error(f"[STT_ENGINE] Failed to load faster-whisper: {e}")
             raise
 
+    def _load_openai_cloud(self):
+        """Load OpenAI Cloud Whisper API engine."""
+        try:
+            from core.openai_stt import OpenAIWhisperSTT
+        except ImportError:
+            raise ImportError(
+                "OpenAI Cloud STT module not found. "
+                "Ensure core/openai_stt.py exists and openai is installed."
+            )
+
+        self.logger.info("[STT_ENGINE] Loading OpenAI Cloud Whisper API...")
+
+        try:
+            self.model = OpenAIWhisperSTT(
+                model="whisper-1",
+                language="en",
+            )
+            self.logger.info(
+                "[STT_ENGINE] OpenAI Cloud Whisper loaded successfully "
+                "(engine=openai_cloud, model=whisper-1)"
+            )
+        except Exception as e:
+            self.logger.error(f"[STT_ENGINE] Failed to load OpenAI Cloud Whisper: {e}")
+            raise
+
     def _normalize_segments(self, raw_segments) -> list:
         """
         Normalize segments to a consistent STTSegment structure.
@@ -202,13 +244,19 @@ class STTEngineManager:
                 "text": str,
                 "confidence": float (engine-native),
                 "segments": list,
-                "engine": "openai" | "faster",
+                "engine": "openai" | "faster" | "openai_cloud",
                 "duration_ms": float
             }
 
         Raises:
             ValueError: If transcription fails
         """
+        if self.engine == "openai_cloud":
+            # Cloud engine uses its own client, not self.model
+            if self.model is None:
+                raise ValueError("OpenAI Cloud STT not initialized")
+            return self.model.transcribe(audio_data, language, **kwargs)
+
         if self.model is None:
             raise ValueError("STT engine not initialized")
 

@@ -142,8 +142,23 @@ class ArgoPipeline:
             "natasha": "en-AU-NatashaNeural",
             "abeo": "en-NG-AbeoNeural",
         }
+        # OpenAI TTS voice map (for personal mode)
+        self.openai_voices = {
+            "nova": "nova",
+            "alloy": "alloy",
+            "echo": "echo",
+            "fable": "fable",
+            "onyx": "onyx",
+            "shimmer": "shimmer",
+            "ash": "ash",
+            "sage": "sage",
+            "coral": "coral",
+            "ballad": "ballad",
+        }
         self.current_voice_key = "ryan"
+        self._tts_engine = "edge"  # "edge" or "openai"
         self._edge_tts = None
+        self._openai_tts = None
         self._pending_barge_in_suppression = None
         self._memory_store = get_memory_store()
         self._ephemeral_memory = {}
@@ -220,8 +235,19 @@ class ArgoPipeline:
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
+        # Check OpenAI voices first (personal mode)
+        if voice_key in self.openai_voices:
+            self.current_voice_key = voice_key
+            self._tts_engine = "openai"
+            if self._openai_tts is not None:
+                self._openai_tts.set_voice(voice_key)
+            self.logger.info(f"Voice switched to OpenAI: {voice_key}")
+            self.broadcast("log", f"System: Voice switched to OpenAI {voice_key.upper()}")
+            return True
+        # Fall back to Edge TTS voices
         if voice_key in self.voices:
             self.current_voice_key = voice_key
+            self._tts_engine = "edge"
             if self._edge_tts is not None:
                 try:
                     self._edge_tts.voice = self.voices[voice_key]
@@ -449,7 +475,37 @@ class ArgoPipeline:
         except Exception as e:
             self.logger.error(f"[STT] Initialization Error: {e}")
             raise
-        
+
+        # TTS engine selection from config
+        try:
+            tts_engine = "edge"
+            tts_voice = None
+            tts_model = "tts-1"
+            if self._config is not None:
+                tts_config = self._config.get("text_to_speech", {})
+                if isinstance(tts_config, dict):
+                    tts_engine = tts_config.get("engine", "edge")
+                    tts_voice = tts_config.get("voice", None)
+                    tts_model = tts_config.get("model", "tts-1")
+            self._tts_engine = tts_engine
+            if tts_engine == "openai":
+                from core.openai_tts import OpenAIRealtimeTTS
+                voice = tts_voice or "nova"
+                self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                self.current_voice_key = voice
+                self.logger.info(f"[TTS] OpenAI Realtime Speech ready (voice={voice}, model={tts_model})")
+            else:
+                self.logger.info(f"[TTS] Edge TTS engine selected")
+        except Exception as e:
+            self.logger.warning(f"[TTS] OpenAI TTS init failed, falling back to Edge: {e}")
+            self._tts_engine = "edge"
+
+        # Personal mode: loosen gates and confidence thresholds
+        if self.runtime_overrides.get("personal_mode", False):
+            self._tts_min_confidence = 0.0
+            self._personal_mode_min_confidence = 0.0
+            self.logger.info("[PERSONAL] Personal mode active — gates loosened, confidence floors removed")
+
         if self.llm_enabled:
             try:
                 model_name = "qwen:latest"
@@ -993,6 +1049,10 @@ class ArgoPipeline:
 
     def _should_reject_audio(self, rms: float, silence_ratio: float, duration_s: float) -> tuple[bool, str]:
         """Return True if audio should be rejected as silence/noise."""
+        # Personal mode: accept more aggressively (cloud STT handles noise well)
+        if self.runtime_overrides.get("personal_mode", False):
+            if duration_s >= 0.2 and rms >= 0.002:
+                return False, ""
         meets_duration_floor = duration_s >= self._stt_min_duration_s
         if meets_duration_floor or rms >= self._stt_min_rms_threshold:
             return False, ""
@@ -1570,6 +1630,11 @@ class ArgoPipeline:
         )
 
     def _evaluate_gates(self, capability_key: str, module_key: str, interaction_id: str) -> tuple[bool, str]:
+        # PERSONAL MODE: Gates are advisory only — always allow
+        if self.runtime_overrides.get("personal_mode", False):
+            for gate in GATES_ORDER:
+                self._log_gate(gate, True, "personal_mode_bypass", interaction_id)
+            return True, ""
         for gate in GATES_ORDER:
             allowed = True
             reason = ""
@@ -3234,7 +3299,7 @@ class ArgoPipeline:
         if not self.runtime_overrides.get("tts_enabled", True) and not force_tts:
             self.logger.info("[TTS] Disabled by runtime override")
             return
-        self.logger.info(f"[TTS] Speaking with {self.current_voice_key}...")
+        self.logger.info(f"[TTS] Speaking with {self.current_voice_key} (engine={self._tts_engine})...")
         if self.current_state == "TRANSCRIBING":
             self.transition_state("THINKING", interaction_id=interaction_id, source="tts")
         self.transition_state("SPEAKING", interaction_id=interaction_id, source="tts")
@@ -3249,18 +3314,27 @@ class ArgoPipeline:
                 log_event("TTS_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
                 return
 
-            if self._edge_tts is None:
-                from core.output_sink import EdgeTTSOutputSink
-                self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
-            if self._pending_barge_in_suppression and hasattr(self._edge_tts, "suppress_interrupt"):
-                try:
-                    self._edge_tts.suppress_interrupt(self._pending_barge_in_suppression)
-                except Exception:
-                    pass
-                self._pending_barge_in_suppression = None
+            if self._tts_engine == "openai":
+                # OpenAI Realtime Speech TTS
+                if self._openai_tts is None:
+                    from core.openai_tts import OpenAIRealtimeTTS
+                    voice = self.openai_voices.get(self.current_voice_key, "nova")
+                    self._openai_tts = OpenAIRealtimeTTS(voice=voice, model="tts-1")
+                self._openai_tts.speak(text)
+            else:
+                # Edge TTS (original)
+                if self._edge_tts is None:
+                    from core.output_sink import EdgeTTSOutputSink
+                    self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
+                if self._pending_barge_in_suppression and hasattr(self._edge_tts, "suppress_interrupt"):
+                    try:
+                        self._edge_tts.suppress_interrupt(self._pending_barge_in_suppression)
+                    except Exception:
+                        pass
+                    self._pending_barge_in_suppression = None
 
-            # Edge TTS playback (blocking)
-            self._edge_tts.speak(text)
+                # Edge TTS playback (blocking)
+                self._edge_tts.speak(text)
         except Exception as e:
             self.logger.error(f"[TTS] Error: {e}")
         finally:

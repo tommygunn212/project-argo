@@ -350,6 +350,7 @@ _RUNTIME_OVERRIDES_DEFAULT = {
     "personality_mode": "tommy_gunn",
     "execution_mode": "EXPLAIN_MODE",
     "session_memory_enabled": True,  # Phase 5: bounded session continuity
+    "personal_mode": True,  # Tommy's personal edition — loosened gates, cloud STT/TTS
 }
 _runtime_overrides = dict(_RUNTIME_OVERRIDES_DEFAULT)
 

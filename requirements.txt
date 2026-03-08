@@ -1,5 +1,6 @@
 requests==2.31.0
 ollama==0.1.0
+openai==1.68.2
 openai-whisper==20240101
 faster-whisper==1.0.3
 websockets==12.0
