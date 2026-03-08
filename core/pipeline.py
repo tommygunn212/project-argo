@@ -61,6 +61,7 @@ from core.app_registry import resolve_app_name
 TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
 from core.memory_store import get_memory_store
 from core.conversation_buffer import ConversationBuffer
+from core.brain import get_brain
 from core.registries import is_capability_enabled, is_permission_allowed, is_module_enabled
 from core.runtime_constants import GATES_ORDER, Gate
 from system_health import (
@@ -162,6 +163,7 @@ class ArgoPipeline:
         self._pending_barge_in_suppression = None
         self._memory_store = get_memory_store()
         self._ephemeral_memory = {}
+        self._brain = get_brain()
         convo_size = 8
         try:
             if self._config is not None:
@@ -639,6 +641,10 @@ class ArgoPipeline:
     def _classify_request_kind(self, user_text: str) -> str:
         if not user_text or not user_text.strip():
             return "UNKNOWN"
+        # Brain memory commands (recall, forget, store)
+        brain_cmd = self._brain.parse_memory_command(user_text)
+        if brain_cmd:
+            return "WRITE_MEMORY"
         if self._parse_memory_write(user_text):
             return "WRITE_MEMORY"
         text = user_text.strip().lower()
@@ -1163,26 +1169,14 @@ class ArgoPipeline:
         ]
         return any(re.search(p, text, flags=re.IGNORECASE) for p in patterns)
 
-    def _get_memory_context(self, interaction_id: str) -> str:
-        project_ns = self._get_project_namespace()
+    def _get_memory_context(self, interaction_id: str, user_text: str = "") -> str:
+        """Pull smart memory context from brain (3-layer: facts + state + last exchange)."""
         try:
-            facts = self._memory_store.list_memory("FACT")
-            projects = self._memory_store.list_memory("PROJECT", namespace=project_ns)
-            prefs = self._memory_store.list_memory("PREFERENCE")
+            return self._brain.get_prompt_context(user_text)
         except Exception as e:
-            self.logger.warning(f"[MEMORY] Context load failed: {e}")
+            self.logger.warning(f"[BRAIN] Context load failed: {e}")
             self._record_timeline("MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
             return ""
-        parts = []
-        if facts:
-            parts.append("FACT: " + "; ".join([f"{m.key} = {m.value}" for m in facts[:20]]))
-        if projects:
-            parts.append("PROJECT: " + "; ".join([f"{m.key} = {m.value}" for m in projects[:20]]))
-        if prefs:
-            parts.append("PREFERENCE: " + "; ".join([f"{m.key} = {m.value}" for m in prefs[:20]]))
-        if self._ephemeral_memory:
-            parts.append("EPHEMERAL: " + "; ".join([f"{k} = {v}" for k, v in list(self._ephemeral_memory.items())[:20]]))
-        return " | ".join(parts)
 
     def _parse_memory_write(self, user_text: str) -> dict | None:
         text = user_text.strip()
@@ -1517,6 +1511,80 @@ class ArgoPipeline:
 
         write = self._parse_memory_write(user_text)
         if write is not None:
+            # ── Brain memory write path ──
+            brain_cmd = self._brain.parse_memory_command(user_text)
+            if brain_cmd:
+                action = brain_cmd.get("action")
+                
+                if action == "recall_all":
+                    response = self._brain.format_all_facts_for_speech()
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
+                        if tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    return True
+                
+                if action == "recall_subject":
+                    subject = brain_cmd.get("subject", "")
+                    facts = self._brain.retrieve_relevant_facts(subject, limit=5)
+                    if facts:
+                        lines = [f"{f.subject} {f.relation} {f.value}" for f in facts]
+                        response = "Here's what I know. " + ". ".join(lines) + "."
+                    else:
+                        response = f"I don't have anything stored about {subject}."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
+                        if tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    return True
+                
+                if action == "forget":
+                    subject = brain_cmd.get("subject", "")
+                    # Try to delete any fact with this subject
+                    all_facts = self._brain.get_all_facts()
+                    deleted = False
+                    for f in all_facts:
+                        if subject.lower() in f.subject.lower() or subject.lower() in f.value.lower():
+                            self._brain.delete_fact(f.subject, f.relation)
+                            deleted = True
+                    response = f"Done, I've forgotten about {subject}." if deleted else f"I didn't have anything stored about {subject}."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
+                        if tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    return True
+                
+                if action == "store":
+                    category = brain_cmd.get("category", "general")
+                    subject = brain_cmd.get("subject", "")
+                    relation = brain_cmd.get("relation", "is")
+                    value = brain_cmd.get("value", "")
+                    if subject and value:
+                        if self._is_sensitive_memory(value) or self._is_sensitive_memory(subject):
+                            response = "I can't store sensitive data."
+                        else:
+                            self._brain.store_fact(category, subject, relation, value)
+                            # Also store in legacy memory_store for backward compat
+                            try:
+                                self._memory_store.add_memory("FACT", f"{subject}.{relation}", value, source="brain")
+                            except Exception:
+                                pass
+                            display = f"{subject} {relation} {value}"
+                            response = f"Got it. I'll remember that."
+                            self.logger.info(f"[BRAIN] Stored: {display}")
+                    else:
+                        response = "What should I remember? Tell me something specific."
+                    self.broadcast("log", f"Argo: {response}")
+                    if not self.stop_signal.is_set() and not replay_mode:
+                        tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
+                        if tts_text:
+                            self.speak(tts_text, interaction_id=interaction_id)
+                    return True
+            
+            # ── Legacy memory write path (fallback) ──
             stt_conf = 0.0
             try:
                 stt_conf = float((self._last_stt_metrics or {}).get("confidence", 0.0))
@@ -1838,7 +1906,7 @@ class ArgoPipeline:
                 stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role": "system", "content": "You are ARGO, a local-first voice assistant. Respond concisely and conversationally."},
+                        {"role": "system", "content": "You are ARGO, Tommy's personal voice assistant. Respond concisely and conversationally. Use memory context when relevant."},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
@@ -1949,7 +2017,7 @@ class ArgoPipeline:
                             stream2 = openai_client2.chat.completions.create(
                                 model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
                                 messages=[
-                                    {"role": "system", "content": "You are ARGO, a local-first voice assistant. Respond concisely."},
+                                    {"role": "system", "content": "You are ARGO, Tommy's personal voice assistant. Respond concisely."},
                                     {"role": "user", "content": retry_prompt},
                                 ],
                                 temperature=0.7,
@@ -4741,14 +4809,19 @@ class ArgoPipeline:
         memory_context = ""
         llm_context_scope = "isolated"
         if request_kind == "QUESTION":
+            # Brain: update working memory BEFORE LLM call
+            _intent_str = getattr(getattr(intent, 'intent_type', None), 'value', '') if intent else ''
+            try:
+                self._brain.before_llm(user_text, _intent_str)
+            except Exception as e:
+                self.logger.warning(f"[BRAIN] before_llm failed: {e}")
+
             rag_context = self._get_rag_context(user_text, interaction_id)
-            memory_context = self._get_memory_context(interaction_id)
+            memory_context = self._get_memory_context(interaction_id, user_text=user_text)
             
-            # Phase 5: Use session context for ALL questions if buffer has content
-            # The buffer is already bounded (3 turns), so always include it for continuity
-            if self._conversation_buffer.size() > 0:
-                llm_context_scope = "buffered"
-                self.logger.info(f"[LLM] Session context available ({self._conversation_buffer.size()} turns), using buffered mode")
+            # Brain provides its own last-exchange context, so always mark as buffered
+            llm_context_scope = "buffered"
+            self.logger.info(f"[LLM] Brain memory context active")
         
         # Check if utterance starts with an imperative verb (should pass to LLM)
         imperative_verbs = {"give", "tell", "show", "list", "generate", "create", "make", "find", "get", "pick", "choose", "suggest", "recommend", "explain", "describe", "say", "read", "write", "name", "calculate", "compute"}
@@ -4783,6 +4856,13 @@ class ArgoPipeline:
         self.broadcast("log", f"Argo: {ai_text}")
         self._conversation_buffer.add("Assistant", ai_text)
         self._append_convo_ledger("argo", ai_text)
+
+        # Brain: store short-term exchange AFTER LLM response
+        _intent_str = getattr(getattr(intent, 'intent_type', None), 'value', '') if intent else ''
+        try:
+            self._brain.after_llm(user_text, ai_text, _intent_str)
+        except Exception as e:
+            self.logger.warning(f"[BRAIN] after_llm failed: {e}")
 
         if not self.stop_signal.is_set() and not replay_mode:
             tts_text = self._sanitize_tts_text(ai_text, enforce_confidence=False)
