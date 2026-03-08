@@ -508,13 +508,28 @@ class ArgoPipeline:
 
         if self.llm_enabled:
             try:
+                llm_backend = "ollama"
                 model_name = "qwen:latest"
                 if self._config is not None:
-                    model_name = self._config.get("llm.model", model_name)
+                    llm_config = self._config.get("llm", {})
+                    if isinstance(llm_config, dict):
+                        llm_backend = llm_config.get("backend", "ollama")
+                        model_name = llm_config.get("model", model_name)
+                    else:
+                        model_name = self._config.get("llm.model", model_name)
                 self.llm_model_name = model_name
-                client = ollama.Client(host='http://127.0.0.1:11434')
-                client.generate(model=model_name, prompt='hi', stream=False)
-                self.logger.info("LLM model warmed up")
+
+                if llm_backend == "openai":
+                    # Quick validation — no warmup needed for cloud
+                    import os
+                    if not os.environ.get("OPENAI_API_KEY"):
+                        self.logger.warning("[LLM] OPENAI_API_KEY not set — LLM calls will fail")
+                    else:
+                        self.logger.info(f"[LLM] OpenAI cloud ready (model={model_name})")
+                else:
+                    client = ollama.Client(host='http://127.0.0.1:11434')
+                    client.generate(model=model_name, prompt='hi', stream=False)
+                    self.logger.info("LLM model warmed up")
             except Exception as e:
                 self.logger.warning(f"LLM Warmup Warning: {e}")
         
@@ -1800,35 +1815,74 @@ class ArgoPipeline:
         self.logger.debug(f"[LLM] Full prompt (first 500 chars): {prompt[:500]}")
         full_response = ""
         try:
+            # Determine LLM backend: openai (cloud) or ollama (local)
+            llm_backend = "ollama"
             model_name = "qwen:latest"
             if self._config is not None:
-                model_name = self._config.get("llm.model", model_name)
-            client = ollama.Client(host='http://127.0.0.1:11434')
+                llm_config = self._config.get("llm", {})
+                if isinstance(llm_config, dict):
+                    llm_backend = llm_config.get("backend", "ollama")
+                    model_name = llm_config.get("model", model_name)
+                else:
+                    model_name = self._config.get("llm.model", model_name)
+
             self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
             start = time.perf_counter()
             first_token_ms = None
-            # Add options to prevent caching and encourage personality variation
-            stream = client.generate(
-                model=model_name, 
-                prompt=prompt, 
-                stream=True,
-                options={
-                    "temperature": 0.7,  # Some variability
-                    "num_predict": 256,  # Reasonable limit
-                }
-            )
-            for chunk in stream:
-                if self.stop_signal.is_set():
-                    break
-                part = chunk.get('response', '')
-                if part and first_token_ms is None:
-                    first_token_ms = (time.perf_counter() - start) * 1000
-                    self._record_timeline(
-                        f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                        stage="llm",
-                        interaction_id=interaction_id,
-                    )
-                full_response += part
+
+            if llm_backend == "openai":
+                # ── OpenAI Cloud LLM (GPT-4o-mini) ──
+                from openai import OpenAI
+                import os
+                openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                stream = openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are ARGO, a local-first voice assistant. Respond concisely and conversationally."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.7,
+                    max_tokens=256,
+                    stream=True,
+                )
+                for chunk in stream:
+                    if self.stop_signal.is_set():
+                        break
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    part = delta.content if delta and delta.content else ""
+                    if part and first_token_ms is None:
+                        first_token_ms = (time.perf_counter() - start) * 1000
+                        self._record_timeline(
+                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                            stage="llm",
+                            interaction_id=interaction_id,
+                        )
+                    full_response += part
+            else:
+                # ── Ollama Local LLM ──
+                client = ollama.Client(host='http://127.0.0.1:11434')
+                stream = client.generate(
+                    model=model_name, 
+                    prompt=prompt, 
+                    stream=True,
+                    options={
+                        "temperature": 0.7,
+                        "num_predict": 256,
+                    }
+                )
+                for chunk in stream:
+                    if self.stop_signal.is_set():
+                        break
+                    part = chunk.get('response', '')
+                    if part and first_token_ms is None:
+                        first_token_ms = (time.perf_counter() - start) * 1000
+                        self._record_timeline(
+                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                            stage="llm",
+                            interaction_id=interaction_id,
+                        )
+                    full_response += part
+
             total_ms = (time.perf_counter() - start) * 1000
             self._record_timeline(
                 f"LLM_DONE {total_ms:.0f}ms",
@@ -1888,11 +1942,31 @@ class ArgoPipeline:
                     )
                     retry_response = ""
                     try:
-                        stream2 = client.generate(model=model_to_use, prompt=retry_prompt, stream=True)
-                        for chunk2 in stream2:
-                            if self.stop_signal.is_set():
-                                break
-                            retry_response += chunk2.get('response', '')
+                        if llm_backend == "openai":
+                            from openai import OpenAI
+                            import os
+                            openai_client2 = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                            stream2 = openai_client2.chat.completions.create(
+                                model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
+                                messages=[
+                                    {"role": "system", "content": "You are ARGO, a local-first voice assistant. Respond concisely."},
+                                    {"role": "user", "content": retry_prompt},
+                                ],
+                                temperature=0.7,
+                                max_tokens=256,
+                                stream=True,
+                            )
+                            for chunk2 in stream2:
+                                if self.stop_signal.is_set():
+                                    break
+                                delta2 = chunk2.choices[0].delta if chunk2.choices else None
+                                retry_response += delta2.content if delta2 and delta2.content else ""
+                        else:
+                            stream2 = client.generate(model=model_to_use, prompt=retry_prompt, stream=True)
+                            for chunk2 in stream2:
+                                if self.stop_signal.is_set():
+                                    break
+                                retry_response += chunk2.get('response', '')
                         retry_response = self._strip_prompt_artifacts(retry_response)
                     except Exception as e:
                         self.logger.error(f"[LLM] Retry Error: {e}")
