@@ -4413,33 +4413,42 @@ class ArgoPipeline:
         )
 
         # SYSTEM_HEALTH short-circuit (must be evaluated before SELF_IDENTITY)
+        # Guard: skip if question is general knowledge (shopping, building, 3D printing, recommendations)
+        _general_knowledge_guard = re.search(
+            r"\b(latest|best|newest|buy|buying|recommend|build|building|upgrade|upgrading"
+            r"|compare|comparing|vs|versus|review|benchmark|shop|shopping|market|available"
+            r"|released|announcement|generation|lineup|should\s+i\s+get|worth|price|cost"
+            r"|hotend|printer|3d|filament|nozzle|extruder)\b",
+            text,
+        )
         health_matches = set()
-        if detect_system_health(text):
-            health_matches.add("system_health")
-        if detect_disk_query(text):
-            health_matches.add("disk")
-        if detect_temperature_query(text):
-            health_matches.add("temperature")
-        for kw in HARDWARE_KEYWORDS:
-            if kw in text:
-                health_matches.add(kw)
-        for q in SYSTEM_OS_QUERIES:
-            if q in text:
-                health_matches.add(q)
-        for q in SYSTEM_MEMORY_QUERIES:
-            if q in text:
-                health_matches.add(q)
-        for q in SYSTEM_CPU_QUERIES:
-            if q in text:
-                health_matches.add(q)
-        for q in SYSTEM_GPU_QUERIES:
-            if q in text:
-                health_matches.add(q)
-        for q in SYSTEM_MOTHERBOARD_QUERIES:
-            if q in text:
-                health_matches.add(q)
-        if tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"}:
-            health_matches |= (tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"})
+        if not _general_knowledge_guard:
+            if detect_system_health(text):
+                health_matches.add("system_health")
+            if detect_disk_query(text):
+                health_matches.add("disk")
+            if detect_temperature_query(text):
+                health_matches.add("temperature")
+            for kw in HARDWARE_KEYWORDS:
+                if kw in text:
+                    health_matches.add(kw)
+            for q in SYSTEM_OS_QUERIES:
+                if q in text:
+                    health_matches.add(q)
+            for q in SYSTEM_MEMORY_QUERIES:
+                if q in text:
+                    health_matches.add(q)
+            for q in SYSTEM_CPU_QUERIES:
+                if q in text:
+                    health_matches.add(q)
+            for q in SYSTEM_GPU_QUERIES:
+                if q in text:
+                    health_matches.add(q)
+            for q in SYSTEM_MOTHERBOARD_QUERIES:
+                if q in text:
+                    health_matches.add(q)
+            if tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"}:
+                health_matches |= (tokens & {"cpu", "ram", "memory", "disk", "drive", "gpu", "temperature", "temp", "health"})
         if health_matches and not identity_query:
             return "SYSTEM_HEALTH", health_matches
 
