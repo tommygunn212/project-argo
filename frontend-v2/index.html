@@ -1039,7 +1039,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="quick-actions" style="margin-bottom:12px">
             <button class="btn btn-primary" onclick="sendControl('RESUME')">▶ Start Listening</button>
             <button class="btn" onclick="sendControl('PAUSE')">⏸ Pause</button>
-            <button class="btn btn-danger" onclick="sendControl('FULL_RESET')">⟲ Reset</button>
+            <button class="btn btn-danger" onclick="sendControl('FULL_RESET'); clearDropdownSettings()">⟲ Reset</button>
           </div>
           <div class="quick-actions" style="margin-bottom:12px">
             <button class="btn" onclick="sendDiagnostics()">🔍 Run Diagnostics</button>
@@ -1184,7 +1184,7 @@ input[type="range"]::-moz-range-thumb {
             </div>
             <div>
               <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">Personality</label>
-              <select id="personalitySelect" style="width:100%" onchange="sendOverride('personality_mode', this.value)">
+              <select id="personalitySelect" style="width:100%" onchange="sendOverride('personality_mode', this.value); saveDropdownSettings()">
                 <option value="tommy_gunn">Tommy Gunn — Sharp, witty</option>
                 <option value="jarvis">Jarvis — Calm, formal</option>
                 <option value="tommy_mix">Tommy Mix — Sharp + chaos</option>
@@ -1737,6 +1737,8 @@ function connect() {
     dashSubText.textContent = 'Connected to ARGO backend';
     addSystemLog('WebSocket connected');
     clearTimeout(reconnectTimer);
+    // Restore saved dropdown settings after connection
+    setTimeout(restoreDropdownSettings, 500);
   };
 
   ws.onclose = () => {
@@ -1816,7 +1818,16 @@ function handleStatus(state) {
     TRANSCRIBING: 'Transcribing speech...', THINKING: 'Generating response...',
     SPEAKING: 'Speaking response...', ERROR: 'Error occurred'
   };
-  dashSubText.textContent = subs[state] || state;
+  // Keep showing transcript/response text during active states
+  if (state === 'THINKING' && _lastTranscript) {
+    dashSubText.textContent = '"' + _lastTranscript + '" — thinking...';
+    dashSubText.style.color = 'var(--accent2)';
+  } else if (state === 'IDLE' || state === 'LISTENING') {
+    dashSubText.textContent = subs[state];
+    dashSubText.style.color = 'var(--text-dim)';
+  } else {
+    dashSubText.textContent = subs[state] || state;
+  }
 
   // Typing indicator
   if (state === 'THINKING' || state === 'TRANSCRIBING') {
@@ -1839,6 +1850,7 @@ function handleStatus(state) {
 }
 
 let _skipNextUserLog = false;  // prevents duplicate user bubble from server echo
+let _lastTranscript = '';      // last transcribed text for header display
 
 // ── Log ──
 function handleLog(text) {
@@ -1846,10 +1858,22 @@ function handleLog(text) {
 
   // Parse for chat messages
   if (text.startsWith('User: ')) {
+    const userText = text.substring(6);
     if (_skipNextUserLog) { _skipNextUserLog = false; }
-    else { addChatMessage(text.substring(6), 'user'); }
+    else { addChatMessage(userText, 'user'); }
+    // Show transcribed text in dashboard header
+    _lastTranscript = userText;
+    if (userText && userText !== '[No speech recognized]') {
+      dashSubText.textContent = '"' + userText + '"';
+      dashSubText.style.color = 'var(--accent4)';
+    }
   } else if (text.startsWith('Argo: ')) {
     addChatMessage(text.substring(6), 'argo');
+    // Show ARGO's response briefly in header
+    const argoText = text.substring(6);
+    const preview = argoText.length > 80 ? argoText.substring(0, 80) + '...' : argoText;
+    dashSubText.textContent = '◉ ' + preview;
+    dashSubText.style.color = 'var(--accent)';
   }
 
   // Dashboard log
@@ -2029,7 +2053,39 @@ function sendOverride(key, value) {
 
 function sendClearOverrides() {
   send('clear_overrides', {});
+  clearDropdownSettings();
   addSystemLog('Overrides cleared');
+}
+
+// ═══════ PERSISTENT DROPDOWN SETTINGS (localStorage) ═══════
+const ARGO_SETTINGS_KEY = 'argo_dropdown_settings';
+
+function saveDropdownSettings() {
+  const settings = {
+    stt: $('sttSelect').value,
+    tts: $('ttsSelect').value,
+    ttsModel: $('ttsModelSelect').value,
+    personality: $('personalitySelect').value,
+  };
+  try { localStorage.setItem(ARGO_SETTINGS_KEY, JSON.stringify(settings)); } catch(e) {}
+}
+
+function restoreDropdownSettings() {
+  try {
+    const raw = localStorage.getItem(ARGO_SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.stt) { $('sttSelect').value = s.stt; handleSTTChange(); }
+    if (s.tts) { $('ttsSelect').value = s.tts; handleTTSChange(); }
+    if (s.ttsModel) { $('ttsModelSelect').value = s.ttsModel; handleTTSModelChange(); }
+    if (s.personality) { $('personalitySelect').value = s.personality; sendOverride('personality_mode', s.personality); }
+    updatePipelineDisplay();
+    addSystemLog('Settings restored from last session');
+  } catch(e) {}
+}
+
+function clearDropdownSettings() {
+  try { localStorage.removeItem(ARGO_SETTINGS_KEY); } catch(e) {}
 }
 
 function sendDiagnostics() {
@@ -2047,6 +2103,7 @@ function handleSTTChange() {
   const [engine, model] = val.split(':');
   sendOverride('stt_engine', engine);
   sendOverride('stt_model', model);
+  saveDropdownSettings();
   updatePipelineDisplay();
   addSystemLog(`STT → ${engine} / ${model}`);
 }
@@ -2058,6 +2115,7 @@ function handleTTSChange() {
   sendVoice(voice);
   // TTS model selector only relevant for OpenAI
   $('ttsModelSelect').disabled = engine !== 'openai';
+  saveDropdownSettings();
   updatePipelineDisplay();
   addSystemLog(`TTS → ${engine} / ${voice}`);
 }
@@ -2065,6 +2123,7 @@ function handleTTSChange() {
 function handleTTSModelChange() {
   const model = $('ttsModelSelect').value;
   sendOverride('tts_model', model);
+  saveDropdownSettings();
   updatePipelineDisplay();
   addSystemLog(`TTS Model → ${model}`);
 }
