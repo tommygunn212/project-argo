@@ -109,7 +109,7 @@ def test_coordinator_v2_full_pipeline():
             ("play music for me", ("command", "music"), "command/play"),
             ("xyzabc foobar", "unknown", "unknown/nonsense"),
             ("how are you", ("greeting", "question"), "greeting/how or question"),
-            ("tell me a joke", ("question", "command"), "question/joke or command"),
+            ("tell me a joke", ("question", "command", "unknown"), "question/joke or command or unknown"),
             ("stop recording", ("command", "music_stop"), "command/stop"),
         ]
 

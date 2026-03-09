@@ -1200,9 +1200,17 @@ class RuleBasedIntentParser(IntentParser):
 
         # Rule 0.05: SYSTEM_HEALTH temperature queries (hard deterministic)
         # Guard: skip if text is clearly about writing/email/blog (e.g., "photo" contains "hot")
+        # Guard: also skip if text is about general hardware shopping/building/3D printing
         _writing_guard = re.search(r"\b(email|e-mail|mail|blog|draft|note|memo|compose|article)\b", text_lower)
         _vision_fs_guard = re.search(r"\b(screenshot|screen\s*shot|photos?|files?|downloads?|locate|folder)\b", text_lower)
-        if not _writing_guard and not _vision_fs_guard and detect_temperature_query(text_lower):
+        _hw_shopping_guard = re.search(
+            r"\b(latest|best|newest|buy|buying|recommend|build|building|upgrade|upgrading"
+            r"|compare|comparing|vs|versus|review|benchmark|shop|shopping|market|available"
+            r"|released|worth|price|cost|hotend|printer|3d|filament|nozzle|extruder"
+            r"|should\s+i\s+get)\b",
+            text_lower,
+        )
+        if not _writing_guard and not _vision_fs_guard and not _hw_shopping_guard and detect_temperature_query(text_lower):
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,
                 confidence=1.0,
@@ -1440,10 +1448,7 @@ class RuleBasedIntentParser(IntentParser):
 
         # Rule 0.07: ARGO identity (hard deterministic)
         identity_phrase_hit = any(phrase in text_lower for phrase in ARGO_IDENTITY_PHRASES)
-        identity_keyword_hit = ("identity" in text_lower or "argo" in text_lower) and any(
-            cue in text_lower for cue in {"who", "what"}
-        )
-        if identity_phrase_hit or identity_keyword_hit:
+        if identity_phrase_hit:
             return Intent(
                 intent_type=IntentType.ARGO_IDENTITY,
                 confidence=1.0,
@@ -1736,7 +1741,15 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.1: SYSTEM_HEALTH hardware queries (hard deterministic)
-        if any(k in text_lower for k in HARDWARE_KEYWORDS) or any(q in text_lower for q in SYSTEM_OS_QUERIES):
+        # Guard: skip if question is general knowledge about hardware (shopping, building, recommendations)
+        _hw_general_guard = re.search(
+            r"\b(latest|best|newest|buy|buying|recommend|build|building|upgrade|upgrading"
+            r"|compare|comparing|vs|versus|review|benchmark|shop|shopping|market|available"
+            r"|released|announcement|generation|lineup|should\s+i\s+get|worth|price|cost"
+            r"|hotend|printer|3d|filament|nozzle|extruder)\b",
+            text_lower,
+        )
+        if not _hw_general_guard and (any(k in text_lower for k in HARDWARE_KEYWORDS) or any(q in text_lower for q in SYSTEM_OS_QUERIES)):
             subintent = None
             if any(q in text_lower for q in SYSTEM_MEMORY_QUERIES):
                 subintent = "memory"
@@ -1759,7 +1772,7 @@ class RuleBasedIntentParser(IntentParser):
             )
 
         # Rule 0.25: SYSTEM_HEALTH keywords (hard deterministic, no LLM)
-        if detect_system_health(text_lower):
+        if not _hw_general_guard and detect_system_health(text_lower):
             subintent = None
             return Intent(
                 intent_type=IntentType.SYSTEM_HEALTH,

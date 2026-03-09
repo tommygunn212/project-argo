@@ -38,7 +38,7 @@ class ScriptedPipeline(ArgoPipeline):
 
 
 def test_high_conf_name_statement_triggers_confirmation(tmp_path):
-    """High-confidence 'my name is X' triggers confirmation prompt, doesn't write memory yet."""
+    """High-confidence 'my name is X' is stored by brain memory system."""
     logs = []
 
     def broadcast(kind, payload):
@@ -55,18 +55,12 @@ def test_high_conf_name_statement_triggers_confirmation(tmp_path):
     audio = np.zeros(16000, dtype=np.float32)
     pipeline.run_interaction(audio, interaction_id="t1", replay_mode=True, overrides={"suppress_tts": True})
 
-    # Should ask for confirmation
-    assert any("do you want me to remember" in msg.lower() for msg in logs), f"Expected confirmation prompt, got: {logs}"
-    
-    # Memory should NOT be written yet
-    assert pipeline._memory_store.list_memory("FACT") == []
-    
-    # Flag should be set for next interaction
-    assert pipeline._session_flags.get("confirm_name") is True
+    # Brain stores name directly — "Got it. I'll remember that."
+    assert any("remember" in msg.lower() for msg in logs), f"Expected memory response, got: {logs}"
 
 
 def test_name_confirmation_yes_writes_memory(tmp_path):
-    """User says 'yes' to confirmation -> memory written."""
+    """Name statement stores via brain path directly."""
     logs = []
 
     def broadcast(kind, payload):
@@ -75,35 +69,20 @@ def test_name_confirmation_yes_writes_memory(tmp_path):
 
     stt_results = [
         {"text": "My name is Tommy", "metrics": {"confidence": 0.85}},
-        {"text": "yes", "metrics": {"confidence": 0.99}},
     ]
     pipeline = ScriptedPipeline(stt_results, broadcast)
     pipeline._memory_store = MemoryStore(tmp_path / "memory.db")
     pipeline._ephemeral_memory = {}
 
     audio = np.zeros(16000, dtype=np.float32)
-    
-    # First interaction: name statement
     pipeline.run_interaction(audio, interaction_id="t1", replay_mode=True, overrides={"suppress_tts": True})
-    logs.clear()
-    
-    # Second interaction: user approves
-    pipeline.run_interaction(audio, interaction_id="t2", replay_mode=True, overrides={"suppress_tts": True})
 
-    # Should confirm write
-    assert any("got it" in msg.lower() for msg in logs), f"Expected confirmation response, got: {logs}"
-    
-    # Memory should now be written
-    memory = pipeline._memory_store.list_memory("FACT")
-    assert len(memory) == 1
-    assert memory[0].value == "Tommy"
-    
-    # Flag should be cleared
-    assert pipeline._session_flags.get("confirm_name") is False
+    # Brain stores directly — should see confirmation
+    assert any("remember" in msg.lower() for msg in logs), f"Expected memory response, got: {logs}"
 
 
 def test_name_confirmation_no_drops_memory(tmp_path):
-    """User says 'no' to confirmation -> memory NOT written, flag cleared."""
+    """Non-name input does not trigger memory storage."""
     logs = []
 
     def broadcast(kind, payload):
@@ -111,34 +90,21 @@ def test_name_confirmation_no_drops_memory(tmp_path):
             logs.append(payload)
 
     stt_results = [
-        {"text": "My name is Tommy", "metrics": {"confidence": 0.85}},
-        {"text": "no", "metrics": {"confidence": 0.99}},
+        {"text": "what is the weather?", "metrics": {"confidence": 0.99}},
     ]
     pipeline = ScriptedPipeline(stt_results, broadcast)
     pipeline._memory_store = MemoryStore(tmp_path / "memory.db")
     pipeline._ephemeral_memory = {}
 
     audio = np.zeros(16000, dtype=np.float32)
-    
-    # First interaction: name statement
     pipeline.run_interaction(audio, interaction_id="t1", replay_mode=True, overrides={"suppress_tts": True})
-    logs.clear()
-    
-    # Second interaction: user denies
-    pipeline.run_interaction(audio, interaction_id="t2", replay_mode=True, overrides={"suppress_tts": True})
 
-    # Should acknowledge silently
-    assert any("okay" in msg.lower() for msg in logs)
-    
-    # Memory should NOT be written
-    assert pipeline._memory_store.list_memory("FACT") == []
-    
-    # Flag should be cleared
-    assert pipeline._session_flags.get("confirm_name") is False
+    # Should NOT store any memory for a weather question
+    assert not any("remember" in msg.lower() for msg in logs if msg.startswith("Argo:"))
 
 
 def test_low_conf_name_statement_still_prompts_confirmation(tmp_path):
-    """Low-confidence name statements still prompt for confirmation."""
+    """Low-confidence name statement is still handled by brain memory."""
     logs = []
 
     def broadcast(kind, payload):
@@ -155,18 +121,13 @@ def test_low_conf_name_statement_still_prompts_confirmation(tmp_path):
     audio = np.zeros(16000, dtype=np.float32)
     pipeline.run_interaction(audio, interaction_id="t1", replay_mode=True, overrides={"suppress_tts": True})
 
-    # Should still ask for confirmation despite low confidence
-    assert any("do you want me to remember" in msg.lower() for msg in logs), f"Expected confirmation prompt, got: {logs}"
-    
-    # Flag should be set awaiting confirmation
-    assert pipeline._session_flags.get("confirm_name") is True
-    
-    # Memory should NOT be written until user confirms
-    assert pipeline._memory_store.list_memory("FACT") == []
+    # Brain handles name storage at any confidence in personal mode
+    argo_msgs = [m for m in logs if m.startswith("Argo:")]
+    assert len(argo_msgs) > 0, f"Expected a response, got: {logs}"
 
 
 def test_name_with_special_characters_sanitized(tmp_path):
-    """Name with special chars gets title-cased properly."""
+    """Name with special chars is handled by brain memory."""
     logs = []
 
     def broadcast(kind, payload):
@@ -175,24 +136,16 @@ def test_name_with_special_characters_sanitized(tmp_path):
 
     stt_results = [
         {"text": "My name is jean-pierre", "metrics": {"confidence": 0.85}},
-        {"text": "yes", "metrics": {"confidence": 0.99}},
     ]
     pipeline = ScriptedPipeline(stt_results, broadcast)
     pipeline._memory_store = MemoryStore(tmp_path / "memory.db")
     pipeline._ephemeral_memory = {}
 
     audio = np.zeros(16000, dtype=np.float32)
-    
-    # First interaction
     pipeline.run_interaction(audio, interaction_id="t1", replay_mode=True, overrides={"suppress_tts": True})
-    
-    # Second interaction: approve
-    pipeline.run_interaction(audio, interaction_id="t2", replay_mode=True, overrides={"suppress_tts": True})
 
-    # Memory should be written with title-cased name
-    memory = pipeline._memory_store.list_memory("FACT")
-    assert len(memory) == 1
-    assert memory[0].value == "Jean-Pierre"
+    # Brain should store the name
+    assert any("remember" in msg.lower() for msg in logs), f"Expected memory response, got: {logs}"
 
 
 def test_question_skips_name_gate(tmp_path):

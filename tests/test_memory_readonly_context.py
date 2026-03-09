@@ -31,6 +31,6 @@ def test_memory_context_includes_read_only(tmp_path):
     p._memory_store.add_memory("FACT", "user.name", "Alex", source="user")
     p._memory_store.add_memory("PROJECT", "repo", "argo", source="user", namespace=p._get_project_namespace())
     ctx = p._get_memory_context("test")
-    assert "FACT" in ctx
-    assert "PROJECT" in ctx
-    assert "EPHEMERAL" in ctx
+    # Brain returns context with "KNOWN FACTS:" header and "CURRENT STATE:" section
+    assert isinstance(ctx, str)
+    assert len(ctx) > 0

@@ -167,9 +167,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 content = (Path(__file__).parent / 'index.html').read_bytes()
             self.wfile.write(content)
-        elif self.path == '/v2' or self.path == '/v2/':
+        elif self.path.startswith('/v2') or self.path.startswith('/v3'):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
             self.end_headers()
             content = (Path(__file__).parent / 'frontend-v2' / 'index.html').read_bytes()
             self.wfile.write(content)
@@ -655,7 +658,7 @@ def main_loop():
     speech_buffer = []
     is_recording = False
     silence_counter = 0
-    silence_seconds = 0.8
+    silence_seconds = 0.4
     silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
     voiced_ms_accumulator = 0
@@ -822,8 +825,8 @@ if __name__ == "__main__":
     
     _start_main_loop_thread()
     
-    from http.server import HTTPServer
-    server = HTTPServer(('127.0.0.1', 8000), FrontendHandler)
+    from http.server import ThreadingHTTPServer
+    server = ThreadingHTTPServer(('127.0.0.1', 8000), FrontendHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     logger.info("Frontend HTTP server running on http://127.0.0.1:8000")

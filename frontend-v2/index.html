@@ -680,6 +680,25 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   transition: all var(--transition);
 }
 .chat-send:hover { background: #0284c7; box-shadow: var(--glow-sm); }
+.chat-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+}
+.chat-btn:hover { background: var(--bg-hover); color: var(--text); }
+.chat-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chat-btn.active:hover { background: #0284c7; }
+.chat-btn.danger { color: var(--danger); }
+.chat-btn.danger:hover { background: rgba(239,68,68,0.15); }
 
 /* ═══════ PAGE: VOICE ═══════ */
 .waveform-container {
@@ -914,12 +933,12 @@ input[type="range"]::-moz-range-thumb {
     <div class="header-left">
       <div>
         <div class="logo">ARGO</div>
-        <div class="logo-sub">Neural Network v2.0</div>
+        <div class="logo-sub">Neural Network v2.0b</div>
       </div>
     </div>
     <div class="pipeline-state">
       <div class="state-badge" id="stateBadge" data-state="IDLE">IDLE</div>
-      <div class="turn-counter" id="turnCounter">0 / 6</div>
+      <div class="turn-counter" id="turnCounter">0 / 50</div>
     </div>
     <div class="conn-status">
       <div class="conn-dot" id="connDot"></div>
@@ -1054,6 +1073,8 @@ input[type="range"]::-moz-range-thumb {
           <div class="typing-dot"></div>
         </div>
         <div class="chat-input-bar">
+          <button class="chat-btn" id="chatMicBtn" title="Start listening (mic)" onclick="toggleMic()">🎤</button>
+          <button class="chat-btn danger" id="chatStopBtn" title="Stop speaking" onclick="stopSpeaking()">⏹</button>
           <input type="text" id="chatInput" placeholder="Type a message to ARGO..." autocomplete="off">
           <button class="chat-send" id="chatSendBtn" title="Send">▶</button>
         </div>
@@ -1067,93 +1088,91 @@ input[type="range"]::-moz-range-thumb {
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>ENGINE CONFIGURATION</div>
 
-          <!-- Row 1: STT Engine + STT Model -->
+          <!-- Row 1: STT (unified engine + model) -->
           <div class="grid-2" style="margin-bottom:14px">
             <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">STT Engine</label>
-              <select id="sttEngineSelect" style="width:100%" onchange="handleSTTEngineChange()">
-                <option value="openai_cloud" selected>OpenAI Cloud API</option>
-                <option value="azure">Azure Speech Services</option>
-                <option value="faster">Faster Whisper (local)</option>
-                <option value="openai">OpenAI Whisper (local)</option>
+              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">Speech-to-Text</label>
+              <select id="sttSelect" style="width:100%" onchange="handleSTTChange()">
+                <optgroup label="OpenAI Cloud">
+                  <option value="openai_cloud:gpt-4o-mini-transcribe" selected>gpt-4o-mini-transcribe ★</option>
+                  <option value="openai_cloud:gpt-4o-transcribe">gpt-4o-transcribe</option>
+                  <option value="openai_cloud:whisper-1">whisper-1 (legacy)</option>
+                </optgroup>
+                <optgroup label="Azure Speech">
+                  <option value="azure:azure-default">Azure — Default (en-US)</option>
+                  <option value="azure:azure-fast">Azure — Fast transcription</option>
+                </optgroup>
+                <optgroup label="Web Speech (browser)">
+                  <option value="webspeech:webspeech-default">Browser default (en-US)</option>
+                </optgroup>
+                <optgroup label="Faster Whisper (local)">
+                  <option value="faster:tiny">tiny (fastest)</option>
+                  <option value="faster:base">base</option>
+                  <option value="faster:small">small</option>
+                  <option value="faster:medium">medium</option>
+                  <option value="faster:large">large (most accurate)</option>
+                </optgroup>
+                <optgroup label="OpenAI Whisper (local)">
+                  <option value="openai:tiny">tiny (fastest)</option>
+                  <option value="openai:base">base</option>
+                  <option value="openai:small">small</option>
+                  <option value="openai:medium">medium</option>
+                  <option value="openai:large">large (most accurate)</option>
+                </optgroup>
               </select>
             </div>
             <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">STT Model</label>
-              <select id="sttModelSelect" style="width:100%" onchange="handleSTTModelChange()">
-                <optgroup label="OpenAI Cloud" id="sttModelsCloud">
-                  <option value="gpt-4o-mini-transcribe" selected>gpt-4o-mini-transcribe ★</option>
-                  <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
-                  <option value="whisper-1">whisper-1 (legacy)</option>
+              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">Text-to-Speech</label>
+              <select id="ttsSelect" style="width:100%" onchange="handleTTSChange()">
+                <optgroup label="OpenAI TTS — New Voices ★">
+                  <option value="openai:marin">Marin — Clear, refined ★</option>
+                  <option value="openai:cedar">Cedar — Warm, natural ★</option>
                 </optgroup>
-                <optgroup label="Azure" id="sttModelsAzure" style="display:none">
-                  <option value="azure-default">Default (en-US)</option>
-                  <option value="azure-fast">Fast transcription</option>
+                <optgroup label="OpenAI TTS">
+                  <option value="openai:nova" selected>Nova — Warm, conversational</option>
+                  <option value="openai:alloy">Alloy — Balanced, neutral</option>
+                  <option value="openai:ash">Ash — Soft, clear</option>
+                  <option value="openai:ballad">Ballad — Expressive, dramatic</option>
+                  <option value="openai:coral">Coral — Warm, friendly</option>
+                  <option value="openai:echo">Echo — Smooth, resonant</option>
+                  <option value="openai:fable">Fable — Storytelling, dynamic</option>
+                  <option value="openai:onyx">Onyx — Deep, authoritative</option>
+                  <option value="openai:sage">Sage — Calm, knowledgeable</option>
+                  <option value="openai:shimmer">Shimmer — Bright, energetic</option>
+                  <option value="openai:verse">Verse — Versatile, expressive</option>
                 </optgroup>
-                <optgroup label="Local" id="sttModelsLocal" style="display:none">
-                  <option value="tiny">tiny (fastest)</option>
-                  <option value="base">base</option>
-                  <option value="small">small</option>
-                  <option value="medium">medium</option>
-                  <option value="large">large (most accurate)</option>
+                <optgroup label="Edge TTS (free)">
+                  <option value="edge:ryan">Ryan — Male (GB)</option>
+                  <option value="edge:libby">Libby — Female (GB)</option>
+                  <option value="edge:natasha">Natasha — Female (AU)</option>
+                  <option value="edge:abeo">Abeo — Male (NG)</option>
+                  <option value="edge:jenny">Jenny — Female (US)</option>
+                  <option value="edge:guy">Guy — Male (US)</option>
+                  <option value="edge:aria">Aria — Female (US)</option>
+                  <option value="edge:davis">Davis — Male (US)</option>
+                </optgroup>
+                <optgroup label="Azure Neural TTS">
+                  <option value="azure:az-jenny">Jenny Neural (US)</option>
+                  <option value="azure:az-guy">Guy Neural (US)</option>
+                  <option value="azure:az-aria">Aria Neural (US)</option>
+                  <option value="azure:az-davis">Davis Neural (US)</option>
+                  <option value="azure:az-sonia">Sonia Neural (GB)</option>
+                  <option value="azure:az-ryan">Ryan Neural (GB)</option>
+                </optgroup>
+                <optgroup label="Piper (local, free)">
+                  <option value="piper:piper-default">Default (en_US)</option>
+                  <option value="piper:piper-lessac">Lessac — Medium quality</option>
+                  <option value="piper:piper-amy">Amy — British female</option>
+                  <option value="piper:piper-danny">Danny — British male</option>
+                </optgroup>
+                <optgroup label="Web Speech (browser)">
+                  <option value="webspeech:ws-default">Browser default</option>
                 </optgroup>
               </select>
             </div>
           </div>
 
-          <!-- Row 2: TTS Engine + TTS Voice -->
-          <div class="grid-2" style="margin-bottom:14px">
-            <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">TTS Engine</label>
-              <select id="ttsEngineSelect" style="width:100%" onchange="handleTTSEngineChange()">
-                <option value="openai" selected>OpenAI TTS</option>
-                <option value="edge">Edge TTS (free)</option>
-                <option value="azure">Azure Speech Services</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">TTS Voice</label>
-              <select id="voiceSelect" style="width:100%" onchange="sendVoice(this.value)">
-                <optgroup label="OpenAI — Recommended" id="voicesOpenAIRec">
-                  <option value="marin">Marin — Clear, refined ★</option>
-                  <option value="cedar">Cedar — Warm, natural ★</option>
-                </optgroup>
-                <optgroup label="OpenAI Voices" id="voicesOpenAI">
-                  <option value="nova" selected>Nova — Warm, conversational</option>
-                  <option value="alloy">Alloy — Balanced, neutral</option>
-                  <option value="ash">Ash — Soft, clear</option>
-                  <option value="ballad">Ballad — Expressive, dramatic</option>
-                  <option value="coral">Coral — Warm, friendly</option>
-                  <option value="echo">Echo — Smooth, resonant</option>
-                  <option value="fable">Fable — Storytelling, dynamic</option>
-                  <option value="onyx">Onyx — Deep, authoritative</option>
-                  <option value="sage">Sage — Calm, knowledgeable</option>
-                  <option value="shimmer">Shimmer — Bright, energetic</option>
-                  <option value="verse">Verse — Versatile, expressive</option>
-                </optgroup>
-                <optgroup label="Edge TTS" id="voicesEdge" style="display:none">
-                  <option value="ryan">Ryan — Male (GB)</option>
-                  <option value="libby">Libby — Female (GB)</option>
-                  <option value="natasha">Natasha — Female (AU)</option>
-                  <option value="abeo">Abeo — Male (NG)</option>
-                  <option value="jenny">Jenny — Female (US)</option>
-                  <option value="guy">Guy — Male (US)</option>
-                  <option value="aria">Aria — Female (US)</option>
-                  <option value="davis">Davis — Male (US)</option>
-                </optgroup>
-                <optgroup label="Azure Neural" id="voicesAzure" style="display:none">
-                  <option value="az-jenny">Jenny Neural (US)</option>
-                  <option value="az-guy">Guy Neural (US)</option>
-                  <option value="az-aria">Aria Neural (US)</option>
-                  <option value="az-davis">Davis Neural (US)</option>
-                  <option value="az-sonia">Sonia Neural (GB)</option>
-                  <option value="az-ryan">Ryan Neural (GB)</option>
-                </optgroup>
-              </select>
-            </div>
-          </div>
-
-          <!-- Row 3: TTS Model + Personality -->
+          <!-- Row 2: TTS Model + Personality -->
           <div class="grid-2">
             <div>
               <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">TTS Model</label>
@@ -1805,7 +1824,21 @@ function handleStatus(state) {
   } else {
     typingIndicator.classList.remove('visible');
   }
+
+  // Sync mic button state
+  const micBtn = $('chatMicBtn');
+  if (micBtn) {
+    if (state === 'LISTENING' || state === 'TRANSCRIBING') {
+      micBtn.classList.add('active');
+      chatMicActive = true;
+    } else if (state === 'IDLE') {
+      micBtn.classList.remove('active');
+      chatMicActive = false;
+    }
+  }
 }
+
+let _skipNextUserLog = false;  // prevents duplicate user bubble from server echo
 
 // ── Log ──
 function handleLog(text) {
@@ -1813,7 +1846,8 @@ function handleLog(text) {
 
   // Parse for chat messages
   if (text.startsWith('User: ')) {
-    addChatMessage(text.substring(6), 'user');
+    if (_skipNextUserLog) { _skipNextUserLog = false; }
+    else { addChatMessage(text.substring(6), 'user'); }
   } else if (text.startsWith('Argo: ')) {
     addChatMessage(text.substring(6), 'argo');
   }
@@ -1826,7 +1860,7 @@ function handleLog(text) {
 // ── Turn Info ──
 function handleTurnInfo(data) {
   if (data && data.current !== undefined) {
-    turnCounter.textContent = `${data.current} / ${data.limit || 6}`;
+    turnCounter.textContent = `${data.current} / ${data.limit || 50}`;
   }
 }
 
@@ -2008,55 +2042,24 @@ function refreshHA() {
 }
 
 // ═══════ ENGINE SWITCHING ═══════
-function handleSTTEngineChange() {
-  const engine = $('sttEngineSelect').value;
-  const modelSel = $('sttModelSelect');
-
-  // Show/hide the right optgroups
-  $('sttModelsCloud').style.display = engine === 'openai_cloud' ? '' : 'none';
-  $('sttModelsAzure').style.display = engine === 'azure' ? '' : 'none';
-  $('sttModelsLocal').style.display = (engine === 'faster' || engine === 'openai') ? '' : 'none';
-
-  // Auto-select first visible option
-  const firstVisible = modelSel.querySelector(`optgroup:not([style*="none"]) option`);
-  if (firstVisible) modelSel.value = firstVisible.value;
-
+function handleSTTChange() {
+  const val = $('sttSelect').value;
+  const [engine, model] = val.split(':');
   sendOverride('stt_engine', engine);
-  handleSTTModelChange();
-  updatePipelineDisplay();
-  addSystemLog(`STT Engine → ${engine}`);
-}
-
-function handleSTTModelChange() {
-  const model = $('sttModelSelect').value;
   sendOverride('stt_model', model);
   updatePipelineDisplay();
-  addSystemLog(`STT Model → ${model}`);
+  addSystemLog(`STT → ${engine} / ${model}`);
 }
 
-function handleTTSEngineChange() {
-  const engine = $('ttsEngineSelect').value;
-  const voiceSel = $('voiceSelect');
-
-  // Show/hide voice groups
-  $('voicesOpenAIRec').style.display = engine === 'openai' ? '' : 'none';
-  $('voicesOpenAI').style.display = engine === 'openai' ? '' : 'none';
-  $('voicesEdge').style.display = engine === 'edge' ? '' : 'none';
-  $('voicesAzure').style.display = engine === 'azure' ? '' : 'none';
-
+function handleTTSChange() {
+  const val = $('ttsSelect').value;
+  const [engine, voice] = val.split(':');
+  sendOverride('tts_engine', engine);
+  sendVoice(voice);
   // TTS model selector only relevant for OpenAI
   $('ttsModelSelect').disabled = engine !== 'openai';
-
-  // Auto-select first visible voice
-  const firstVoice = voiceSel.querySelector(`optgroup:not([style*="none"]) option`);
-  if (firstVoice) {
-    voiceSel.value = firstVoice.value;
-    sendVoice(firstVoice.value);
-  }
-
-  sendOverride('tts_engine', engine);
   updatePipelineDisplay();
-  addSystemLog(`TTS Engine → ${engine}`);
+  addSystemLog(`TTS → ${engine} / ${voice}`);
 }
 
 function handleTTSModelChange() {
@@ -2067,10 +2070,8 @@ function handleTTSModelChange() {
 }
 
 function updatePipelineDisplay() {
-  const sttEng = $('sttEngineSelect').value;
-  const sttModel = $('sttModelSelect').value;
-  const ttsEng = $('ttsEngineSelect').value;
-  const voice = $('voiceSelect').value;
+  const [sttEng, sttModel] = $('sttSelect').value.split(':');
+  const [ttsEng, voice] = $('ttsSelect').value.split(':');
   $('activePipelineDisplay').textContent =
     `STT: ${sttEng} / ${sttModel} → LLM: gpt-4o-mini → TTS: ${ttsEng} / ${voice}`;
 
@@ -2122,6 +2123,7 @@ chatInput.addEventListener('keydown', (e) => {
     e.preventDefault();
     const text = chatInput.value.trim();
     if (text) {
+      _skipNextUserLog = true;
       sendText(text);
       addChatMessage(text, 'user');
       chatInput.value = '';
@@ -2132,11 +2134,32 @@ chatInput.addEventListener('keydown', (e) => {
 $('chatSendBtn').addEventListener('click', () => {
   const text = chatInput.value.trim();
   if (text) {
+    _skipNextUserLog = true;
     sendText(text);
     addChatMessage(text, 'user');
     chatInput.value = '';
   }
 });
+
+// ─── Chat Mic / Stop / Mute ─────────────────────────────────
+let chatMicActive = false;
+function toggleMic() {
+  chatMicActive = !chatMicActive;
+  const btn = $('chatMicBtn');
+  if (chatMicActive) {
+    sendControl('RESUME');
+    btn.classList.add('active');
+    btn.title = 'Stop listening';
+  } else {
+    sendControl('PAUSE');
+    btn.classList.remove('active');
+    btn.title = 'Start listening (mic)';
+  }
+}
+function stopSpeaking() {
+  sendControl('FORCE_RELEASE_AUDIO');
+  addSystemLog('Stop speaking requested');
+}
 
 // ═══════ LOGGING ═══════
 function addDashLog(text) {

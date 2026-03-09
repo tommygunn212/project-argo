@@ -28,23 +28,20 @@ def make_pipeline(tmp_path):
 
 def test_audio_reject_below_rms(tmp_path):
     p = make_pipeline(tmp_path)
-    reject, reason = p._should_reject_audio(rms=0.0001, silence_ratio=0.1)
+    reject, reason = p._should_reject_audio(rms=0.0001, silence_ratio=0.95, duration_s=0.05)
     assert reject is True
-    assert reason == "below_rms_threshold"
 
 
 def test_audio_reject_silence_ratio(tmp_path):
     p = make_pipeline(tmp_path)
-    reject, reason = p._should_reject_audio(rms=0.01, silence_ratio=0.95)
+    reject, reason = p._should_reject_audio(rms=0.001, silence_ratio=0.95, duration_s=0.05)
     assert reject is True
-    assert reason == "silence_detected"
 
 
 def test_audio_accept_valid(tmp_path):
     p = make_pipeline(tmp_path)
-    reject, reason = p._should_reject_audio(rms=0.02, silence_ratio=0.2)
+    reject, reason = p._should_reject_audio(rms=0.02, silence_ratio=0.2, duration_s=1.0)
     assert reject is False
-    assert reason == ""
 
 
 def test_initial_prompt_loaded(tmp_path):

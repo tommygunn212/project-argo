@@ -26,4 +26,6 @@ def test_buffer_clears_on_new_instance():
 def test_buffer_is_ram_only():
     buf = ConversationBuffer(max_turns=2)
     buf.add("User", "remember this")
-    assert "Conversation context" in buf.as_context_block()
+    ctx = buf.as_context_block()
+    assert "remember this" in ctx
+    assert len(ctx) > 0

@@ -35,9 +35,10 @@ class MockResponseGenerator:
         intent_type = intent.intent_type.value if hasattr(intent, "intent_type") else "unknown"
         if intent_type == "greeting":
             return "Hello."
-        if intent_type == "question":
+        if intent_type in {"question", "time_status", "world_time"}:
             return "I heard a question."
-        if intent_type in {"command", "music", "music_stop", "music_next", "music_status"}:
+        if intent_type in {"command", "music", "music_stop", "music_next", "music_status",
+                           "smart_home_control", "smart_home_status", "volume_control"}:
             return "I heard a command."
         return "I'm not sure what you meant."
 
@@ -46,12 +47,12 @@ TEST_CASES = [
     # (input_text, expected_intent_type, expected_response)
     ("hello", "greeting", "Hello."),
     ("hi", "greeting", "Hello."),
-    ("what time is it", "question", "I heard a question."),
+    ("what time is it", "time_status", "I heard a question."),
     ("what's the weather?", "question", "I heard a question."),
     ("why", "question", "I heard a question."),
     ("play music", "command", "I heard a command."),
     ("stop", "command", "I heard a command."),
-    ("turn off the lights", "command", "I heard a command."),
+    ("turn off the lights", "smart_home_control", "I heard a command."),
     ("xyzabc foobar", "unknown", "I'm not sure what you meant."),
     ("random words here", "unknown", "I'm not sure what you meant."),
 ]

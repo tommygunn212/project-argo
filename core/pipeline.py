@@ -17,6 +17,7 @@ import sys
 import uuid
 import json
 import re
+import concurrent.futures
 from datetime import datetime, timedelta
 from typing import Optional
 from faster_whisper import WhisperModel
@@ -1949,11 +1950,11 @@ class ArgoPipeline:
                 stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant — like Jarvis but with your own personality. Have real conversations. Give full, thoughtful answers. Build on what Tommy says, offer your perspective, and keep the dialogue flowing naturally. Use memory context when relevant."},
+                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Be conversational but concise — answer in 1-3 sentences unless the topic genuinely needs more detail. No filler, no preambles, no essays. Match Tommy's energy: if he's brief, be brief."},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
-                    max_tokens=1024,
+                    max_tokens=300,
                     stream=True,
                 )
                 for chunk in stream:
@@ -2191,11 +2192,10 @@ class ArgoPipeline:
             persona = (
                 "You are ARGO in TOMMY GUNN MODE. You are having a real conversation, not answering a quiz.\n"
                 "Tone: sharp, well-read adult. Dry and observational. Calm confidence.\n"
-                "Give full, thoughtful answers — explain things properly like you would to a smart friend.\n"
-                "When user shares an idea, engage with it. Build on it, offer alternatives, share perspective.\n"
-                "Keep the dialogue flowing — end with a thought or question that invites response.\n"
+                "Be concise — 1-3 sentences for simple questions, more only when the topic genuinely demands it.\n"
+                "When user shares an idea, engage briefly. Build on it, offer a thought or alternative.\n"
                 "Humor: dry wit is welcome, keep it grounded.\n"
-                "No corporate filler. No therapy talk. No 'as an AI' phrasing.\n"
+                "No corporate filler. No therapy talk. No 'as an AI' phrasing. No essays.\n"
                 "If you lack context, say so. Never speculate.\n"
             )
         elif mode == "jarvis":
@@ -4064,6 +4064,241 @@ class ArgoPipeline:
         cleaned = " ".join(filtered).strip()
         return cleaned
 
+    # ── Sentence-Level LLM → TTS Streaming Pipeline ──────────────────
+    #
+    # Instead of: LLM (full) → persona → TTS (full)   [sequential, ~8-12s]
+    # This does:  LLM stream → sentence detect → TTS per sentence [pipelined, ~1.5s to first audio]
+
+    _SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])\s+|(?<=[.!?])$')
+
+    def _generate_and_speak_streamed(
+        self,
+        user_text: str,
+        interaction_id: str = "",
+        rag_context: str = "",
+        memory_context: str = "",
+        use_convo_buffer: bool = True,
+        replay_mode: bool = False,
+        overrides: dict | None = None,
+    ) -> str:
+        """
+        Stream LLM tokens to TTS at sentence boundaries.
+
+        Returns the full response text (for logging, brain, buffer).
+        TTS playback starts as soon as the first sentence completes —
+        typically within ~1s of the LLM request, rather than waiting
+        for the entire response.
+        """
+        import queue
+        import threading as _threading
+
+        if not self.llm_enabled:
+            self.logger.info("LLM offline: skipping generation")
+            return ""
+
+        mode = self._resolve_personality_mode()
+        serious_mode = self._is_serious(user_text)
+        convo_context = self._conversation_buffer.as_context_block() if use_convo_buffer else ""
+        prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context)
+
+        # Determine backend
+        llm_backend = "ollama"
+        model_name = "qwen:latest"
+        if self._config is not None:
+            llm_config = self._config.get("llm", {})
+            if isinstance(llm_config, dict):
+                llm_backend = llm_config.get("backend", "ollama")
+                model_name = llm_config.get("model", model_name)
+
+        # ── TTS consumer thread ──────────────────────────────────────
+        sentence_q: queue.Queue[Optional[str]] = queue.Queue()
+        tts_error = []
+        tts_started = _threading.Event()
+        tts_engine = self._tts_engine
+
+        def _tts_consumer():
+            """Drain sentence queue and play each sentence via TTS."""
+            first_sentence = True
+            try:
+                while True:
+                    try:
+                        sentence = sentence_q.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    if sentence is None:  # poison pill
+                        break
+                    if self.stop_signal.is_set():
+                        break
+
+                    # Acquire audio + transition on first sentence only
+                    if first_sentence:
+                        first_sentence = False
+                        try:
+                            self.audio.acquire_audio("TTS", interaction_id=interaction_id)
+                        except Exception as e:
+                            self.logger.error(f"[TTS-STREAM] Audio ownership error: {e}")
+                            break
+                        self.transition_state("SPEAKING", interaction_id=interaction_id, source="tts")
+                        self.is_speaking = True
+                        self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
+                        tts_started.set()
+
+                    if self.stop_signal.is_set():
+                        break
+
+                    # Play sentence
+                    self.logger.info(f"[TTS-STREAM] Speaking sentence ({len(sentence)} chars)")
+                    try:
+                        if tts_engine == "openai":
+                            if self._openai_tts is None:
+                                from core.openai_tts import OpenAIRealtimeTTS
+                                voice = self.openai_voices.get(self.current_voice_key, "nova")
+                                tts_model = "tts-1"
+                                try:
+                                    tts_model = self._config.get("text_to_speech", {}).get("model", "tts-1")
+                                except Exception:
+                                    pass
+                                self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                            self._openai_tts.speak(sentence)
+                        else:
+                            if self._edge_tts is None:
+                                from core.output_sink import EdgeTTSOutputSink
+                                self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
+                            self._edge_tts.speak(sentence)
+                    except Exception as e:
+                        self.logger.error(f"[TTS-STREAM] Sentence TTS error: {e}")
+                        tts_error.append(e)
+                        break
+            finally:
+                # Release audio ownership
+                if tts_started.is_set():
+                    try:
+                        self.audio.release_audio("TTS", interaction_id=interaction_id)
+                    except Exception as e:
+                        self.logger.error(f"[TTS-STREAM] release_audio error: {e}")
+                    self.is_speaking = False
+                    self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
+
+        # ── Stream LLM tokens and detect sentences ───────────────────
+        self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
+        start = time.perf_counter()
+        first_token_ms = None
+        full_response = ""
+        sentence_buffer = ""
+
+        # Start TTS consumer thread (it blocks on the queue until sentences arrive)
+        tts_thread = _threading.Thread(target=_tts_consumer, daemon=True)
+        if not replay_mode and not (overrides or {}).get("suppress_tts", False):
+            tts_thread.start()
+
+        try:
+            if llm_backend == "openai":
+                from openai import OpenAI
+                import os
+                openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                stream = openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Be conversational but concise — answer in 1-3 sentences unless the topic genuinely needs more detail. No filler, no preambles, no essays. Match Tommy's energy: if he's brief, be brief."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.7,
+                    max_tokens=300,
+                    stream=True,
+                )
+                for chunk in stream:
+                    if self.stop_signal.is_set():
+                        break
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    part = delta.content if delta and delta.content else ""
+                    if not part:
+                        continue
+                    if first_token_ms is None:
+                        first_token_ms = (time.perf_counter() - start) * 1000
+                        self._record_timeline(
+                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                            stage="llm", interaction_id=interaction_id,
+                        )
+                    full_response += part
+                    sentence_buffer += part
+
+                    # Flush complete sentences to TTS
+                    while self._SENTENCE_BOUNDARY_RE.search(sentence_buffer):
+                        parts = self._SENTENCE_BOUNDARY_RE.split(sentence_buffer, maxsplit=1)
+                        complete = parts[0].strip()
+                        sentence_buffer = parts[1] if len(parts) > 1 else ""
+                        if complete and tts_thread.is_alive():
+                            # Strip non-ASCII and apply persona per sentence
+                            complete = re.sub(r"[^\x00-\x7F]+", "", complete)
+                            tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
+                            if tts_text:
+                                sentence_q.put(tts_text)
+            else:
+                client = ollama.Client(host='http://127.0.0.1:11434')
+                stream = client.generate(
+                    model=model_name, prompt=prompt, stream=True,
+                    options={"temperature": 0.7, "num_predict": 1024},
+                )
+                for chunk in stream:
+                    if self.stop_signal.is_set():
+                        break
+                    part = chunk.get('response', '')
+                    if not part:
+                        continue
+                    if first_token_ms is None:
+                        first_token_ms = (time.perf_counter() - start) * 1000
+                        self._record_timeline(
+                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                            stage="llm", interaction_id=interaction_id,
+                        )
+                    full_response += part
+                    sentence_buffer += part
+
+                    while self._SENTENCE_BOUNDARY_RE.search(sentence_buffer):
+                        parts = self._SENTENCE_BOUNDARY_RE.split(sentence_buffer, maxsplit=1)
+                        complete = parts[0].strip()
+                        sentence_buffer = parts[1] if len(parts) > 1 else ""
+                        if complete and tts_thread.is_alive():
+                            complete = re.sub(r"[^\x00-\x7F]+", "", complete)
+                            tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
+                            if tts_text:
+                                sentence_q.put(tts_text)
+
+            # Flush any remaining text in the buffer
+            remainder = sentence_buffer.strip()
+            if remainder and tts_thread.is_alive():
+                remainder = re.sub(r"[^\x00-\x7F]+", "", remainder)
+                tts_text = self._sanitize_tts_text(remainder, enforce_confidence=False)
+                if tts_text:
+                    sentence_q.put(tts_text)
+
+        except Exception as e:
+            self.logger.error(f"[LLM-STREAM] Error: {e}", exc_info=True)
+        finally:
+            total_ms = (time.perf_counter() - start) * 1000
+            self._record_timeline(f"LLM_DONE {total_ms:.0f}ms", stage="llm", interaction_id=interaction_id)
+            self.broadcast("llm_metrics", {
+                "interaction_id": interaction_id,
+                "first_token_ms": first_token_ms,
+                "total_ms": total_ms,
+            })
+
+        # ── Broadcast text to chat NOW (before waiting for TTS) ──
+        full_response = self._strip_prompt_artifacts(full_response)
+        _display = re.sub(r"[^\x00-\x7F]+", "", full_response or "")
+        _display = self._strip_disallowed_phrases(_display)
+        _persona = self._resolve_personality_mode()
+        _display = apply_persona(_display, ResponseType.ANSWER, _persona)
+        if _display.strip():
+            self.broadcast("log", f"Argo: {_display}")
+
+        # Signal TTS thread to finish and wait for it
+        sentence_q.put(None)
+        if tts_thread.is_alive():
+            tts_thread.join(timeout=30)
+
+        return full_response
+
     def speak(self, text, interaction_id: str = "", force_tts: bool = False):
         if not self.runtime_overrides.get("tts_enabled", True) and not force_tts:
             self.logger.info("[TTS] Disabled by runtime override")
@@ -4800,11 +5035,8 @@ class ArgoPipeline:
             self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
             return
 
-        intent = None
-        try:
-            intent = self._intent_parser.parse(user_text)
-        except Exception:
-            intent = None
+        # Reuse early_intent from fast-path check above (same text, same parser)
+        intent = early_intent
 
         request_kind = self._classify_request_type(user_text, intent)
         if (
@@ -5617,8 +5849,12 @@ class ArgoPipeline:
             except Exception as e:
                 self.logger.warning(f"[BRAIN] before_llm failed: {e}")
 
-            rag_context = self._get_rag_context(user_text, interaction_id)
-            memory_context = self._get_memory_context(interaction_id, user_text=user_text)
+            # Fetch RAG + memory context IN PARALLEL (saves ~50-200ms)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                rag_future = pool.submit(self._get_rag_context, user_text, interaction_id)
+                mem_future = pool.submit(self._get_memory_context, interaction_id, user_text=user_text)
+                rag_context = rag_future.result(timeout=5)
+                memory_context = mem_future.result(timeout=5)
             
             # Brain provides its own last-exchange context, so always mark as buffered
             llm_context_scope = "buffered"
@@ -5636,17 +5872,22 @@ class ArgoPipeline:
             return
         self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
         self.logger.info(f"[LLM] context_scope={llm_context_scope}")
-        ai_text = self.generate_response(
+
+        # ── Sentence-level streaming: LLM → TTS pipelined ──
+        # TTS starts speaking the first sentence while LLM generates the rest.
+        ai_text = self._generate_and_speak_streamed(
             user_text,
             interaction_id=interaction_id,
             rag_context=rag_context,
             memory_context=memory_context,
             use_convo_buffer=(llm_context_scope == "buffered"),
+            replay_mode=replay_mode,
+            overrides=overrides,
         )
         ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
         ai_text = self._strip_disallowed_phrases(ai_text)
         
-        # Apply persona formatting for ANSWER type responses
+        # Apply persona formatting for logging (TTS already played per-sentence)
         persona_name = self._resolve_personality_mode()
         ai_text = apply_persona(ai_text, ResponseType.ANSWER, persona_name)
         
@@ -5654,7 +5895,7 @@ class ArgoPipeline:
             self.logger.warning("[LLM] Empty response")
             self.broadcast("log", "Argo: [No response]")
             return
-        self.broadcast("log", f"Argo: {ai_text}")
+        # NOTE: broadcast already sent inside _generate_and_speak_streamed (before TTS wait)
         self._conversation_buffer.add("Assistant", ai_text)
         self._append_convo_ledger("argo", ai_text)
 
@@ -5665,15 +5906,7 @@ class ArgoPipeline:
         except Exception as e:
             self.logger.warning(f"[BRAIN] after_llm failed: {e}")
 
-        if not self.stop_signal.is_set() and not replay_mode:
-            tts_text = self._sanitize_tts_text(ai_text, enforce_confidence=False)
-            tts_override = (overrides or {}).get("suppress_tts", False)
-            if tts_override:
-                self.logger.info("[TTS] Suppressed for next interaction override")
-            elif tts_text:
-                self.speak(tts_text, interaction_id=interaction_id)
-            else:
-                self.logger.warning("[TTS] Sanitized response is empty, skipping TTS")
+        # TTS already played via streaming pipeline above — no separate speak() call needed
 
         self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
         self.logger.info("--- Interaction Complete ---")
