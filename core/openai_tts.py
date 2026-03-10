@@ -98,12 +98,10 @@ class OpenAIRealtimeTTS:
 
     def speak(self, text: str) -> None:
         """
-        Synthesize and play text using OpenAI TTS with true streaming.
+        Synthesize and play text using OpenAI TTS.
 
-        Audio playback begins after STREAM_BUFFER_BYTES of PCM arrive,
-        then continues filling the buffer while playing. This gives
-        near-instant time-to-first-audio and allows barge-in to stop
-        playback at any point.
+        Collects all PCM data from the API, then plays it in a single
+        non-blocking stream with 10ms poll for barge-in responsiveness.
         """
         if not text or not text.strip():
             return
@@ -135,13 +133,8 @@ class OpenAIRealtimeTTS:
                 f"[OPENAI_TTS] First byte in {(first_byte_time - start_time)*1000:.0f}ms"
             )
 
-            # --- True streaming playback ---
-            # Collect an initial buffer, start playing, then keep feeding chunks.
+            # Collect all PCM data (checking for stop between chunks)
             pcm_chunks = []
-            total_bytes = 0
-            playback_started = False
-            stream = None
-            write_idx = 0
             source_rate = 24000
 
             for chunk in response.iter_bytes(chunk_size=4096):
@@ -149,28 +142,10 @@ class OpenAIRealtimeTTS:
                     logger.info("[OPENAI_TTS] Stop requested during stream")
                     return
                 pcm_chunks.append(chunk)
-                total_bytes += len(chunk)
-
-                # Once we have enough data, start playback in a non-blocking stream
-                if not playback_started and total_bytes >= self.STREAM_BUFFER_BYTES:
-                    playback_started = True
-                    initial_pcm = b"".join(pcm_chunks)
-                    audio_arr = np.frombuffer(initial_pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                    if self._device_sample_rate != source_rate:
-                        from scipy.signal import resample
-                        target_len = int(len(audio_arr) * self._device_sample_rate / source_rate)
-                        audio_arr = resample(audio_arr, target_len).astype(np.float32)
-                    with self._playback_lock:
-                        sd.play(audio_arr, samplerate=self._device_sample_rate, device=self._audio_device, blocking=False)
-                    write_idx = len(audio_arr)
-                    logger.info(
-                        f"[OPENAI_TTS] Streaming playback started at {(time.perf_counter() - start_time)*1000:.0f}ms"
-                    )
 
             if self._stop_requested:
                 return
 
-            # Combine all remaining chunks
             all_pcm = b"".join(pcm_chunks)
             if not all_pcm:
                 return
@@ -191,14 +166,7 @@ class OpenAIRealtimeTTS:
             if self._stop_requested:
                 return
 
-            # If we already started streaming, stop and replay the full audio
-            # (simplest approach that handles the tail correctly)
-            if playback_started:
-                sd.stop()
-                if self._stop_requested:
-                    return
-
-            # Play the complete audio
+            # Play the complete audio in one shot (no stop-and-replay race)
             with self._playback_lock:
                 sd.play(full_audio, samplerate=self._device_sample_rate, device=self._audio_device)
                 # Poll instead of blocking sd.wait() so we can respond to stop quickly
