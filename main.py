@@ -300,6 +300,8 @@ def _handle_control(command):
                 audio_ref.start()
             except Exception:
                 pass
+        # Ensure main loop thread is alive (may have died from a restart race)
+        _start_main_loop_thread()
         if pipeline_ref:
             if pipeline_ref.current_state in {"IDLE", "LISTENING"}:
                 pipeline_ref.transition_state("LISTENING", source="ui")
@@ -330,7 +332,9 @@ def _handle_control(command):
                 audio_ref.stop()
             except Exception:
                 pass
-        time.sleep(0.3)
+        # Wait for old main_loop thread to exit (calibration takes up to 2s)
+        if main_loop_thread and main_loop_thread.is_alive():
+            main_loop_thread.join(timeout=5.0)
         started = _start_main_loop_thread()
         broadcast_msg("log", "Server restart requested" if started else "Server already running")
     elif cmd == "FORCE_RELEASE_AUDIO":
