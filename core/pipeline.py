@@ -202,9 +202,10 @@ class ArgoPipeline:
         self._openai_tts = None
         self._pending_barge_in_suppression = None
         self._TTS_INSTRUCTIONS = (
-            "Speak naturally and conversationally, like a sharp friend. "
-            "Use natural inflection — vary pitch and emphasis. "
-            "Pause briefly at commas and periods. Keep energy calm but engaged."
+            "Speak with energy and personality — you're a sharp, witty friend who's genuinely excited to talk. "
+            "Vary your pitch, pace, and emphasis like a real conversation. "
+            "Hit punchlines harder, lean into jokes, and let enthusiasm come through naturally. "
+            "Keep it punchy and alive — never flat, never monotone."
         )
         self._memory_store = get_memory_store()
         self._ephemeral_memory = {}
@@ -1988,7 +1989,7 @@ class ArgoPipeline:
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
-                    max_tokens=300,
+                    max_tokens=500,
                     stream=True,
                 )
                 for chunk in stream:
@@ -4285,7 +4286,7 @@ class ArgoPipeline:
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
-                    max_tokens=300,
+                    max_tokens=500,
                     stream=True,
                 )
                 for chunk in stream:

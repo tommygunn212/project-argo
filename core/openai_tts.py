@@ -55,7 +55,7 @@ class OpenAIRealtimeTTS:
         self,
         voice: str = "nova",
         model: str = "tts-1",
-        speed: float = 1.0,
+        speed: float = 1.1,
     ):
         self.voice = voice if voice in self.VOICES else "nova"
         self.model = model  # tts-1, tts-1-hd, or gpt-4o-mini-tts

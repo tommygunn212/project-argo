@@ -789,7 +789,7 @@ def main_loop():
         # Echo-aware: Raise barge-in threshold during TTS to prevent self-hearing triggers.
         # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
         barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
-        effective_barge_threshold = barge_in_threshold * 2.5 if pipeline.is_speaking else barge_in_threshold
+        effective_barge_threshold = barge_in_threshold * 3.5 if pipeline.is_speaking else barge_in_threshold
         if pipeline.is_speaking and volume >= effective_barge_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
             allowed = pipeline.current_state == "SPEAKING"
             logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={effective_barge_threshold:.2f}) !!!")
