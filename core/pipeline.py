@@ -4651,7 +4651,7 @@ class ArgoPipeline:
                 matched_phrases.add(p)
         if matched_phrases:
             return "ARGO_IDENTITY", matched_phrases
-        identity_specific = tokens & {"argo", "yourself", "identity", "assistant", "agent", "name"}
+        identity_specific = tokens & {"argo", "yourself", "identity"}
         question_cue = tokens & {"who", "what"}
         if identity_specific and question_cue:
             return "ARGO_IDENTITY", (identity_specific | question_cue)
@@ -4979,10 +4979,8 @@ class ArgoPipeline:
                 return
             topic = None
         if topic == "ARGO_IDENTITY":
-            self.logger.info(f"[CANONICAL] ARGO_IDENTITY matched keywords: {sorted(matched)} | LLM BYPASSED")
-            if self._respond_with_argo_identity(interaction_id, replay_mode, overrides):
-                return
-            topic = None
+            self.logger.info(f"[CANONICAL] ARGO_IDENTITY matched keywords: {sorted(matched)} | routing to LLM with persona")
+            topic = None  # Let the LLM handle identity questions with personality
         if topic == "ARGO_GOVERNANCE":
             self.logger.info(f"[CANONICAL] ARGO_GOVERNANCE matched keywords: {sorted(matched)} | LLM BYPASSED")
             if self._respond_with_argo_governance(None, interaction_id, replay_mode, overrides):
@@ -5611,8 +5609,8 @@ class ArgoPipeline:
                 return
 
         if intent and intent.intent_type == IntentType.ARGO_IDENTITY:
-            if self._respond_with_argo_identity(interaction_id, replay_mode, overrides):
-                return
+            self.logger.info("[INTENT] ARGO_IDENTITY detected; routing to LLM with persona")
+            # Fall through to LLM so persona handles identity naturally
 
         if intent and intent.intent_type == IntentType.ARGO_GOVERNANCE:
             if self._respond_with_argo_governance(intent, interaction_id, replay_mode, overrides):
