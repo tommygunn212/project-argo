@@ -140,6 +140,7 @@ class OpenAIRealtimeTTS:
             # Stream directly to output — no collect-then-play gap
             pcm_buffer = bytearray()
             playback_started = False
+            playback_start_time = 0.0
             stream = None
             total_samples_written = 0
 
@@ -161,6 +162,7 @@ class OpenAIRealtimeTTS:
                         )
                         stream.start()
                         playback_started = True
+                        playback_start_time = time.perf_counter()
 
                     # Write accumulated audio to the stream in chunks
                     if playback_started and len(pcm_buffer) >= self.STREAM_BUFFER_BYTES:
@@ -199,12 +201,13 @@ class OpenAIRealtimeTTS:
                         time.sleep(0.01)
                     total_samples_written = len(audio_f32)
 
-                # Wait for the OutputStream to drain
-                if stream:
-                    # Approximate remaining playback time and poll for barge-in
-                    remaining = total_samples_written / self._device_sample_rate
+                # Wait for the OutputStream to drain (only the remaining time)
+                if stream and playback_start_time > 0:
+                    total_duration = total_samples_written / self._device_sample_rate
+                    elapsed = time.perf_counter() - playback_start_time
+                    remaining = max(0, total_duration - elapsed + 0.05)
                     drain_start = time.perf_counter()
-                    while (time.perf_counter() - drain_start) < remaining + 0.15:
+                    while (time.perf_counter() - drain_start) < remaining:
                         if self._stop_requested:
                             logger.info("[OPENAI_TTS] Barge-in stopped playback")
                             break
