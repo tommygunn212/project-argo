@@ -100,8 +100,9 @@ class OpenAIRealtimeTTS:
         """
         Synthesize and play text using OpenAI TTS.
 
-        Collects all PCM data from the API, then plays it in a single
-        non-blocking stream with 10ms poll for barge-in responsiveness.
+        Streams PCM from the API directly into an audio output stream,
+        starting playback as soon as the first chunk arrives for minimum
+        inter-sentence latency.  Supports barge-in via _stop_requested.
         """
         if not text or not text.strip():
             return
@@ -133,49 +134,90 @@ class OpenAIRealtimeTTS:
                 f"[OPENAI_TTS] First byte in {(first_byte_time - start_time)*1000:.0f}ms"
             )
 
-            # Collect all PCM data (checking for stop between chunks)
-            pcm_chunks = []
             source_rate = 24000
+            need_resample = self._device_sample_rate != source_rate
 
-            for chunk in response.iter_bytes(chunk_size=4096):
-                if self._stop_requested:
-                    logger.info("[OPENAI_TTS] Stop requested during stream")
-                    return
-                pcm_chunks.append(chunk)
+            # Stream directly to output — no collect-then-play gap
+            pcm_buffer = bytearray()
+            playback_started = False
+            stream = None
+            total_samples_written = 0
 
-            if self._stop_requested:
-                return
-
-            all_pcm = b"".join(pcm_chunks)
-            if not all_pcm:
-                return
-
-            full_audio = np.frombuffer(all_pcm, dtype=np.int16).astype(np.float32) / 32768.0
-
-            if self._device_sample_rate != source_rate:
-                from scipy.signal import resample
-                target_len = int(len(full_audio) * self._device_sample_rate / source_rate)
-                full_audio = resample(full_audio, target_len).astype(np.float32)
-
-            synth_done_time = time.perf_counter()
-            logger.info(
-                f"[OPENAI_TTS] Synth complete in {(synth_done_time - start_time)*1000:.0f}ms, "
-                f"duration {len(full_audio)/self._device_sample_rate:.1f}s"
-            )
-
-            if self._stop_requested:
-                return
-
-            # Play the complete audio in one shot (no stop-and-replay race)
-            with self._playback_lock:
-                sd.play(full_audio, samplerate=self._device_sample_rate, device=self._audio_device)
-                # Poll instead of blocking sd.wait() so we can respond to stop quickly
-                while sd.get_stream() and sd.get_stream().active:
+            try:
+                for chunk in response.iter_bytes(chunk_size=4096):
                     if self._stop_requested:
-                        sd.stop()
-                        logger.info("[OPENAI_TTS] Barge-in stopped playback")
+                        logger.info("[OPENAI_TTS] Stop requested during stream")
                         return
-                    time.sleep(0.01)  # 10ms polling — fast barge-in response
+                    pcm_buffer.extend(chunk)
+
+                    # Start playback once we have enough buffered
+                    if not playback_started and len(pcm_buffer) >= self.STREAM_BUFFER_BYTES:
+                        stream = sd.OutputStream(
+                            samplerate=self._device_sample_rate,
+                            channels=1,
+                            dtype='float32',
+                            device=self._audio_device,
+                            blocksize=2048,
+                        )
+                        stream.start()
+                        playback_started = True
+
+                    # Write accumulated audio to the stream in chunks
+                    if playback_started and len(pcm_buffer) >= self.STREAM_BUFFER_BYTES:
+                        audio_f32 = np.frombuffer(bytes(pcm_buffer), dtype=np.int16).astype(np.float32) / 32768.0
+                        if need_resample:
+                            from scipy.signal import resample
+                            target_len = int(len(audio_f32) * self._device_sample_rate / source_rate)
+                            audio_f32 = resample(audio_f32, target_len).astype(np.float32)
+                        stream.write(audio_f32.reshape(-1, 1))
+                        total_samples_written += len(audio_f32)
+                        pcm_buffer.clear()
+
+                # Flush any remaining audio
+                if pcm_buffer and playback_started and stream:
+                    if not self._stop_requested:
+                        audio_f32 = np.frombuffer(bytes(pcm_buffer), dtype=np.int16).astype(np.float32) / 32768.0
+                        if need_resample:
+                            from scipy.signal import resample
+                            target_len = int(len(audio_f32) * self._device_sample_rate / source_rate)
+                            audio_f32 = resample(audio_f32, target_len).astype(np.float32)
+                        stream.write(audio_f32.reshape(-1, 1))
+                        total_samples_written += len(audio_f32)
+                    pcm_buffer.clear()
+                elif pcm_buffer and not playback_started:
+                    # Short text: all audio arrived before buffer threshold
+                    audio_f32 = np.frombuffer(bytes(pcm_buffer), dtype=np.int16).astype(np.float32) / 32768.0
+                    if need_resample:
+                        from scipy.signal import resample
+                        target_len = int(len(audio_f32) * self._device_sample_rate / source_rate)
+                        audio_f32 = resample(audio_f32, target_len).astype(np.float32)
+                    sd.play(audio_f32, samplerate=self._device_sample_rate, device=self._audio_device)
+                    while sd.get_stream() and sd.get_stream().active:
+                        if self._stop_requested:
+                            sd.stop()
+                            return
+                        time.sleep(0.01)
+                    total_samples_written = len(audio_f32)
+
+                # Wait for the OutputStream to drain
+                if stream:
+                    # Approximate remaining playback time and poll for barge-in
+                    remaining = total_samples_written / self._device_sample_rate
+                    drain_start = time.perf_counter()
+                    while (time.perf_counter() - drain_start) < remaining + 0.15:
+                        if self._stop_requested:
+                            logger.info("[OPENAI_TTS] Barge-in stopped playback")
+                            break
+                        if not stream.active:
+                            break
+                        time.sleep(0.01)
+            finally:
+                if stream:
+                    try:
+                        stream.stop()
+                        stream.close()
+                    except Exception:
+                        pass
 
             total_time = time.perf_counter() - start_time
             logger.info(f"[OPENAI_TTS] Total speak() time: {total_time*1000:.0f}ms")
