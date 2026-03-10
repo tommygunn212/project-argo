@@ -72,6 +72,7 @@ connected_clients = set()
 CURRENT_STATUS = "INITIALIZING"  # Stores the latest state to sync new clients
 pipeline_ref = None
 audio_ref = None
+_noise_calibrate_fn = None  # Set by main loop; callable from control handler
 LISTENING_ENABLED = False
 SERVER_ENABLED = True
 main_loop_thread = None
@@ -219,6 +220,14 @@ async def websocket_handler(websocket):
                 voice_key = getattr(pipeline_ref, "current_voice_key", None)
                 if voice_key:
                     await websocket.send(json.dumps({"type": "log", "payload": f"Voice switched to {voice_key}"}))
+
+                # Send active engine config so frontend dropdowns sync with backend
+                engine_config = {
+                    "tts_engine": getattr(pipeline_ref, "_tts_engine", "edge"),
+                    "tts_model": getattr(pipeline_ref, "_tts_model", "tts-1"),
+                    "tts_voice": getattr(pipeline_ref, "current_voice_key", "nova"),
+                }
+                await websocket.send(json.dumps({"type": "engine_config", "payload": engine_config}))
             except Exception:
                 pass
 
@@ -250,6 +259,15 @@ async def websocket_handler(websocket):
                 _handle_clear_overrides()
     finally:
         connected_clients.discard(websocket)
+
+
+def _run_noise_calibration():
+    """Called from control handler to trigger recalibration."""
+    if _noise_calibrate_fn:
+        _noise_calibrate_fn()
+    else:
+        logger.warning("[CALIBRATE] Calibration function not available yet")
+        broadcast_msg("log", "Calibration not available — main loop not running")
 
 
 def _handle_control(command):
@@ -336,6 +354,11 @@ def _handle_control(command):
             except Exception:
                 pass
         broadcast_msg("status", "LISTENING")
+    elif cmd == "CALIBRATE_NOISE":
+        log_event("UI_CMD_CALIBRATE_NOISE", stage="ui")
+        broadcast_msg("log", "Noise calibration requested...")
+        # Run in a thread so the websocket handler doesn't block
+        threading.Thread(target=_run_noise_calibration, daemon=True).start()
     elif cmd == "FULL_RESET" or cmd == "FORCE_RESET":
         log_event("UI_CMD_FORCE_RESET", stage="ui")
         SERVER_ENABLED = False
@@ -368,6 +391,8 @@ def _handle_override(payload: dict):
             logging.getLogger().setLevel(str(value).upper())
         except Exception:
             pass
+    if key == "tts_model" and pipeline_ref:
+        pipeline_ref.set_tts_model(str(value))
     log_event(f"UI_CMD_SET_OVERRIDE {key}={value}", stage="ui")
     broadcast_msg("runtime_overrides", get_runtime_overrides())
 
@@ -588,7 +613,7 @@ async def start_server():
             await asyncio.sleep(1)
 
 def main_loop():
-    global LISTENING_ENABLED, SERVER_ENABLED
+    global LISTENING_ENABLED, SERVER_ENABLED, _noise_calibrate_fn
     # Wait briefly for UI server loop to be ready to capture early logs
     time.sleep(1)
     
@@ -642,16 +667,57 @@ def main_loop():
     # Higher threshold = Less sensitive to background noise
     # Lower threshold = Easier to trigger (more false positives)
     # Default: 5.0, Quiet room: 3.0, Noisy environment: 7.0-10.0
-    vad_threshold = float(config.get("audio.vad_threshold", os.getenv("ARGO_VAD_THRESHOLD", "5.0")))
+    config_vad_threshold = float(config.get("audio.vad_threshold", os.getenv("ARGO_VAD_THRESHOLD", "5.0")))
     barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
-    
+
+    # --- AMBIENT NOISE CALIBRATION ---
+    def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
+        """Read ambient audio for `duration_sec`, compute noise floor, return adaptive VAD threshold."""
+        nonlocal vad_threshold, barge_in_threshold
+        frames_needed = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * duration_sec)
+        rms_samples = []
+        broadcast_msg("log", f"Calibrating ambient noise ({duration_sec}s) — stay quiet...")
+        logger.info(f"[CALIBRATE] Recording {duration_sec}s of ambient noise ({frames_needed} frames)...")
+        for _ in range(frames_needed):
+            frame = audio.read_frame()
+            if frame is not None:
+                rms = np.linalg.norm(frame) * 10
+                rms_samples.append(rms)
+        if not rms_samples:
+            logger.warning("[CALIBRATE] No frames captured, keeping config threshold")
+            broadcast_msg("log", "Calibration failed — no audio frames")
+            return config_vad_threshold
+        noise_floor = np.mean(rms_samples)
+        noise_peak = np.percentile(rms_samples, 95)  # 95th percentile catches spikes
+        # Threshold = whichever is higher: multiplier * mean, or 1.5 * p95 peak
+        adaptive_threshold = max(noise_peak * 1.5, noise_floor * multiplier)
+        # Never go below config minimum
+        adaptive_threshold = max(adaptive_threshold, config_vad_threshold)
+        vad_threshold = adaptive_threshold
+        barge_in_threshold = adaptive_threshold * 1.2
+        logger.info(
+            f"[CALIBRATE] Noise floor: mean={noise_floor:.3f} p95={noise_peak:.3f} "
+            f"-> VAD threshold: {vad_threshold:.3f}, barge-in: {barge_in_threshold:.3f}"
+        )
+        broadcast_msg("log", f"Noise calibrated — floor: {noise_floor:.2f}, VAD threshold: {vad_threshold:.2f}")
+        broadcast_msg("noise_calibration", {
+            "noise_floor": round(float(noise_floor), 3),
+            "noise_peak_p95": round(float(noise_peak), 3),
+            "vad_threshold": round(float(vad_threshold), 3),
+            "barge_in_threshold": round(float(barge_in_threshold), 3),
+        })
+        return vad_threshold
+
+    vad_threshold = calibrate_noise_floor()
+    _noise_calibrate_fn = calibrate_noise_floor
+
     if LISTENING_ENABLED:
         logger.info("Starting in always-listening mode (VAD-based)")
-        logger.info(f"VAD Threshold set to: {vad_threshold} (Lower = More Sensitive)")
+        logger.info(f"VAD Threshold set to: {vad_threshold:.3f} (adaptive)")
         pipeline.transition_state("LISTENING")
     else:
         logger.info("Starting with VAD paused")
-        logger.info(f"VAD Threshold set to: {vad_threshold} (Lower = More Sensitive)")
+        logger.info(f"VAD Threshold set to: {vad_threshold:.3f} (adaptive)")
         pipeline.transition_state("IDLE")
         broadcast_msg("status", "IDLE")
     
@@ -662,6 +728,7 @@ def main_loop():
     silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
     voiced_ms_accumulator = 0
+    POST_TTS_COOLDOWN = 0.35  # seconds to suppress VAD after TTS ends (echo guard)
     
     while SERVER_ENABLED:
         if pipeline.illegal_transition:
@@ -690,10 +757,13 @@ def main_loop():
             passive_listen = False
 
         # Trigger Recording (only when LISTENING to avoid illegal transitions)
+        # Echo guard: suppress VAD for a short cooldown after TTS finishes
+        in_echo_cooldown = (time.time() - pipeline.tts_finished_at) < POST_TTS_COOLDOWN
         if (
             not passive_listen
             and not pipeline.is_speaking
             and not is_recording
+            and not in_echo_cooldown
             and volume >= vad_threshold
             and pipeline.current_state == "LISTENING"
         ):
@@ -716,19 +786,22 @@ def main_loop():
         
         # --- BARGE-IN: If speech detected during TTS ---
         # Skip barge-in if temporarily suppressed (for short deterministic responses like time queries)
+        # Echo-aware: Raise barge-in threshold during TTS to prevent self-hearing triggers.
+        # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
         barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
-        if pipeline.is_speaking and volume >= barge_in_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
+        effective_barge_threshold = barge_in_threshold * 2.5 if pipeline.is_speaking else barge_in_threshold
+        if pipeline.is_speaking and volume >= effective_barge_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
             allowed = pipeline.current_state == "SPEAKING"
-            logger.info("!!! BARGE-IN TRIGGERED: Interrupting TTS !!!")
+            logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={effective_barge_threshold:.2f}) !!!")
             log_event(
-                f"BARGE_IN rms={volume:.2f} threshold={barge_in_threshold} stage={pipeline.current_state} allowed={allowed}",
+                f"BARGE_IN rms={volume:.2f} threshold={effective_barge_threshold:.2f} stage={pipeline.current_state} allowed={allowed}",
                 stage="audio",
                 interaction_id=pipeline.current_interaction_id,
             )
             broadcast_msg("barge_in", {
                 "interaction_id": pipeline.current_interaction_id,
                 "rms": float(volume),
-                "threshold": float(barge_in_threshold),
+                "threshold": float(effective_barge_threshold),
                 "stage": str(pipeline.current_state),
                 "allowed": bool(allowed),
             })
@@ -745,6 +818,7 @@ def main_loop():
             except Exception:
                 pass
             pipeline.is_speaking = False
+            pipeline.tts_finished_at = time.time()
             try:
                 pipeline.force_state("LISTENING", interaction_id=pipeline.current_interaction_id, source="BARGE_IN")
             except Exception:
@@ -809,8 +883,12 @@ def main_loop():
                     else:
                         logger.warning(f"[Audio] Input too quiet/silent (peak: {peak:.4f}), ignoring")
                         audio.clear_buffers()
+                        pipeline.transition_state("LISTENING", source="quiet_reject")
+                        current_interaction_id = ""
                 else:
                     audio.clear_buffers()
+                    pipeline.transition_state("LISTENING", source="empty_reject")
+                    current_interaction_id = ""
 
 if __name__ == "__main__":
     # Pre-load whisper model BEFORE any async/threading to avoid native crashes

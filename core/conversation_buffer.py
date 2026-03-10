@@ -102,15 +102,23 @@ class ConversationBuffer:
         self._turns.append(ConversationTurn(role=role, content=content, timestamp=ts))
         logger.info(f"[SESSION] Context appended (turn {self._session_turn_count}/{self.SESSION_TURN_LIMIT})")
 
-    def as_context_block(self) -> str:
-        """Get context for LLM prompt. Returns empty if disabled."""
+    def as_context_block(self, max_exchanges: int = 3) -> str:
+        """Get context for LLM prompt. Returns empty if disabled.
+        
+        Args:
+            max_exchanges: Max number of exchanges (user+assistant pairs) to include.
+                           Keeps the most recent ones. 0 = unlimited.
+        """
         if not self._enabled:
             return ""
         if not self._turns:
             return ""
-        # Output verbatim turns - no header, no compression
+        turns = list(self._turns)
+        # Cap to last N exchanges (user+assistant pairs) to keep prompt tight
+        if max_exchanges > 0 and len(turns) > max_exchanges * 2:
+            turns = turns[-(max_exchanges * 2):]
         lines: List[str] = []
-        for turn in self._turns:
+        for turn in turns:
             lines.append(f"{turn.role}: {turn.content}")
         return "\n".join(lines)
 

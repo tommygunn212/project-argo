@@ -1044,6 +1044,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="quick-actions" style="margin-bottom:12px">
             <button class="btn" onclick="sendDiagnostics()">🔍 Run Diagnostics</button>
             <button class="btn" onclick="sendControl('FORCE_RELEASE_AUDIO')">🔊 Release Audio</button>
+            <button class="btn" onclick="sendControl('CALIBRATE_NOISE')">🎚️ Calibrate Noise</button>
           </div>
           <div class="quick-actions">
             <button class="btn btn-sm" onclick="sendControl('SERVER_RESTART')">↻ Restart Server</button>
@@ -1794,6 +1795,7 @@ function handleMessage(msg) {
     case 'config': handleConfig(payload); break;
     case 'db_status': handleDBStatus(payload); break;
     case 'illegal_transition': handleIllegalTransition(payload); break;
+    case 'engine_config': handleEngineConfig(payload); break;
     default:
       addSystemLog(`[${type}] ${typeof payload === 'string' ? payload : JSON.stringify(payload)}`);
   }
@@ -1979,6 +1981,30 @@ function handleOverrides(data) {
   if (data.personality_mode) $('personalitySelect').value = data.personality_mode;
 }
 
+function handleEngineConfig(data) {
+  if (!data) return;
+  // Sync TTS model dropdown with backend's actual model
+  if (data.tts_model) {
+    const sel = $('ttsModelSelect');
+    if (sel) {
+      sel.value = data.tts_model;
+      saveDropdownSettings();
+    }
+  }
+  // Sync TTS voice dropdown with backend's actual engine:voice
+  if (data.tts_engine && data.tts_voice) {
+    const ttsVal = data.tts_engine + ':' + data.tts_voice;
+    const sel = $('ttsSelect');
+    if (sel) {
+      // Only set if the option exists
+      for (const opt of sel.options) {
+        if (opt.value === ttsVal) { sel.value = ttsVal; break; }
+      }
+    }
+  }
+  updatePipelineDisplay();
+}
+
 // ── Diagnostics ──
 function handleDiagnostics(data) {
   if (!data) return;
@@ -2077,7 +2103,7 @@ function restoreDropdownSettings() {
     const s = JSON.parse(raw);
     if (s.stt) { $('sttSelect').value = s.stt; handleSTTChange(); }
     if (s.tts) { $('ttsSelect').value = s.tts; handleTTSChange(); }
-    if (s.ttsModel) { $('ttsModelSelect').value = s.ttsModel; handleTTSModelChange(); }
+    // TTS model comes from backend engine_config — don't override from localStorage
     if (s.personality) { $('personalitySelect').value = s.personality; sendOverride('personality_mode', s.personality); }
     updatePipelineDisplay();
     addSystemLog('Settings restored from last session');
@@ -2114,7 +2140,10 @@ function handleTTSChange() {
   sendOverride('tts_engine', engine);
   sendVoice(voice);
   // TTS model selector only relevant for OpenAI
-  $('ttsModelSelect').disabled = engine !== 'openai';
+  const isOpenAI = engine === 'openai';
+  $('ttsModelSelect').disabled = !isOpenAI;
+  $('ttsModelSelect').style.opacity = isOpenAI ? '1' : '0.4';
+  $('ttsModelSelect').title = isOpenAI ? '' : 'Only available with OpenAI TTS';
   saveDropdownSettings();
   updatePipelineDisplay();
   addSystemLog(`TTS → ${engine} / ${voice}`);

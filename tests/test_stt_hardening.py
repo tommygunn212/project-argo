@@ -47,5 +47,5 @@ def test_audio_accept_valid(tmp_path):
 def test_initial_prompt_loaded(tmp_path):
     p = make_pipeline(tmp_path)
     # Default profile is general, prompt may be empty
-    assert p._stt_prompt_profile in {"general", "technical"}
+    assert p._stt_prompt_profile in {"general", "technical", "argo"}
     assert isinstance(p._stt_initial_prompt, str)

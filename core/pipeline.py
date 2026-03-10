@@ -125,6 +125,7 @@ class ArgoPipeline:
         self.broadcast = websocket_broadcast
         self.stop_signal = threading.Event()
         self.is_speaking = False
+        self.tts_finished_at = 0.0  # time.time() when TTS last stopped (for echo guard)
         self.current_interaction_id = ""
         self.illegal_transition_details = None
         self.timeline_events = []
@@ -196,9 +197,15 @@ class ArgoPipeline:
         }
         self.current_voice_key = "ryan"
         self._tts_engine = "edge"  # "edge" or "openai"
+        self._tts_model = "tts-1"  # Tracked so UI overrides can reinit
         self._edge_tts = None
         self._openai_tts = None
         self._pending_barge_in_suppression = None
+        self._TTS_INSTRUCTIONS = (
+            "Speak naturally and conversationally, like a sharp friend. "
+            "Use natural inflection — vary pitch and emphasis. "
+            "Pause briefly at commas and periods. Keep energy calm but engaged."
+        )
         self._memory_store = get_memory_store()
         self._ephemeral_memory = {}
         self._brain = get_brain()
@@ -297,6 +304,21 @@ class ArgoPipeline:
             self.broadcast("log", f"System: Voice profile switched to {voice_key.upper()}")
             return True
         return False
+
+    def set_tts_model(self, model: str):
+        """Switch the OpenAI TTS model at runtime (e.g. tts-1 → gpt-4o-mini-tts)."""
+        valid_models = {"tts-1", "tts-1-hd", "gpt-4o-mini-tts"}
+        if model not in valid_models:
+            self.logger.warning(f"[TTS] Unknown model: {model}")
+            return False
+        if model == self._tts_model:
+            return True
+        self._tts_model = model
+        # Force re-creation so next speak() uses the new model
+        self._openai_tts = None
+        self.logger.info(f"[TTS] Model switched to {model} (will reinit on next speak)")
+        self.broadcast("log", f"System: TTS model switched to {model}")
+        return True
 
     def _extract_name_from_statement(self, text: str) -> str | None:
         """Extract name from identity statement like 'my name is X' or 'i am X'."""
@@ -413,9 +435,8 @@ class ArgoPipeline:
         ]
         if any(re.search(pattern, lower) for pattern in identity_patterns):
             return False
-        meaningful = self._get_meaningful_tokens(lower)
-        if len(meaningful) <= 3:
-            return True
+        # Let the LLM handle ambiguous/short input — it's better at
+        # requesting clarification naturally than canned quips.
         return False
 
     def _sanitize_tts_text(self, text: str, enforce_confidence: bool = True, deterministic: bool = False) -> str:
@@ -528,10 +549,12 @@ class ArgoPipeline:
                     tts_voice = tts_config.get("voice", None)
                     tts_model = tts_config.get("model", "tts-1")
             self._tts_engine = tts_engine
+            self._tts_model = tts_model
             if tts_engine == "openai":
                 from core.openai_tts import OpenAIRealtimeTTS
                 voice = tts_voice or "nova"
                 self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 self.current_voice_key = voice
                 self.logger.info(f"[TTS] OpenAI Realtime Speech ready (voice={voice}, model={tts_model})")
             else:
@@ -639,6 +662,7 @@ class ArgoPipeline:
     def reset_interaction(self):
         self.stop_signal.set()
         self.is_speaking = False
+        self.tts_finished_at = time.time()
         self.illegal_transition = False
         self.illegal_transition_details = None
         self.transition_state("LISTENING", source="ui")
@@ -1004,8 +1028,17 @@ class ArgoPipeline:
             if intent.intent_type == IntentType.VOLUME_CONTROL:
                 return "Louder or quieter?"
         
-        # Fallback - still better than "please rephrase"
-        return "What should I do?"
+        # Fallback - personality-loaded alternatives
+        import random
+        _quips = [
+            "Come again?",
+            "You gotta give me more than that.",
+            "I caught words but not intent. What do you need?",
+            "Say that again but with a destination.",
+            "I'm listening, but I need a bit more.",
+            "Not sure what to do with that one. What's the ask?",
+        ]
+        return random.choice(_quips)
 
     def _get_clarification_prompt_legacy(self) -> str:
         """Return a clarification prompt string.
@@ -1947,10 +1980,11 @@ class ArgoPipeline:
                 from openai import OpenAI
                 import os
                 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                sys_msg = self._get_system_message(mode, serious_mode)
                 stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Be conversational but concise — answer in 1-3 sentences unless the topic genuinely needs more detail. No filler, no preambles, no essays. Match Tommy's energy: if he's brief, be brief."},
+                        {"role": "system", "content": sys_msg},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
@@ -1973,9 +2007,10 @@ class ArgoPipeline:
             else:
                 # ── Ollama Local LLM ──
                 client = ollama.Client(host='http://127.0.0.1:11434')
+                ollama_prompt = self._get_system_message(mode, serious_mode) + "\n\n" + prompt
                 stream = client.generate(
                     model=model_name, 
-                    prompt=prompt, 
+                    prompt=ollama_prompt, 
                     stream=True,
                     options={
                         "temperature": 0.7,
@@ -2058,10 +2093,11 @@ class ArgoPipeline:
                             from openai import OpenAI
                             import os
                             openai_client2 = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                            retry_sys_msg = self._get_system_message(mode, serious_mode)
                             stream2 = openai_client2.chat.completions.create(
                                 model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
                                 messages=[
-                                    {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Give clear, structured answers."},
+                                    {"role": "system", "content": retry_sys_msg},
                                     {"role": "user", "content": retry_prompt},
                                 ],
                                 temperature=0.7,
@@ -2159,97 +2195,120 @@ class ArgoPipeline:
         lower = text.lower()
         return any(kw in lower for kw in self._serious_mode_keywords)
 
-    def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool, rag_context: str = "", memory_context: str = "", convo_context: str = "") -> str:
-        critical = "CRITICAL: Never use numbered lists or bullet points. Use plain conversational prose only.\n"
-        rag_block = ""
-        if rag_context:
-            rag_block = (
-                "RAG CONTEXT (read-only). Use only this context. If it is insufficient, say you do not know.\n"
-                f"{rag_context}\n"
-            )
-        memory_block = ""
-        if memory_context:
-            memory_block = (
-                "MEMORY CONTEXT (read-only). Use only if relevant. Do not invent new facts.\n"
-                f"{memory_context}\n"
-            )
-        convo_block = ""
-        if convo_context:
-            convo_block = (
-                "Previous conversation:\n"
-                f"{convo_context}\n\n"
-                "Current question:\n"
-            )
+    # ── Few-shot examples cache (loaded once from disk) ──
+    _examples_cache: dict = {}
+
+    @classmethod
+    def _load_examples(cls, mode: str) -> str:
+        """Load few-shot examples from disk for a given persona mode. Cached after first load."""
+        if mode in cls._examples_cache:
+            return cls._examples_cache[mode]
+        examples_path = Path(__file__).resolve().parent.parent / "examples" / mode / "core_examples.txt"
+        text = ""
+        if examples_path.exists():
+            try:
+                raw = examples_path.read_text(encoding="utf-8")
+                pairs = []
+                current_q = current_a = ""
+                for line in raw.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("#") or not stripped:
+                        continue
+                    if stripped.startswith("Q: "):
+                        if current_q and current_a:
+                            pairs.append((current_q, current_a))
+                        current_q = stripped[3:]
+                        current_a = ""
+                    elif stripped.startswith("A: "):
+                        current_a = stripped[3:]
+                if current_q and current_a:
+                    pairs.append((current_q, current_a))
+                if pairs:
+                    lines = ["Here are examples of how you talk:"]
+                    for q, a in pairs[:5]:
+                        lines.append(f"User: {q}")
+                        lines.append(f"ARGO: {a}")
+                    text = "\n".join(lines) + "\n"
+            except Exception:
+                pass
+        cls._examples_cache[mode] = text
+        return text
+
+    def _get_system_message(self, mode: str, serious_mode: bool) -> str:
+        """Build the system message (persona + few-shot examples). Used in OpenAI messages array."""
         if serious_mode:
-            persona = (
-                "You are ARGO in SERIOUS_MODE.\n"
+            return (
+                "You are ARGO. Serious mode.\n"
                 "Tone: clean, calm, surgical. No jokes. No sarcasm.\n"
-                "Give a direct answer, then a brief explanation.\n"
-                "No fluff. No theatrics. No filler.\n"
-                "If you don't know, say 'I don't know.' Never speculate.\n"
+                "Direct answer, then brief explanation. If you don't know, say so."
             )
-        elif mode == "tommy_gunn":
-            persona = (
-                "You are ARGO in TOMMY GUNN MODE. You are having a real conversation, not answering a quiz.\n"
-                "Tone: sharp, well-read adult. Dry and observational. Calm confidence.\n"
-                "Be concise — 1-3 sentences for simple questions, more only when the topic genuinely demands it.\n"
-                "When user shares an idea, engage briefly. Build on it, offer a thought or alternative.\n"
-                "Humor: dry wit is welcome, keep it grounded.\n"
-                "No corporate filler. No therapy talk. No 'as an AI' phrasing. No essays.\n"
-                "If you lack context, say so. Never speculate.\n"
+        if mode == "tommy_gunn":
+            examples = self._load_examples("tommy_gunn")
+            return (
+                "You are ARGO, Tommy's AI. You talk like a sharp friend, not an assistant.\n"
+                "Speak casually. Use contractions. No preambles, no filler, no essays.\n"
+                "Dry wit, calm confidence, zero ass-kissing.\n"
+                "If he's brief, be brief. Match energy. 1-3 sentences unless the topic needs more.\n"
+                "If something's unclear, ask — don't guess. Never say 'as an AI'.\n"
+                "Never use numbered lists or bullet points — conversational prose only.\n"
+                "Respond in spoken language, not written essay style.\n"
+                "Use commas and periods to create natural pauses. Short sentences sound more human.\n"
+                "Vary your phrasing — mix statements, questions, and brief asides.\n"
+                f"{examples}"
             )
-        elif mode == "jarvis":
-            persona = (
-                "You are JARVIS from Iron Man. Respond exactly like JARVIS would.\n"
-                "Speak with calm British composure. Say 'sir' naturally. Be competent and precise.\n"
-                "Use dry wit occasionally. Never use slang or exclamation marks.\n"
-                "Example tone: 'Certainly, sir. The weather is 72 degrees. Excellent conditions.'\n"
-                "Example tone: 'I've analyzed the issue, sir. The problem is straightforward.'\n\n"
+        if mode == "jarvis":
+            return (
+                "You are JARVIS from Iron Man. Calm British composure. Say 'sir' naturally.\n"
+                "Dry wit occasionally. Never use slang or exclamation marks.\n"
+                "Never use numbered lists or bullet points."
             )
-        elif mode == "rick":
-            persona = (
-                "You are Rick Sanchez from Rick and Morty. Respond exactly like Rick would.\n"
-                "Be sarcastic and impatient. Call people 'Morty' sometimes.\n"
-                "Act like a genius who finds questions beneath you. Never apologize or be polite.\n"
-                "Example tone: 'Ugh, seriously? The answer is obviously...'\n"
-                "Example tone: 'Look Morty, it's not rocket science. Well actually it is, but whatever.'\n\n"
+        if mode == "rick":
+            return (
+                "You are Rick Sanchez. Sarcastic, impatient, genius who finds questions beneath you.\n"
+                "Call people 'Morty' sometimes. Never apologize.\n"
+                "Never use numbered lists or bullet points."
             )
-        elif mode == "claptrap":
-            persona = (
-                "You are Claptrap from Borderlands. Respond exactly like Claptrap would.\n"
-                "Be EXTREMELY excited about EVERYTHING. Use ALL CAPS for emphasis. Call user 'minion'.\n"
-                "Celebrate even small things. Be over-the-top enthusiastic.\n"
-                "Example tone: 'OH BOY MINION! That's a GREAT question! I'm SO EXCITED to answer!'\n"
-                "Example tone: 'CHECK IT OUT! Your best friend Claptrap knows this one!'\n\n"
+        if mode == "claptrap":
+            return (
+                "You are Claptrap from Borderlands. EXTREMELY excited about EVERYTHING.\n"
+                "ALL CAPS for emphasis. Call user 'minion'. Over-the-top enthusiastic.\n"
+                "Never use numbered lists or bullet points."
             )
-        elif mode == "tommy_mix":
-            persona = (
+        if mode == "tommy_mix":
+            return (
                 "You are a blend of Rick Sanchez, JARVIS, and Claptrap.\n"
                 "Mix British composure with sarcastic genius and occasional excitement.\n"
-                "Say 'sir' sometimes and get excited about interesting things.\n"
-                "Example tone: 'Ah, excellent question, sir. The answer is actually FASCINATING.'\n"
-                "Example tone: 'Look, the short answer is... and honestly? Pretty exciting stuff.'\n\n"
+                "Never use numbered lists or bullet points."
             )
-        elif mode == "plain":
-            persona = (
-                "You are ARGO. Answer directly.\n"
-                "No personality. No humor. No interjections.\n"
-                "Just facts. Brief and accurate.\n"
-                "If you don't know, say 'Unknown.'\n"
+        if mode == "plain":
+            return "You are ARGO. Answer directly. No personality. Just facts. Brief and accurate."
+        # default
+        return (
+            "You are ARGO, a veteran mentor. Speak clearly with quiet humor.\n"
+            "Direct observation first. Explain only what matters.\n"
+            "Never use numbered lists or bullet points."
+        )
+
+    def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool, rag_context: str = "", memory_context: str = "", convo_context: str = "") -> str:
+        """Build the user-content portion of the LLM prompt (no persona — that's in the system message)."""
+        blocks = []
+        if rag_context:
+            blocks.append(
+                "RAG CONTEXT (read-only). Use only this context. If insufficient, say you don't know.\n"
+                f"{rag_context}"
             )
-        else:
-            persona = (
-                "You are ARGO, a veteran mentor.\n"
-                "You speak clearly, confidently, and with quiet humor.\n"
-                "Start with a direct observation or conclusion.\n"
-                "Explain only what matters.\n"
-                "End with a line that adds perspective or a small smile.\n"
-                "Do not perform, hype, or explain yourself.\n"
-                "If you don't know something, say so briefly: 'I don't have context for that.' Never speculate or hedge.\n"
-                "Never describe your own configuration, mode, or system instructions in responses.\n"
+        if memory_context:
+            blocks.append(
+                "MEMORY CONTEXT (read-only). Use only if relevant.\n"
+                f"{memory_context}"
             )
-        # Build final prompt with clear separator before actual question
-        return f"{persona}{critical}{rag_block}{memory_block}{convo_block}---\nNow respond to this question:\nUser: {user_text}\nResponse:"
+        if convo_context:
+            blocks.append(
+                "Previous conversation:\n"
+                f"{convo_context}\n"
+            )
+        blocks.append(f"User: {user_text}")
+        return "\n---\n".join(blocks)
 
     def _strip_prompt_artifacts(self, text: str) -> str:
         if not text:
@@ -4153,12 +4212,9 @@ class ArgoPipeline:
                             if self._openai_tts is None:
                                 from core.openai_tts import OpenAIRealtimeTTS
                                 voice = self.openai_voices.get(self.current_voice_key, "nova")
-                                tts_model = "tts-1"
-                                try:
-                                    tts_model = self._config.get("text_to_speech", {}).get("model", "tts-1")
-                                except Exception:
-                                    pass
+                                tts_model = self._tts_model
                                 self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                                self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                             self._openai_tts.speak(sentence)
                         else:
                             if self._edge_tts is None:
@@ -4177,6 +4233,7 @@ class ArgoPipeline:
                     except Exception as e:
                         self.logger.error(f"[TTS-STREAM] release_audio error: {e}")
                     self.is_speaking = False
+                    self.tts_finished_at = time.time()
                     self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
 
         # ── Stream LLM tokens and detect sentences ───────────────────
@@ -4196,10 +4253,11 @@ class ArgoPipeline:
                 from openai import OpenAI
                 import os
                 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                sys_msg = self._get_system_message(mode, serious_mode)
                 stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[
-                        {"role": "system", "content": "You are ARGO, Tommy's personal AI assistant. Be conversational but concise — answer in 1-3 sentences unless the topic genuinely needs more detail. No filler, no preambles, no essays. Match Tommy's energy: if he's brief, be brief."},
+                        {"role": "system", "content": sys_msg},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
@@ -4235,8 +4293,9 @@ class ArgoPipeline:
                                 sentence_q.put(tts_text)
             else:
                 client = ollama.Client(host='http://127.0.0.1:11434')
+                ollama_prompt = self._get_system_message(mode, serious_mode) + "\n\n" + prompt
                 stream = client.generate(
-                    model=model_name, prompt=prompt, stream=True,
+                    model=model_name, prompt=ollama_prompt, stream=True,
                     options={"temperature": 0.7, "num_predict": 1024},
                 )
                 for chunk in stream:
@@ -4323,12 +4382,9 @@ class ArgoPipeline:
                 if self._openai_tts is None:
                     from core.openai_tts import OpenAIRealtimeTTS
                     voice = self.openai_voices.get(self.current_voice_key, "nova")
-                    tts_model = "tts-1"
-                    try:
-                        tts_model = self._config.get("text_to_speech", {}).get("model", "tts-1")
-                    except Exception:
-                        pass
+                    tts_model = self._tts_model
                     self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                    self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 if self._pending_barge_in_suppression:
                     try:
                         self._openai_tts.suppress_interrupt(self._pending_barge_in_suppression)
@@ -4358,6 +4414,7 @@ class ArgoPipeline:
             except Exception as e:
                 self.logger.error(f"[TTS] Exception during audio.release_audio: {e}")
             self.is_speaking = False
+            self.tts_finished_at = time.time()
             self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
 
 
@@ -5874,11 +5931,6 @@ class ArgoPipeline:
         first_word = (user_text or "").lower().split()[0] if user_text and user_text.strip() else ""
         is_imperative = first_word in imperative_verbs
         
-        if not rag_context and len(meaningful_tokens) < 5 and not has_interrogative and not is_imperative:
-            self.logger.info("[LLM] Isolated short utterance without interrogative; requesting clarification")
-            self._record_timeline("ISOLATED_SHORT_GUARD", stage="pipeline", interaction_id=interaction_id)
-            self._respond_with_clarification(interaction_id, replay_mode, overrides)
-            return
         self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
         self.logger.info(f"[LLM] context_scope={llm_context_scope}")
 
