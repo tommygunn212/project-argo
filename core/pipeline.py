@@ -4696,16 +4696,10 @@ class ArgoPipeline:
             if not user_text:
                 self.logger.warning("No speech recognized.")
                 self.broadcast("log", "User: [No speech recognized]")
-                response = "I didn't catch any words. Try again."
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response, enforce_confidence=False)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
+                # Silently return to listening — speaking "I didn't catch that" causes
+                # more echo on the Brio mic, creating a feedback loop.
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
+                self.logger.info("--- Interaction Complete (no speech) ---")
                 self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
                 return
             user_text = normalize_system_text(user_text)

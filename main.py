@@ -728,7 +728,7 @@ def main_loop():
     silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
     current_interaction_id = ""
     voiced_ms_accumulator = 0
-    POST_TTS_COOLDOWN = 0.35  # seconds to suppress VAD after TTS ends (echo guard)
+    POST_TTS_COOLDOWN = 0.75  # seconds to suppress VAD after TTS ends (echo guard)
     
     while SERVER_ENABLED:
         if pipeline.illegal_transition:
