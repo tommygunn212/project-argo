@@ -1760,6 +1760,7 @@ let livekitRoom = null;
 let livekitMicTrack = null;
 let livekitModulePromise = null;
 let livekitConnected = false;
+let livekitStarting = false;
 let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
 const LIVEKIT_CLIENT_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.esm.mjs';
 
@@ -1846,6 +1847,66 @@ function send(type, payload) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type, payload }));
   }
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function postJson(path, payload) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${path} failed`);
+  return data;
+}
+
+async function pauseClassicForRealtime() {
+  try {
+    await postJson('/api/control', { command: 'PAUSE' });
+  } catch (err) {
+    send('control', { command: 'PAUSE' });
+  }
+}
+
+function resumeClassicAfterRealtime() {
+  postJson('/api/control', { command: 'RESUME' }).catch(() => {
+    send('control', { command: 'RESUME' });
+  });
+}
+
+function logRealtimeClientEvent(phase, payload = {}, level = 'info') {
+  const body = {
+    level,
+    phase,
+    status: $('livekitStatus')?.textContent || '',
+    room: livekitMeta.room,
+    ...payload,
+  };
+  fetch('/api/client-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function describeRealtimeStartError(err) {
+  const name = err?.name || '';
+  const message = err?.message || String(err);
+  if (name === 'NotAllowedError' || /permission/i.test(message)) {
+    return 'Microphone permission was denied. Allow microphone access, then press Start Realtime again.';
+  }
+  if (name === 'NotFoundError' || /device not found|no audio/i.test(message)) {
+    return 'No microphone was found for browser realtime voice.';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError' || /could not start|in use/i.test(message)) {
+    return 'The browser could not open the microphone. Classic ARGO audio was released; close any app holding the mic or try Chrome/Edge for this realtime test.';
+  }
+  return message;
 }
 
 // ═══════ MESSAGE HANDLER ═══════
@@ -2209,8 +2270,8 @@ function setRealtimeStatus(status, tone = 'dim') {
   statusEl.style.color = colors[tone] || colors.dim;
   const startBtn = $('livekitStartBtn');
   const stopBtn = $('livekitStopBtn');
-  if (startBtn) startBtn.disabled = livekitConnected || status === 'CONNECTING';
-  if (stopBtn) stopBtn.disabled = !livekitConnected && status !== 'CONNECTING';
+  if (startBtn) startBtn.disabled = livekitStarting || livekitConnected || status === 'CONNECTING';
+  if (stopBtn) stopBtn.disabled = !livekitStarting && !livekitConnected && status !== 'CONNECTING';
 }
 
 function setRealtimeError(message) {
@@ -2255,14 +2316,30 @@ function loadLiveKitClient() {
 }
 
 async function startRealtimeVoice() {
-  if (livekitRoom) return;
+  if (livekitStarting || livekitRoom) return;
   setRealtimeError('');
+  livekitStarting = true;
   livekitConnected = false;
   setRealtimeStatus('CONNECTING', 'busy');
-  send('control', { command: 'PAUSE' });
-  addSystemLog('Classic listener paused for realtime voice');
+  let room = null;
 
   try {
+    logRealtimeClientEvent('start_requested');
+    await pauseClassicForRealtime();
+    addSystemLog('Classic listener paused for realtime voice');
+
+    // Give the native audio input a short beat to release before browser getUserMedia.
+    await delay(450);
+
+    const lk = await loadLiveKitClient();
+    setRealtimeStatus('MIC CHECK', 'busy');
+    livekitMicTrack = await lk.createLocalAudioTrack({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    logRealtimeClientEvent('mic_acquired');
+
     const statusRes = await fetch('/api/livekit-status', { cache: 'no-store' });
     const statusData = await statusRes.json();
     if (!statusRes.ok) throw new Error(statusData.error || 'Realtime status failed');
@@ -2283,36 +2360,49 @@ async function startRealtimeVoice() {
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
 
-    const lk = await loadLiveKitClient();
-    const room = new lk.Room({
+    room = new lk.Room({
       adaptiveStream: true,
       dynacast: true,
       disconnectOnPageLeave: true,
     });
     attachLiveKitHandlers(room, lk);
-
-    await room.connect(tokenData.url, tokenData.token);
     livekitRoom = room;
 
-    livekitMicTrack = await lk.createLocalAudioTrack({
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    });
-    await room.localParticipant.publishTrack(livekitMicTrack, { name: 'tommy-mic' });
+    setRealtimeStatus('CONNECTING', 'busy');
+    await room.connect(tokenData.url, tokenData.token);
+    const publishOptions = { name: 'tommy-mic' };
+    if (lk.Track?.Source?.Microphone) {
+      publishOptions.source = lk.Track.Source.Microphone;
+    }
+    await room.localParticipant.publishTrack(livekitMicTrack, publishOptions);
 
+    livekitStarting = false;
     livekitConnected = true;
     setRealtimeStatus('LIVE', 'live');
     updatePipelineDisplay();
+    logRealtimeClientEvent('live', { identity: tokenData.identity });
     addSystemLog(`Realtime voice live: ${livekitMeta.model} / ${livekitMeta.voice}`);
   } catch (err) {
+    livekitStarting = false;
+    if (room && room !== livekitRoom) {
+      try { room.disconnect(); } catch(e) {}
+    }
+    logRealtimeClientEvent('start_failed', {
+      name: err?.name || 'Error',
+      message: err?.message || String(err),
+    }, 'error');
     cleanupRealtimeVoice({ resumeClassic: true, status: 'ERROR' });
-    setRealtimeError(err.message || String(err));
-    addSystemLog(`Realtime voice error: ${err.message || err}`);
+    const friendly = describeRealtimeStartError(err);
+    setRealtimeError(friendly);
+    addSystemLog(`Realtime voice error: ${friendly}`);
   }
 }
 
 function attachLiveKitHandlers(room, lk) {
+  room.on(lk.RoomEvent.ParticipantConnected, (participant) => {
+    logRealtimeClientEvent('participant_connected', { identity: participant.identity });
+  });
+
   room.on(lk.RoomEvent.TrackSubscribed, (track) => {
     if (track.kind !== 'audio' && track.kind !== lk.Track.Kind.Audio) return;
     const audioEl = track.attach();
@@ -2320,13 +2410,26 @@ function attachLiveKitHandlers(room, lk) {
     audioEl.dataset.livekitAudio = 'true';
     audioEl.style.display = 'none';
     document.body.appendChild(audioEl);
+    logRealtimeClientEvent('remote_audio_subscribed');
   });
 
   room.on(lk.RoomEvent.TrackUnsubscribed, (track) => {
     track.detach().forEach(el => el.remove());
   });
 
-  room.on(lk.RoomEvent.Disconnected, () => {
+  if (lk.RoomEvent.MediaDevicesError) {
+    room.on(lk.RoomEvent.MediaDevicesError, (err) => {
+      const friendly = describeRealtimeStartError(err);
+      setRealtimeError(friendly);
+      logRealtimeClientEvent('media_device_error', {
+        name: err?.name || 'MediaDevicesError',
+        message: err?.message || String(err),
+      }, 'error');
+    });
+  }
+
+  room.on(lk.RoomEvent.Disconnected, (reason) => {
+    logRealtimeClientEvent('disconnected', { reason: reason || 'unknown' });
     if (livekitRoom === room) {
       cleanupRealtimeVoice({ resumeClassic: true, status: 'OFFLINE' });
     }
@@ -2342,13 +2445,14 @@ function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}
   const room = livekitRoom;
   livekitRoom = null;
   livekitConnected = false;
+  livekitStarting = false;
   if (room) {
     try { room.disconnect(); } catch(e) {}
   }
   setRealtimeStatus(status, status === 'ERROR' ? 'error' : 'dim');
   updatePipelineDisplay();
   if (resumeClassic) {
-    send('control', { command: 'RESUME' });
+    resumeClassicAfterRealtime();
     addSystemLog('Classic listener resumed');
   }
 }

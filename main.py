@@ -156,6 +156,68 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode())
 
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        if length > 65536:
+            raise ValueError("Request body too large")
+        raw = self.rfile.read(length)
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8"))
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/api/control":
+            try:
+                body = self._read_json_body()
+                command = body.get("command") if isinstance(body, dict) else None
+                if not command:
+                    self._send_json({"error": "Missing command"}, status=400)
+                    return
+                _handle_control({
+                    "command": command,
+                    "data": body.get("data", {}) if isinstance(body, dict) else {},
+                })
+                self._send_json({"ok": True, "status": CURRENT_STATUS})
+            except Exception as exc:
+                logger.exception("[HTTP] control command failed")
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/api/client-log":
+            try:
+                body = self._read_json_body()
+                if not isinstance(body, dict):
+                    body = {"message": str(body)}
+                allowed_keys = ("phase", "status", "name", "message", "reason", "identity", "room")
+                safe = {
+                    key: str(body.get(key, ""))[:500]
+                    for key in allowed_keys
+                    if key in body
+                }
+                level = str(body.get("level", "info")).lower()
+                line = json.dumps(safe, ensure_ascii=True)
+                if level == "error":
+                    logger.error("[CLIENT] %s", line)
+                elif level in ("warn", "warning"):
+                    logger.warning("[CLIENT] %s", line)
+                else:
+                    logger.info("[CLIENT] %s", line)
+                self._send_json({"ok": True})
+            except Exception as exc:
+                logger.exception("[HTTP] client log failed")
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
+        self._send_json({"error": "Not found"}, status=404)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
