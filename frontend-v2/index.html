@@ -701,6 +701,42 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 .chat-btn.danger:hover { background: rgba(239,68,68,0.15); }
 
 /* ═══════ PAGE: VOICE ═══════ */
+.realtime-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.realtime-status-grid .config-item {
+  min-width: 0;
+}
+
+.realtime-status-grid .config-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.livekit-error {
+  display: none;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239,68,68,0.35);
+  border-radius: var(--radius);
+  background: rgba(239,68,68,0.09);
+  color: var(--accent-red);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .realtime-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .waveform-container {
   height: 80px;
   background: var(--bg-input);
@@ -1085,6 +1121,35 @@ input[type="range"]::-moz-range-thumb {
     <!-- ── VOICE ── -->
     <div class="page" id="pageVoice">
       <div class="stack">
+        <!-- Realtime Conversation -->
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>REALTIME CONVERSATION</div>
+          <div class="realtime-status-grid">
+            <div class="config-item">
+              <span class="config-key">Mode</span>
+              <span class="config-val" id="livekitMode">LiveKit / Realtime</span>
+            </div>
+            <div class="config-item">
+              <span class="config-key">Status</span>
+              <span class="config-val" id="livekitStatus">OFFLINE</span>
+            </div>
+            <div class="config-item">
+              <span class="config-key">Room</span>
+              <span class="config-val" id="livekitRoom">argo-live</span>
+            </div>
+            <div class="config-item">
+              <span class="config-key">Voice</span>
+              <span class="config-val" id="livekitVoice">marin</span>
+            </div>
+          </div>
+          <div class="quick-actions">
+            <button class="btn btn-primary" id="livekitStartBtn" onclick="startRealtimeVoice()">▶ Start Realtime</button>
+            <button class="btn btn-danger" id="livekitStopBtn" onclick="stopRealtimeVoice()" disabled>■ Stop Realtime</button>
+            <button class="btn" onclick="refreshRealtimeStatus()">↻ Refresh</button>
+          </div>
+          <div class="livekit-error" id="livekitError"></div>
+        </div>
+
         <!-- Engine Selection -->
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>ENGINE CONFIGURATION</div>
@@ -1691,6 +1756,12 @@ const MAX_CHAT_MSGS = 100;
 let waveformData = new Float32Array(200).fill(0);
 let waveformIdx = 0;
 let pendingRecoveryId = null;
+let livekitRoom = null;
+let livekitMicTrack = null;
+let livekitModulePromise = null;
+let livekitConnected = false;
+let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
+const LIVEKIT_CLIENT_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.esm.mjs';
 
 // ── DOM refs ──
 const $ = id => document.getElementById(id);
@@ -1740,6 +1811,7 @@ function connect() {
     clearTimeout(reconnectTimer);
     // Restore saved dropdown settings after connection
     setTimeout(restoreDropdownSettings, 500);
+    refreshRealtimeStatus();
   };
 
   ws.onclose = () => {
@@ -2123,6 +2195,170 @@ function refreshHA() {
   sendText('what smart home devices do I have');
 }
 
+// ═══════ REALTIME VOICE (LIVEKIT + OPENAI REALTIME) ═══════
+function setRealtimeStatus(status, tone = 'dim') {
+  const statusEl = $('livekitStatus');
+  if (!statusEl) return;
+  statusEl.textContent = status;
+  const colors = {
+    dim: 'var(--text-dim)',
+    live: 'var(--accent3)',
+    busy: 'var(--accent2)',
+    error: 'var(--accent-red)'
+  };
+  statusEl.style.color = colors[tone] || colors.dim;
+  const startBtn = $('livekitStartBtn');
+  const stopBtn = $('livekitStopBtn');
+  if (startBtn) startBtn.disabled = livekitConnected || status === 'CONNECTING';
+  if (stopBtn) stopBtn.disabled = !livekitConnected && status !== 'CONNECTING';
+}
+
+function setRealtimeError(message) {
+  const el = $('livekitError');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = message;
+}
+
+async function refreshRealtimeStatus() {
+  try {
+    const res = await fetch('/api/livekit-status', { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Realtime status failed');
+    livekitMeta = {
+      model: data.model || livekitMeta.model,
+      voice: data.voice || livekitMeta.voice,
+      room: data.room || livekitMeta.room,
+    };
+    $('livekitRoom').textContent = livekitMeta.room;
+    $('livekitVoice').textContent = livekitMeta.voice;
+    if (!livekitConnected) {
+      setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
+    }
+    updatePipelineDisplay();
+  } catch (err) {
+    setRealtimeStatus('ERROR', 'error');
+    setRealtimeError(err.message || String(err));
+  }
+}
+
+function loadLiveKitClient() {
+  if (!livekitModulePromise) {
+    livekitModulePromise = import(LIVEKIT_CLIENT_URL);
+  }
+  return livekitModulePromise;
+}
+
+async function startRealtimeVoice() {
+  if (livekitRoom) return;
+  setRealtimeError('');
+  livekitConnected = false;
+  setRealtimeStatus('CONNECTING', 'busy');
+  send('control', { command: 'PAUSE' });
+  addSystemLog('Classic listener paused for realtime voice');
+
+  try {
+    const statusRes = await fetch('/api/livekit-status', { cache: 'no-store' });
+    const statusData = await statusRes.json();
+    if (!statusRes.ok) throw new Error(statusData.error || 'Realtime status failed');
+    if (!statusData.server_reachable) {
+      throw new Error('LiveKit server is not reachable. Start scripts/start_livekit_realtime.ps1 first.');
+    }
+
+    const identity = 'tommy-browser-' + Date.now().toString(36);
+    const tokenRes = await fetch('/api/livekit-token?' + new URLSearchParams({ identity }), { cache: 'no-store' });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok) throw new Error(tokenData.error || 'Realtime token failed');
+
+    livekitMeta = {
+      model: tokenData.model || statusData.model || livekitMeta.model,
+      voice: tokenData.voice || statusData.voice || livekitMeta.voice,
+      room: tokenData.room || statusData.room || livekitMeta.room,
+    };
+    $('livekitRoom').textContent = livekitMeta.room;
+    $('livekitVoice').textContent = livekitMeta.voice;
+
+    const lk = await loadLiveKitClient();
+    const room = new lk.Room({
+      adaptiveStream: true,
+      dynacast: true,
+      disconnectOnPageLeave: true,
+    });
+    attachLiveKitHandlers(room, lk);
+
+    await room.connect(tokenData.url, tokenData.token);
+    livekitRoom = room;
+
+    livekitMicTrack = await lk.createLocalAudioTrack({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    await room.localParticipant.publishTrack(livekitMicTrack, { name: 'tommy-mic' });
+
+    livekitConnected = true;
+    setRealtimeStatus('LIVE', 'live');
+    updatePipelineDisplay();
+    addSystemLog(`Realtime voice live: ${livekitMeta.model} / ${livekitMeta.voice}`);
+  } catch (err) {
+    cleanupRealtimeVoice({ resumeClassic: true, status: 'ERROR' });
+    setRealtimeError(err.message || String(err));
+    addSystemLog(`Realtime voice error: ${err.message || err}`);
+  }
+}
+
+function attachLiveKitHandlers(room, lk) {
+  room.on(lk.RoomEvent.TrackSubscribed, (track) => {
+    if (track.kind !== 'audio' && track.kind !== lk.Track.Kind.Audio) return;
+    const audioEl = track.attach();
+    audioEl.autoplay = true;
+    audioEl.dataset.livekitAudio = 'true';
+    audioEl.style.display = 'none';
+    document.body.appendChild(audioEl);
+  });
+
+  room.on(lk.RoomEvent.TrackUnsubscribed, (track) => {
+    track.detach().forEach(el => el.remove());
+  });
+
+  room.on(lk.RoomEvent.Disconnected, () => {
+    if (livekitRoom === room) {
+      cleanupRealtimeVoice({ resumeClassic: true, status: 'OFFLINE' });
+    }
+  });
+}
+
+function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}) {
+  document.querySelectorAll('[data-livekit-audio="true"]').forEach(el => el.remove());
+  if (livekitMicTrack) {
+    try { livekitMicTrack.stop(); } catch(e) {}
+    livekitMicTrack = null;
+  }
+  const room = livekitRoom;
+  livekitRoom = null;
+  livekitConnected = false;
+  if (room) {
+    try { room.disconnect(); } catch(e) {}
+  }
+  setRealtimeStatus(status, status === 'ERROR' ? 'error' : 'dim');
+  updatePipelineDisplay();
+  if (resumeClassic) {
+    send('control', { command: 'RESUME' });
+    addSystemLog('Classic listener resumed');
+  }
+}
+
+function stopRealtimeVoice() {
+  setRealtimeError('');
+  cleanupRealtimeVoice({ resumeClassic: true, status: 'OFFLINE' });
+  addSystemLog('Realtime voice stopped');
+}
+
 // ═══════ ENGINE SWITCHING ═══════
 function handleSTTChange() {
   const val = $('sttSelect').value;
@@ -2158,6 +2394,15 @@ function handleTTSModelChange() {
 }
 
 function updatePipelineDisplay() {
+  if (livekitConnected) {
+    $('activePipelineDisplay').textContent =
+      `Realtime: LiveKit → OpenAI ${livekitMeta.model} → Voice: ${livekitMeta.voice}`;
+    $('infoSTT').textContent = 'LiveKit / WebRTC';
+    $('infoTTS').textContent = `OpenAI Realtime / ${livekitMeta.model}`;
+    $('infoVoice').textContent = livekitMeta.voice;
+    return;
+  }
+
   const [sttEng, sttModel] = $('sttSelect').value.split(':');
   const [ttsEng, voice] = $('ttsSelect').value.split(':');
   $('activePipelineDisplay').textContent =
@@ -2456,11 +2701,17 @@ function colorSliderValue(id, val, el) {
 
 // ═══════ INIT ═══════
 window.addEventListener('resize', resizeCanvas);
+window.addEventListener('beforeunload', () => {
+  if (livekitRoom) {
+    try { livekitRoom.disconnect(); } catch(e) {}
+  }
+});
 
 function init() {
   initWaveform();
   initGateSliders();
   connect();
+  refreshRealtimeStatus();
   addSystemLog('ARGO Interface v2.0 initialized');
 }
 

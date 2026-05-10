@@ -15,6 +15,7 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
 
 # ============================================================================
@@ -148,18 +149,46 @@ def broadcast_msg(msg_type, data):
         asyncio.run_coroutine_threadsafe(send_to_clients(msg), ui_loop)
 
 class FrontendHandler(SimpleHTTPRequestHandler):
+    def _send_json(self, payload, status=200):
+        self.send_response(status)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode())
+
     def do_GET(self):
-        if self.path == '/api/status':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            status_json = json.dumps({
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == '/api/status':
+            self._send_json({
                 "status": "ok",
                 "service": "ARGO Local Voice Assistant",
                 "ws_endpoint": "ws://localhost:8001/ws"
             })
-            self.wfile.write(status_json.encode())
-        elif self.path == '/' or self.path == '/index.html':
+        elif path == '/api/livekit-status':
+            try:
+                from core.livekit_config import livekit_status
+
+                self._send_json(livekit_status())
+            except Exception as exc:
+                logger.exception("[LiveKit] status failed")
+                self._send_json({"error": str(exc)}, status=500)
+        elif path == '/api/livekit-token':
+            try:
+                from core.livekit_config import build_livekit_token_response
+
+                payload = build_livekit_token_response(
+                    identity=_query_first(query, "identity"),
+                    room=_query_first(query, "room"),
+                    name=_query_first(query, "name"),
+                )
+                self._send_json(payload)
+            except Exception as exc:
+                logger.exception("[LiveKit] token mint failed")
+                self._send_json({"error": str(exc)}, status=500)
+        elif path == '/' or path == '/index.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
@@ -168,7 +197,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 content = (Path(__file__).parent / 'index.html').read_bytes()
             self.wfile.write(content)
-        elif self.path.startswith('/v2') or self.path.startswith('/v3'):
+        elif path.startswith('/v2') or path.startswith('/v3'):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -183,6 +212,13 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     
     def log_message(self, format, *args):
         pass
+
+
+def _query_first(query, key, default=None):
+    values = query.get(key)
+    if not values:
+        return default
+    return values[0]
 
 async def send_to_clients(msg):
     if not connected_clients:
@@ -270,6 +306,38 @@ def _run_noise_calibration():
         broadcast_msg("log", "Calibration not available — main loop not running")
 
 
+def _interrupt_current_response(reason: str, target_state: str = "LISTENING", clear_buffers: bool = True):
+    """Shared UI/audio interrupt path for barge-in, stop, restart, and reset."""
+    interaction_id = getattr(pipeline_ref, "current_interaction_id", "") if pipeline_ref else ""
+    if pipeline_ref and hasattr(pipeline_ref, "interrupt_current_response"):
+        try:
+            pipeline_ref.interrupt_current_response(
+                reason=reason,
+                interaction_id=interaction_id,
+                target_state=target_state,
+                clear_buffers=clear_buffers,
+            )
+            return
+        except Exception as exc:
+            logger.warning(f"[INTERRUPT] Pipeline interrupt failed: {exc}")
+
+    if pipeline_ref:
+        try:
+            pipeline_ref.stop_signal.set()
+            pipeline_ref.stop_tts()
+            pipeline_ref.is_speaking = False
+        except Exception:
+            pass
+    if audio_ref:
+        try:
+            audio_ref.force_release_audio(reason, interaction_id=interaction_id)
+            audio_ref.stop_playback()
+            if clear_buffers:
+                audio_ref.clear_buffers()
+        except Exception:
+            pass
+
+
 def _handle_control(command):
     global LISTENING_ENABLED, SERVER_ENABLED
     cmd = None
@@ -284,7 +352,7 @@ def _handle_control(command):
         LISTENING_ENABLED = False
         log_event("CONTROL_PAUSE", stage="control")
         if pipeline_ref:
-            pipeline_ref.transition_state("IDLE", source="ui")
+            _interrupt_current_response("UI_PAUSE", target_state="IDLE")
         if audio_ref:
             try:
                 audio_ref.stop()
@@ -311,6 +379,7 @@ def _handle_control(command):
         broadcast_msg("log", "Server stopping (pipeline thread)...")
         SERVER_ENABLED = False
         LISTENING_ENABLED = False
+        _interrupt_current_response("SERVER_STOP", target_state="IDLE")
         if audio_ref:
             try:
                 audio_ref.stop()
@@ -327,6 +396,7 @@ def _handle_control(command):
         log_event("CONTROL_SERVER_RESTART", stage="control")
         SERVER_ENABLED = False
         LISTENING_ENABLED = False
+        _interrupt_current_response("SERVER_RESTART", target_state="IDLE")
         if audio_ref:
             try:
                 audio_ref.stop()
@@ -339,17 +409,7 @@ def _handle_control(command):
         broadcast_msg("log", "Server restart requested" if started else "Server already running")
     elif cmd == "FORCE_RELEASE_AUDIO":
         log_event("UI_CMD_FORCE_RELEASE_AUDIO", stage="ui")
-        if audio_ref:
-            try:
-                audio_ref.force_release_audio("UI_FORCE_RELEASE")
-                audio_ref.stop_playback()
-            except Exception:
-                pass
-        if pipeline_ref:
-            try:
-                pipeline_ref.stop_signal.set()
-            except Exception:
-                pass
+        _interrupt_current_response("UI_FORCE_RELEASE", target_state="LISTENING")
     elif cmd == "RESET_INTERACTION":
         log_event("UI_CMD_RESET_INTERACTION", stage="ui")
         if pipeline_ref:
@@ -367,14 +427,10 @@ def _handle_control(command):
         log_event("UI_CMD_FORCE_RESET", stage="ui")
         SERVER_ENABLED = False
         LISTENING_ENABLED = False
+        _interrupt_current_response("FULL_RESET", target_state="IDLE")
         if audio_ref:
             try:
                 audio_ref.stop()
-            except Exception:
-                pass
-        if pipeline_ref:
-            try:
-                pipeline_ref.stop_signal.set()
             except Exception:
                 pass
         _handle_clear_overrides()
@@ -450,13 +506,7 @@ def _handle_text_input(payload: dict | str):
     if current_state == "SPEAKING":
         logger.info("[TEXT_INPUT] Barge-in triggered via text input")
         try:
-            pipeline_ref.stop_signal.set()
-            pipeline_ref.stop_tts()
-            if audio_ref is not None:
-                audio_ref.force_release_audio("TEXT_BARGE_IN", interaction_id=getattr(pipeline_ref, 'current_interaction_id', ''))
-                audio_ref.stop_playback()
-                audio_ref.clear_buffers()
-            pipeline_ref.is_speaking = False
+            _interrupt_current_response("TEXT_BARGE_IN", target_state="LISTENING")
         except Exception as e:
             logger.warning(f"[TEXT_INPUT] Barge-in error: {e}")
     
@@ -642,15 +692,32 @@ def main_loop():
     try:
         audio.start()
 
-        ollama_available = check_ollama()
-        require_llm = bool(config.get("llm.required", False))
-
-        if require_llm and not ollama_available:
-            raise RuntimeError("LLM required but Ollama is not running")
-        elif not ollama_available:
-            logger.info("LLM offline: running in no-brain mode")
+        llm_backend = "ollama"
+        llm_config = config.get("llm", {})
+        if isinstance(llm_config, dict):
+            llm_backend = str(llm_config.get("backend", "ollama")).lower()
         else:
-            logger.info("Ollama online")
+            llm_backend = str(config.get("llm.backend", "ollama")).lower()
+        require_llm = bool(config.get("llm.required", False))
+        llm_available = False
+
+        if llm_backend == "openai":
+            llm_available = bool(os.getenv("OPENAI_API_KEY"))
+            if require_llm and not llm_available:
+                raise RuntimeError("LLM required but OPENAI_API_KEY is not set")
+            elif not llm_available:
+                logger.info("LLM offline: OPENAI_API_KEY missing; running in no-brain mode")
+            else:
+                logger.info("OpenAI LLM configured")
+        else:
+            ollama_available = check_ollama()
+            llm_available = ollama_available
+            if require_llm and not ollama_available:
+                raise RuntimeError("LLM required but Ollama is not running")
+            elif not ollama_available:
+                logger.info("LLM offline: running in no-brain mode")
+            else:
+                logger.info("Ollama online")
 
         db_ready = music_db_exists(MUSIC_DB_PATH)
         db_status = get_db_status(MUSIC_DB_PATH)
@@ -660,7 +727,7 @@ def main_loop():
             logger.info("Music DB not present (awaiting Jellyfin ingest)")
         broadcast_msg("db_status", db_status)
 
-        pipeline.set_llm_enabled(ollama_available)
+        pipeline.set_llm_enabled(llm_available)
         pipeline.warmup()
     except Exception as e:
         logger.critical(f"Startup Failed: {e}")
@@ -678,12 +745,16 @@ def main_loop():
     def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
         """Read ambient audio for `duration_sec`, compute noise floor, return adaptive VAD threshold."""
         nonlocal vad_threshold, barge_in_threshold
+        if not SERVER_ENABLED or not getattr(audio, "running", False):
+            logger.warning("[CALIBRATE] Audio is stopped; start listening before calibration")
+            broadcast_msg("log", "Calibration skipped — start listening first")
+            return vad_threshold
         frames_needed = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * duration_sec)
         rms_samples = []
         broadcast_msg("log", f"Calibrating ambient noise ({duration_sec}s) — stay quiet...")
         logger.info(f"[CALIBRATE] Recording {duration_sec}s of ambient noise ({frames_needed} frames)...")
         for _ in range(frames_needed):
-            frame = audio.read_frame()
+            frame = audio.read_frame(timeout=0.05)
             if frame is not None:
                 rms = np.linalg.norm(frame) * 10
                 rms_samples.append(rms)
@@ -809,24 +880,7 @@ def main_loop():
                 "stage": str(pipeline.current_state),
                 "allowed": bool(allowed),
             })
-            pipeline.stop_signal.set()
-            audio.force_release_audio("BARGE_IN", interaction_id=pipeline.current_interaction_id)
-            audio.stop_playback() # Kill audio immediately
-            try:
-                pipeline.stop_tts()
-            except Exception:
-                pass
-            # Flush input buffers to discard any TTS echo bleed-through
-            try:
-                audio.clear_buffers()
-            except Exception:
-                pass
-            pipeline.is_speaking = False
-            pipeline.tts_finished_at = time.time()
-            try:
-                pipeline.force_state("LISTENING", interaction_id=pipeline.current_interaction_id, source="BARGE_IN")
-            except Exception:
-                pass
+            _interrupt_current_response("BARGE_IN", target_state="LISTENING")
             
             # Reset state to listen to new command
             silence_counter = 0

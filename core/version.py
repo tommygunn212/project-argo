@@ -3,8 +3,8 @@
 Single source of truth for runtime versioning.
 """
 
-CURRENT_VERSION = "1.8.0"
-CURRENT_MILESTONE = "postgres-memory-backend"
+CURRENT_VERSION = "1.9.0"
+CURRENT_MILESTONE = "livekit-realtime-voice"
 CURRENT_DATE = "2026-05-10"
 
 VERSION_HISTORY = [
@@ -47,6 +47,11 @@ VERSION_HISTORY = [
         "version": "1.8.0",
         "date": CURRENT_DATE,
         "notes": "Optional PostgreSQL memory backend with SQLite fallback and migration tooling",
+    },
+    {
+        "version": "1.9.0",
+        "date": CURRENT_DATE,
+        "notes": "LiveKit plus OpenAI Realtime voice path for fast conversation and native interruption",
     },
 ]
 

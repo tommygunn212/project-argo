@@ -52,7 +52,16 @@ from core.bluetooth import (
     pair_device,
 )
 from core.audio_routing import get_audio_routing_status, set_audio_routing
-from core.app_control import app_status_response, open_app, close_app_deterministic, focus_app_deterministic, get_active_app, is_app_running
+from core.app_control import (
+    WRITABLE_APPS,
+    app_status_response,
+    open_app,
+    close_app_deterministic,
+    focus_app_deterministic,
+    get_active_app,
+    is_app_running,
+    write_text_to_app,
+)
 from core.app_registry import APP_REGISTRY
 from core.system_volume import get_status as get_system_volume_status, set_volume_percent as set_system_volume_percent, adjust_volume_percent as adjust_system_volume_percent, mute_volume as mute_system_volume, unmute_volume as unmute_system_volume
 from core.app_launch import launch_app, resolve_app_launch_target
@@ -66,10 +75,10 @@ from core.brain import get_brain
 from core.registries import is_capability_enabled, is_permission_allowed, is_module_enabled
 from core.runtime_constants import GATES_ORDER, Gate
 from tools.writing import (
-    draft_email, draft_blog, save_note, get_latest_draft, list_drafts,
+    draft_email, draft_blog, draft_document, save_note, get_latest_draft, list_drafts,
     search_drafts, update_draft, export_brain_facts_to_csv, export_drafts_to_csv,
-    parse_email_request, parse_blog_request, parse_edit_instruction, parse_spreadsheet_request,
-    build_email_prompt, build_blog_prompt, build_edit_prompt, build_note_expansion_prompt,
+    parse_email_request, parse_blog_request, parse_document_request, parse_edit_instruction, parse_spreadsheet_request,
+    build_email_prompt, build_blog_prompt, build_document_prompt, build_edit_prompt, build_note_expansion_prompt,
 )
 from tools.email_sender import send_email, send_draft, is_email_configured
 from tools.home_assistant import (
@@ -202,10 +211,10 @@ class ArgoPipeline:
         self._openai_tts = None
         self._pending_barge_in_suppression = None
         self._TTS_INSTRUCTIONS = (
-            "Speak with energy and personality — you're a sharp, witty friend who's genuinely excited to talk. "
-            "Vary your pitch, pace, and emphasis like a real conversation. "
-            "Hit punchlines harder, lean into jokes, and let enthusiasm come through naturally. "
-            "Keep it punchy and alive — never flat, never monotone."
+            "Sound natural, warm, and lightly brisk. "
+            "Keep the pacing smooth and conversational with subtle emphasis and short natural pauses. "
+            "Do not sound like an announcer, a customer service script, or a cartoon character. "
+            "Do not overplay jokes or punchlines. Stay grounded, human, and relaxed."
         )
         self._memory_store = get_memory_store()
         self._ephemeral_memory = {}
@@ -611,6 +620,18 @@ class ArgoPipeline:
     def transition_state(self, new_state: str, interaction_id: str = "", source: str = "audio") -> bool:
         with self._state_lock:
             old_state = self.current_state
+            if (
+                old_state == "IDLE"
+                and new_state == "LISTENING"
+                and source == "audio"
+                and self.stop_signal.is_set()
+            ):
+                self._record_timeline(
+                    "STATE IDLE->LISTENING ignored after interrupt",
+                    stage="state",
+                    interaction_id=interaction_id,
+                )
+                return True
             if new_state == old_state:
                 return True
             allowed = new_state in self.ALLOWED_TRANSITIONS.get(old_state, set())
@@ -635,6 +656,7 @@ class ArgoPipeline:
                 if self.is_speaking:
                     try:
                         self.stop_signal.set()
+                        self.stop_tts()
                         self.audio.force_release_audio("ILLEGAL_TRANSITION", interaction_id=interaction_id)
                         self.audio.stop_playback()
                     except Exception:
@@ -661,12 +683,9 @@ class ArgoPipeline:
             self.broadcast("status", new_state)
 
     def reset_interaction(self):
-        self.stop_signal.set()
-        self.is_speaking = False
-        self.tts_finished_at = time.time()
+        self.interrupt_current_response("RESET_INTERACTION", target_state="LISTENING")
         self.illegal_transition = False
         self.illegal_transition_details = None
-        self.transition_state("LISTENING", source="ui")
 
     def stop_tts(self) -> None:
         """Force stop TTS playback (both Edge and OpenAI engines)."""
@@ -680,6 +699,39 @@ class ArgoPipeline:
                 self._openai_tts.stop()
         except Exception:
             pass
+
+    def interrupt_current_response(
+        self,
+        reason: str = "INTERRUPT",
+        interaction_id: str = "",
+        target_state: str | None = "LISTENING",
+        clear_buffers: bool = True,
+    ) -> None:
+        """Synchronously cancel active speech and release audio ownership."""
+        interaction_id = interaction_id or self.current_interaction_id
+        self._record_timeline(f"INTERRUPT {reason}", stage="interrupt", interaction_id=interaction_id)
+        self.stop_signal.set()
+        self.stop_tts()
+        try:
+            self.audio.force_release_audio(reason, interaction_id=interaction_id)
+        except Exception:
+            pass
+        try:
+            self.audio.stop_playback()
+        except Exception:
+            pass
+        if clear_buffers:
+            try:
+                self.audio.clear_buffers()
+            except Exception:
+                pass
+        self.is_speaking = False
+        self.tts_finished_at = time.time()
+        if target_state:
+            try:
+                self.force_state(target_state, interaction_id=interaction_id, source=reason)
+            except Exception:
+                pass
 
     def is_barge_in_suppressed(self) -> bool:
         """Check if barge-in is temporarily suppressed (for short deterministic responses)."""
@@ -1990,8 +2042,8 @@ class ArgoPipeline:
             return ""
         mode = self._resolve_personality_mode()
         serious_mode = self._is_serious(text)
-        convo_context = self._conversation_buffer.as_context_block() if use_convo_buffer else ""
-        prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, memory_context, convo_context)
+        convo_messages = self._conversation_buffer.as_messages() if use_convo_buffer else []
+        prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, memory_context, convo_context="")
         self.logger.info(f"[LLM] Prompt: '{text}'")
         self.logger.debug(f"[LLM] Full prompt (first 500 chars): {prompt[:500]}")
         full_response = ""
@@ -2017,12 +2069,12 @@ class ArgoPipeline:
                 import os
                 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
                 sys_msg = self._get_system_message(mode, serious_mode)
+                messages = [{"role": "system", "content": sys_msg}]
+                messages.extend(convo_messages)
+                messages.append({"role": "user", "content": prompt})
                 stream = openai_client.chat.completions.create(
                     model=model_name,
-                    messages=[
-                        {"role": "system", "content": sys_msg},
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages=messages,
                     temperature=0.7,
                     max_tokens=500,
                     stream=True,
@@ -2121,7 +2173,7 @@ class ArgoPipeline:
                     )
                     retry_prompt = self._build_llm_prompt(
                         text + "\n\n" + schema_instruction,
-                        mode, serious_mode, rag_context, memory_context, convo_context
+                        mode, serious_mode, rag_context, memory_context, convo_context=""
                     )
                     retry_response = ""
                     try:
@@ -2130,12 +2182,12 @@ class ArgoPipeline:
                             import os
                             openai_client2 = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
                             retry_sys_msg = self._get_system_message(mode, serious_mode)
+                            retry_messages = [{"role": "system", "content": retry_sys_msg}]
+                            retry_messages.extend(convo_messages)
+                            retry_messages.append({"role": "user", "content": retry_prompt})
                             stream2 = openai_client2.chat.completions.create(
                                 model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
-                                messages=[
-                                    {"role": "system", "content": retry_sys_msg},
-                                    {"role": "user", "content": retry_prompt},
-                                ],
+                                messages=retry_messages,
                                 temperature=0.7,
                                 max_tokens=1024,
                                 stream=True,
@@ -2276,7 +2328,7 @@ class ArgoPipeline:
             return (
                 "You are ARGO. Serious mode.\n"
                 "Tone: clean, calm, surgical. No jokes. No sarcasm.\n"
-                "Direct answer, then brief explanation. If you don't know, say so."
+                "Direct answer, then brief explanation. No lists unless the user asks for them. If you don't know, say so."
             )
         if mode == "tommy_gunn":
             examples = self._load_examples("tommy_gunn")
@@ -2296,9 +2348,11 @@ class ArgoPipeline:
                 "\n"
                 "SPEECH RULES:\n"
                 "- Never start with 'Ok, let me tell you' or any variation — just talk.\n"
-                "- Give detailed, substantive answers when asked questions. Don't be lazy with one-liners on real topics.\n"
+                "- Give real answers with substance when it matters, but default to compact voice-first replies unless the user asks for depth.\n"
+                "- Stay on the topic the user brought up. Don't pivot to unrelated subjects mid-response.\n"
                 "- Respond in spoken language, not written essay style. This is voice output.\n"
                 "- Use commas and periods to create natural pauses. Short sentences sound more human.\n"
+                "- Do not give a plan, outline, or list unless the user explicitly asks for one.\n"
                 "- Vary your phrasing — mix statements, questions, and brief asides.\n"
                 "- Never say 'as an AI' or 'I'm just a language model.' You're ARGO.\n"
                 "- Never use numbered lists or bullet points — conversational prose only.\n"
@@ -2345,9 +2399,78 @@ class ArgoPipeline:
         # default
         return (
             "You are ARGO, a veteran mentor. Speak clearly with quiet humor.\n"
-            "Direct observation first. Explain only what matters.\n"
+            "Direct observation first. Explain only what matters. No lists unless asked.\n"
             "Never use numbered lists or bullet points."
         )
+
+    def _get_spoken_response_controls(self) -> dict:
+        """Return runtime-tunable controls for voice responses."""
+        defaults = {
+            "temperature": 0.35,
+            "max_tokens": 140,
+            "max_sentences": 3,
+            "verbosity": 1,
+        }
+
+        try:
+            temperature = float(self.runtime_overrides.get("temperature", defaults["temperature"]))
+        except Exception:
+            temperature = defaults["temperature"]
+        temperature = max(0.0, min(2.0, temperature))
+
+        try:
+            max_tokens = int(self.runtime_overrides.get("max_tokens", defaults["max_tokens"]))
+        except Exception:
+            max_tokens = defaults["max_tokens"]
+        max_tokens = max(80, min(2048, max_tokens))
+
+        try:
+            max_sentences = int(self.runtime_overrides.get("max_sentences", defaults["max_sentences"]))
+        except Exception:
+            max_sentences = defaults["max_sentences"]
+        max_sentences = max(1, min(20, max_sentences))
+
+        try:
+            verbosity = int(self.runtime_overrides.get("verbosity", defaults["verbosity"]))
+        except Exception:
+            verbosity = defaults["verbosity"]
+        verbosity = max(1, min(5, verbosity))
+
+        return {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "max_sentences": max_sentences,
+            "verbosity": verbosity,
+        }
+
+    def _build_spoken_style_block(self, user_text: str, controls: dict) -> str:
+        """Turn runtime voice controls into a prompt block for spoken replies."""
+        verbosity_guidance = {
+            1: "Be terse. One or two short sentences is ideal.",
+            2: "Be concise. Keep it tight and conversational.",
+            3: "Be balanced. A few short sentences is the sweet spot.",
+            4: "You can add a little color, but stay compact and spoken.",
+            5: "You can elaborate if it helps, but keep it spoken and direct.",
+        }
+        asks_for_structure = bool(
+            re.search(
+                r"\b(plan|steps?|walk me through|outline|list|options?|checklist|compare|pros and cons)\b",
+                user_text or "",
+                flags=re.IGNORECASE,
+            )
+        )
+        lines = [
+            "VOICE OUTPUT RULES:",
+            "- Start with the direct answer immediately.",
+            "- Think quick back-and-forth, not monologue.",
+            "- Keep the reply natural and spoken, not like an essay.",
+            f"- Default to no more than {controls['max_sentences']} short sentences unless the user explicitly asks for more detail.",
+            f"- {verbosity_guidance.get(controls['verbosity'], verbosity_guidance[2])}",
+            "- Leave room for the user's next turn instead of trying to finish the whole topic at once.",
+        ]
+        if not asks_for_structure:
+            lines.append("- Do not give a plan, outline, numbered steps, or a menu of options unless the user explicitly asks for one.")
+        return "\n".join(lines)
 
     def _build_llm_prompt(self, user_text: str, mode: str, serious_mode: bool, rag_context: str = "", memory_context: str = "", convo_context: str = "") -> str:
         """Build the user-content portion of the LLM prompt (no persona — that's in the system message)."""
@@ -3249,6 +3372,36 @@ class ArgoPipeline:
 
     # ── Writing & Productivity Handlers ───────────────────────────────
 
+    def _select_desktop_write_target(self, user_text: str) -> tuple[str | None, str]:
+        explicit_app = resolve_app_name(user_text)
+        if explicit_app:
+            if explicit_app in WRITABLE_APPS:
+                return explicit_app, ""
+            display = APP_REGISTRY.get(explicit_app, {}).get("display", explicit_app.capitalize())
+            return None, f"I can type into Notepad or Word right now, not {display}."
+
+        active_key, _ = get_active_app()
+        if active_key in WRITABLE_APPS:
+            return active_key, ""
+
+        return "notepad", ""
+
+    def _desktop_write_status(self, desktop_text: str, user_text: str, interaction_id: str) -> str:
+        payload = (desktop_text or "").strip()
+        if not payload:
+            return ""
+
+        target_app, note = self._select_desktop_write_target(user_text)
+        if target_app is None:
+            return note
+
+        allowed, reason = self._evaluate_gates("app_control", "app_control", interaction_id)
+        if not allowed:
+            return f"Desktop typing is blocked by policy ({reason})."
+
+        ok, msg = write_text_to_app(target_app, payload)
+        return msg
+
     def _writing_llm_call(self, prompt: str, interaction_id: str) -> str:
         """Quick LLM generation for writing tasks (emails, blogs, edits)."""
         try:
@@ -3285,10 +3438,45 @@ class ArgoPipeline:
             subject=subject,
             body=body.strip(),
         )
+        desktop_status = self._desktop_write_status(draft.content, user_text, interaction_id)
         response = f"Email draft saved. Subject: {subject}."
         if to_name:
             response = f"Email to {to_name} drafted. Subject: {subject}."
-        response += f" {draft.word_count} words. Say 'read the draft' to hear it, or 'send the email' when ready."
+        response += f" {draft.word_count} words."
+        if desktop_status:
+            response += f" {desktop_status}"
+        response += " Say 'read the draft' to hear it, or 'send the email' when ready."
+        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+    def _respond_with_write_document(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
+        """Draft a letter or document using LLM and optionally place it in a writable app."""
+        self.logger.info(f"[WRITING] Write document: {user_text}")
+        parsed = parse_document_request(user_text)
+        title = parsed.get("title", "") or user_text
+        recipient = parsed.get("recipient", "")
+        doc_type = parsed.get("doc_type", "document")
+
+        prompt = build_document_prompt(title=title, doc_type=doc_type, recipient=recipient)
+        self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
+        body = self._writing_llm_call(prompt, interaction_id)
+        if not body.strip():
+            return self._deliver_canonical_response(
+                "I couldn't generate that draft. Try again?",
+                interaction_id, replay_mode, overrides,
+            )
+
+        draft = draft_document(
+            title=title,
+            body=body.strip(),
+            doc_type=doc_type,
+            recipient=recipient,
+        )
+        desktop_status = self._desktop_write_status(draft.content, user_text, interaction_id)
+        noun = "Letter" if doc_type == "letter" else "Document"
+        response = f"{noun} drafted. Title: {title}. {draft.word_count} words."
+        if desktop_status:
+            response += f" {desktop_status}"
+        response += " Say 'read the draft' if you want it back out loud."
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
 
     def _respond_with_write_blog(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
@@ -3318,14 +3506,17 @@ class ArgoPipeline:
         # Strip the trigger words to get the note content
         import re as _re
         content = _re.sub(
-            r"^(take\s+a\s+note|save\s+a\s+note|make\s+a\s+note|note\s+that|jot\s+(this\s+)?down)\s*[:\-]?\s*",
+            r"^(take\s+a\s+note|save\s+a\s+note|make\s+a\s+note|save\s+this\s+idea|write\s+(this\s+)?down|note\s+that|jot\s+(this\s+)?down|capture\s+(this\s+)?idea)\s*[:\-]?\s*",
             "", user_text, flags=_re.IGNORECASE,
         ).strip()
         if not content:
             content = user_text
 
         draft = save_note(content)
+        desktop_status = self._desktop_write_status(draft.content, user_text, interaction_id)
         response = f"Note saved. {draft.word_count} words."
+        if desktop_status:
+            response += f" {desktop_status}"
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
 
     def _respond_with_edit_draft(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
@@ -4189,6 +4380,37 @@ class ArgoPipeline:
     # This does:  LLM stream → sentence detect → TTS per sentence [pipelined, ~1.5s to first audio]
 
     _SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])\s+|(?<=[.!?])$')
+    _CLAUSE_BOUNDARY_RE = re.compile(r'(?<=[,;:])\s+')
+
+    def _pop_stream_chunk(self, buffer: str, allow_soft_split: bool = False) -> tuple[str, str]:
+        """Extract the next TTS-safe chunk from the streamed buffer."""
+        if not buffer:
+            return "", ""
+
+        hard_match = self._SENTENCE_BOUNDARY_RE.search(buffer)
+        if hard_match:
+            complete = buffer[:hard_match.start()].strip()
+            remainder = buffer[hard_match.end():]
+            return complete, remainder
+
+        if allow_soft_split:
+            clause_match = self._CLAUSE_BOUNDARY_RE.search(buffer)
+            if clause_match and clause_match.start() >= 24:
+                complete = buffer[:clause_match.start()].strip()
+                remainder = buffer[clause_match.end():]
+                if complete:
+                    return complete, remainder
+
+            if len(buffer) >= 64:
+                soft_end = min(len(buffer), 96)
+                cut = buffer.rfind(" ", 24, soft_end)
+                if cut >= 24:
+                    complete = buffer[:cut].strip()
+                    remainder = buffer[cut + 1:]
+                    if complete:
+                        return complete, remainder
+
+        return "", buffer
 
     def _generate_and_speak_streamed(
         self,
@@ -4217,8 +4439,11 @@ class ArgoPipeline:
 
         mode = self._resolve_personality_mode()
         serious_mode = self._is_serious(user_text)
-        convo_context = self._conversation_buffer.as_context_block() if use_convo_buffer else ""
-        prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context)
+        convo_messages = self._conversation_buffer.as_messages() if use_convo_buffer else []
+        response_controls = self._get_spoken_response_controls()
+        # Build user prompt WITHOUT convo context (that goes into messages array)
+        prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context="")
+        prompt = "\n---\n".join([self._build_spoken_style_block(user_text, response_controls), prompt])
 
         # Determine backend
         llm_backend = "ollama"
@@ -4236,18 +4461,28 @@ class ArgoPipeline:
         tts_engine = self._tts_engine
 
         def _tts_consumer():
-            """Drain sentence queue and play each sentence via TTS."""
+            """Drain sentence queue, pre-fetch next TTS audio while current plays."""
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
             first_sentence = True
+            prefetched = None  # (sentence_text, pcm_bytes) or None
+            prefetch_exec = None
+            tts_generation = None
             try:
                 while True:
-                    try:
-                        sentence = sentence_q.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
-                    if sentence is None:  # poison pill
-                        break
-                    if self.stop_signal.is_set():
-                        break
+                    # ── Get next sentence (pre-fetched or from queue) ──
+                    if prefetched is not None:
+                        sentence, pcm_data = prefetched
+                        prefetched = None
+                    else:
+                        try:
+                            sentence = sentence_q.get(timeout=0.1)
+                        except queue.Empty:
+                            continue
+                        if sentence is None:  # poison pill
+                            break
+                        if self.stop_signal.is_set():
+                            break
+                        pcm_data = None  # will synthesize below
 
                     # Acquire audio + transition on first sentence only
                     if first_sentence:
@@ -4275,7 +4510,66 @@ class ArgoPipeline:
                                 tts_model = self._tts_model
                                 self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
                                 self._openai_tts._instructions = self._TTS_INSTRUCTIONS
-                            self._openai_tts.speak(sentence)
+                            if tts_generation is None:
+                                tts_generation = self._openai_tts.begin_response()
+                            elif self._openai_tts.is_cancelled(tts_generation):
+                                break
+                            # Pre-fetch next sentence while we play this one
+                            prefetch_future = None
+                            next_sent = None
+                            try:
+                                next_sent = sentence_q.get_nowait()
+                                if next_sent is None:
+                                    sentence_q.put(None)  # keep poison pill
+                                    next_sent = None
+                                elif not self.stop_signal.is_set():
+                                    if prefetch_exec is None:
+                                        prefetch_exec = ThreadPoolExecutor(
+                                            max_workers=1, thread_name_prefix="tts-prefetch"
+                                        )
+                                    prefetch_future = prefetch_exec.submit(
+                                        self._openai_tts.synthesize, next_sent, tts_generation
+                                    )
+                            except queue.Empty:
+                                pass
+                            # Stream the current sentence immediately unless it was already pre-fetched.
+                            if pcm_data is None:
+                                self._openai_tts.speak(sentence, generation=tts_generation)
+                            else:
+                                self._openai_tts.play_pcm(pcm_data, generation=tts_generation)
+                            if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                if prefetch_future is not None:
+                                    prefetch_future.cancel()
+                                break
+                            # Collect pre-fetched audio
+                            if prefetch_future is not None and next_sent is not None:
+                                try:
+                                    deadline = time.time() + 15
+                                    prefetch_cancelled = False
+                                    while True:
+                                        if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                            prefetch_future.cancel()
+                                            prefetch_cancelled = True
+                                            result = None
+                                            break
+                                        try:
+                                            result = prefetch_future.result(timeout=0.05)
+                                            break
+                                        except FutureTimeout:
+                                            if time.time() >= deadline:
+                                                raise
+                                    if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                        prefetched = None
+                                        break
+                                    if prefetch_cancelled:
+                                        break
+                                    prefetched = (next_sent, result)
+                                except Exception as exc:
+                                    if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                        prefetched = None
+                                        break
+                                    self.logger.warning(f"[TTS-STREAM] Pre-fetch failed: {exc}")
+                                    prefetched = (next_sent, None)  # will synthesize inline
                         else:
                             if self._edge_tts is None:
                                 from core.output_sink import EdgeTTSOutputSink
@@ -4286,15 +4580,26 @@ class ArgoPipeline:
                         tts_error.append(e)
                         break
             finally:
+                if prefetch_exec is not None:
+                    try:
+                        prefetch_exec.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        prefetch_exec.shutdown(wait=False)
                 # Release audio ownership
                 if tts_started.is_set():
-                    try:
-                        self.audio.release_audio("TTS", interaction_id=interaction_id)
-                    except Exception as e:
-                        self.logger.error(f"[TTS-STREAM] release_audio error: {e}")
-                    self.is_speaking = False
-                    self.tts_finished_at = time.time()
-                    self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
+                    if self.current_interaction_id != interaction_id:
+                        self.logger.info(
+                            f"[TTS-STREAM] Skipping stale cleanup for {interaction_id}; "
+                            f"current={self.current_interaction_id}"
+                        )
+                    else:
+                        try:
+                            self.audio.release_audio("TTS", interaction_id=interaction_id)
+                        except Exception as e:
+                            self.logger.error(f"[TTS-STREAM] release_audio error: {e}")
+                        self.is_speaking = False
+                        self.tts_finished_at = time.time()
+                        self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
 
         # ── Stream LLM tokens and detect sentences ───────────────────
         self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
@@ -4302,6 +4607,8 @@ class ArgoPipeline:
         first_token_ms = None
         full_response = ""
         sentence_buffer = ""
+        queued_chunks = 0
+        response_truncated = False
 
         # Start TTS consumer thread (it blocks on the queue until sentences arrive)
         tts_thread = _threading.Thread(target=_tts_consumer, daemon=True)
@@ -4314,14 +4621,14 @@ class ArgoPipeline:
                 import os
                 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
                 sys_msg = self._get_system_message(mode, serious_mode)
+                messages = [{"role": "system", "content": sys_msg}]
+                messages.extend(convo_messages)
+                messages.append({"role": "user", "content": prompt})
                 stream = openai_client.chat.completions.create(
                     model=model_name,
-                    messages=[
-                        {"role": "system", "content": sys_msg},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.7,
-                    max_tokens=500,
+                    messages=messages,
+                    temperature=response_controls["temperature"],
+                    max_tokens=response_controls["max_tokens"],
                     stream=True,
                 )
                 for chunk in stream:
@@ -4341,22 +4648,35 @@ class ArgoPipeline:
                     sentence_buffer += part
 
                     # Flush complete sentences to TTS
-                    while self._SENTENCE_BOUNDARY_RE.search(sentence_buffer):
-                        parts = self._SENTENCE_BOUNDARY_RE.split(sentence_buffer, maxsplit=1)
-                        complete = parts[0].strip()
-                        sentence_buffer = parts[1] if len(parts) > 1 else ""
+                    while True:
+                        complete, sentence_buffer = self._pop_stream_chunk(
+                            sentence_buffer,
+                            allow_soft_split=(queued_chunks == 0),
+                        )
+                        if not complete:
+                            break
                         if complete and tts_thread.is_alive():
                             # Strip non-ASCII and apply persona per sentence
                             complete = re.sub(r"[^\x00-\x7F]+", "", complete)
                             tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
                             if tts_text:
                                 sentence_q.put(tts_text)
+                                queued_chunks += 1
+                                if queued_chunks >= response_controls["max_sentences"]:
+                                    response_truncated = True
+                                    sentence_buffer = ""
+                                    break
+                    if response_truncated:
+                        break
             else:
                 client = ollama.Client(host='http://127.0.0.1:11434')
                 ollama_prompt = self._get_system_message(mode, serious_mode) + "\n\n" + prompt
                 stream = client.generate(
                     model=model_name, prompt=ollama_prompt, stream=True,
-                    options={"temperature": 0.7, "num_predict": 1024},
+                    options={
+                        "temperature": response_controls["temperature"],
+                        "num_predict": response_controls["max_tokens"],
+                    },
                 )
                 for chunk in stream:
                     if self.stop_signal.is_set():
@@ -4373,19 +4693,29 @@ class ArgoPipeline:
                     full_response += part
                     sentence_buffer += part
 
-                    while self._SENTENCE_BOUNDARY_RE.search(sentence_buffer):
-                        parts = self._SENTENCE_BOUNDARY_RE.split(sentence_buffer, maxsplit=1)
-                        complete = parts[0].strip()
-                        sentence_buffer = parts[1] if len(parts) > 1 else ""
+                    while True:
+                        complete, sentence_buffer = self._pop_stream_chunk(
+                            sentence_buffer,
+                            allow_soft_split=(queued_chunks == 0),
+                        )
+                        if not complete:
+                            break
                         if complete and tts_thread.is_alive():
                             complete = re.sub(r"[^\x00-\x7F]+", "", complete)
                             tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
                             if tts_text:
                                 sentence_q.put(tts_text)
+                                queued_chunks += 1
+                                if queued_chunks >= response_controls["max_sentences"]:
+                                    response_truncated = True
+                                    sentence_buffer = ""
+                                    break
+                    if response_truncated:
+                        break
 
             # Flush any remaining text in the buffer
             remainder = sentence_buffer.strip()
-            if remainder and tts_thread.is_alive():
+            if remainder and tts_thread.is_alive() and not response_truncated:
                 remainder = re.sub(r"[^\x00-\x7F]+", "", remainder)
                 tts_text = self._sanitize_tts_text(remainder, enforce_confidence=False)
                 if tts_text:
@@ -4411,10 +4741,32 @@ class ArgoPipeline:
         if _display.strip():
             self.broadcast("log", f"Argo: {_display}")
 
-        # Signal TTS thread to finish and wait for it
+        # Signal TTS thread to finish and wait for it. On barge-in, do not let
+        # an uncancellable network prefetch hold the turn lock for seconds.
+        if self.stop_signal.is_set():
+            while True:
+                try:
+                    sentence_q.get_nowait()
+                except queue.Empty:
+                    break
         sentence_q.put(None)
         if tts_thread.is_alive():
-            tts_thread.join(timeout=30)
+            join_started = time.time()
+            interrupt_seen_at = time.time() if self.stop_signal.is_set() else None
+            while tts_thread.is_alive():
+                tts_thread.join(timeout=0.1)
+                if not tts_thread.is_alive():
+                    break
+                if self.stop_signal.is_set():
+                    if interrupt_seen_at is None:
+                        interrupt_seen_at = time.time()
+                    if time.time() - interrupt_seen_at >= 0.75:
+                        self.logger.warning("[TTS-STREAM] TTS thread still unwinding after interrupt")
+                        self.stop_tts()
+                        break
+                elif time.time() - join_started >= 30:
+                    self.logger.warning("[TTS-STREAM] TTS thread did not finish within 30s")
+                    break
 
         return full_response
 
@@ -4696,8 +5048,14 @@ class ArgoPipeline:
     def run_interaction(self, audio_data, interaction_id: str = "", replay_mode: bool = False, overrides: dict | None = None):
         # THREAD SAFETY: Prevent overlapping runs which can crash models
         if not self.processing_lock.acquire(blocking=False):
-            self.logger.warning("[PIPELINE] Ignored input - System busy processing previous request")
-            return
+            if self.stop_signal.is_set():
+                self.logger.info("[PIPELINE] Previous turn interrupted; waiting briefly for handoff")
+                if not self.processing_lock.acquire(timeout=2.0):
+                    self.logger.warning("[PIPELINE] Ignored input - interrupted turn did not release in time")
+                    return
+            else:
+                self.logger.warning("[PIPELINE] Ignored input - System busy processing previous request")
+                return
 
         try:
             # Reset any prior barge-in state
@@ -5679,6 +6037,10 @@ class ArgoPipeline:
             if self._respond_with_write_blog(intent, user_text, interaction_id, replay_mode, overrides):
                 return
 
+        if intent and intent.intent_type == IntentType.WRITE_DOCUMENT:
+            if self._respond_with_write_document(intent, user_text, interaction_id, replay_mode, overrides):
+                return
+
         if intent and intent.intent_type == IntentType.WRITE_NOTE:
             if self._respond_with_write_note(intent, user_text, interaction_id, replay_mode, overrides):
                 return
@@ -5869,6 +6231,7 @@ class ArgoPipeline:
             # Writing & productivity
             IntentType.WRITE_EMAIL,
             IntentType.WRITE_BLOG,
+            IntentType.WRITE_DOCUMENT,
             IntentType.WRITE_NOTE,
             IntentType.EDIT_DRAFT,
             IntentType.LIST_DRAFTS,
@@ -5923,6 +6286,7 @@ class ArgoPipeline:
                 IntentType.ARGO_GOVERNANCE: "Governance answers are deterministic. Ask again if needed.",
                 IntentType.WRITE_EMAIL: "Email drafting failed to route. Say it again.",
                 IntentType.WRITE_BLOG: "Blog writing failed to route. Say it again.",
+                IntentType.WRITE_DOCUMENT: "Document drafting failed to route. Say it again.",
                 IntentType.WRITE_NOTE: "Note saving failed to route. Say it again.",
                 IntentType.EDIT_DRAFT: "Draft editing failed to route. Say it again.",
                 IntentType.LIST_DRAFTS: "Draft listing failed to route. Say it again.",

@@ -263,10 +263,10 @@ class AudioManager:
         data = indata.copy()
         self.input_queue.put(data)
 
-    def read_frame(self):
+    def read_frame(self, timeout: float = 1.0):
         """Blocking read for main loop. Returns 512 samples."""
         try:
-            frame = self.input_queue.get(timeout=1.0)
+            frame = self.input_queue.get(timeout=timeout)
             self.ring_buffer.append(frame)
             return frame
         except queue.Empty:

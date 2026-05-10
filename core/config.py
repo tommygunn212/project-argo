@@ -265,6 +265,26 @@ _DEFAULT_CONFIG = {
         "voice": "lessac",
         "voice_model_path": "audio/piper/voices/en_US-lessac-medium.onnx"
     },
+    "voice": {
+        "mode": "livekit_realtime",
+        "fallback_mode": "classic_pipeline"
+    },
+    "livekit": {
+        "enabled": True,
+        "url": "ws://127.0.0.1:7880",
+        "api_key": "devkey",
+        "api_secret": "",
+        "room": "argo-live",
+        "agent_name": "argo-realtime",
+        "model": "gpt-realtime",
+        "voice": "marin",
+        "greeting": "",
+        "temperature": 0.6,
+        "speed": 1.0,
+        "token_ttl_minutes": 60,
+        "min_interruption_duration": 0.12,
+        "false_interruption_timeout": 0.35,
+    },
     "llm": {
         "model": "qwen:latest",
         "base_url": "http://localhost:11434",
