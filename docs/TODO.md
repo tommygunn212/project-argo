@@ -8,6 +8,13 @@ Short list of deferred or optional work items. No refactors implied.
 - [ ] Run test_app.py
 - [ ] Fix API-layer issues only (no core changes)
 
+## Phase 2B — Long-Term Memory Backend
+- [x] Add optional PostgreSQL memory backend with SQLite fallback
+- [x] Add migration script for existing SQLite memory records
+- [x] Store completed assistant turns into `conversation_turns`
+- [ ] Add pgvector embeddings for semantic recall
+- [ ] Expose memory backend health in the UI
+
 ## Phase 3 — Test Hygiene (Low Risk)
 - [ ] Move deprecated tests into tests/deprecated/
 - [ ] Add legacy comments to historical tests

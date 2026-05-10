@@ -1249,12 +1249,47 @@ class ArgoPipeline:
 
     def _get_memory_context(self, interaction_id: str, user_text: str = "") -> str:
         """Pull smart memory context from brain (3-layer: facts + state + last exchange)."""
+        blocks = []
         try:
-            return self._brain.get_prompt_context(user_text)
+            brain_context = self._brain.get_prompt_context(user_text)
+            if brain_context:
+                blocks.append(brain_context)
         except Exception as e:
             self.logger.warning(f"[BRAIN] Context load failed: {e}")
             self._record_timeline("MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
-            return ""
+        try:
+            search_turns = getattr(self._memory_store, "search_turns", None)
+            if search_turns and user_text:
+                turns = search_turns(user_text, limit=3)
+                if turns:
+                    lines = ["DURABLE CONVERSATION TURNS:"]
+                    for turn in turns:
+                        lines.append(f"User: {turn.user_text}")
+                        lines.append(f"ARGO: {turn.assistant_text}")
+                    blocks.append("\n".join(lines))
+        except Exception as e:
+            self.logger.warning(f"[MEMORY] Durable turn recall failed: {e}")
+            self._record_timeline("DURABLE_MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
+        return "\n\n".join(blocks)
+
+    def _store_durable_turn(self, user_text: str, assistant_text: str, intent: str, interaction_id: str) -> None:
+        """Store a completed conversational turn if the configured backend supports it."""
+        try:
+            add_turn = getattr(self._memory_store, "add_turn", None)
+            if not add_turn:
+                return
+            turn_id = add_turn(
+                user_text=(user_text or "")[:4000],
+                assistant_text=(assistant_text or "")[:4000],
+                source="llm",
+                intent=intent or None,
+                metadata={"interaction_id": interaction_id},
+            )
+            if turn_id and turn_id > 0:
+                self.logger.info(f"[MEMORY] durable_turn_stored id={turn_id}")
+        except Exception as e:
+            self.logger.warning(f"[MEMORY] Durable turn store failed: {e}")
+            self._record_timeline("DURABLE_MEMORY_STORE_ERROR", stage="memory", interaction_id=interaction_id)
 
     def _parse_memory_write(self, user_text: str) -> dict | None:
         text = user_text.strip()
@@ -5983,6 +6018,7 @@ class ArgoPipeline:
             self._brain.after_llm(user_text, ai_text, _intent_str)
         except Exception as e:
             self.logger.warning(f"[BRAIN] after_llm failed: {e}")
+        self._store_durable_turn(user_text, ai_text, _intent_str, interaction_id)
 
         # TTS already played via streaming pipeline above — no separate speak() call needed
 

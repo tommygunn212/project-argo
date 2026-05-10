@@ -7,7 +7,7 @@ ARGO is a deterministic, local-first neural network command diagnostic system. I
 ### Architecture
 - 7-layer voice pipeline: InputTrigger, SpeechToText, IntentParser, ResponseGenerator, OutputSink, StateMachine, UI/Debugger
 - Always-listening VAD loop with explicit state machine enforcement
-- Deterministic memory and session management
+- Deterministic memory and session management, with SQLite default and optional PostgreSQL durable memory backend
 - Canonical law and 5 Gates enforcement
 
 ### Key Principles

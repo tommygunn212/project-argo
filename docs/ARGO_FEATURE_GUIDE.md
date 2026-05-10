@@ -58,6 +58,9 @@ ARGO has a 3-layer memory architecture that lets it remember facts about you acr
 | **Short-Term** | RAM only | Last exchange only | Maintains conversational flow |
 | **Working** | RAM + SQLite | Current session + persisted | Tracks current topic, task, and mood |
 | **Long-Term** | SQLite (`data/brain.db`) | Permanent | Stores facts, relationships, preferences |
+| **Durable Memory Backend** | SQLite or PostgreSQL | Permanent | Stores explicit memory records and completed LLM turns |
+
+v1.8.0 adds an optional PostgreSQL backend through `core.memory_store`. SQLite remains the default. See [PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md).
 
 ### Storing Facts
 

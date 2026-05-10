@@ -15,6 +15,7 @@ The current runtime is **VAD-only** and runs from main.py with dual UI surfaces.
 - Optional OpenRGB lighting control via command executor
 - Self-diagnostics and assisted recovery (Phase 1 & 2)
 - Security-hardened: localhost-only binding, no exposed secrets
+- Durable memory backend: SQLite by default, optional PostgreSQL for v1.8.0 long-term memory experiments
 
 ### Frontend V2 Architecture
 
@@ -58,10 +59,12 @@ Audio → Hygiene → Whisper → Intent → Action / Response
 
 Memory contract:
 - Explicit writes only
-- Namespaces: FACT / PROJECT / EPHEMERAL
-- EPHEMERAL clears on restart
+- Durable types: FACT / PROJECT / PREFERENCE
+- EPHEMERAL clears on restart and never touches disk
+- Backend: SQLite default (`data/memory.db`), PostgreSQL optional through `core.memory_store`
 - Memory is advisory, never authoritative
 - Memory cannot trigger actions
+- Conversation-turn storage exists for future long-term recall, but semantic recall still needs a retrieval pass
 
 STT design:
 - Local-only Whisper

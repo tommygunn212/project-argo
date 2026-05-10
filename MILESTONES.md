@@ -71,8 +71,31 @@
 
 ---
 
+## ✅ Milestone: PostgreSQL Memory Backend (v1.8.0 — 2026-05-10)
+
+**Goal:** Make ARGO's durable memory backend swappable so SQLite stays the local default while PostgreSQL can power stronger long-term memory experiments.
+
+### Completed
+- [✔] `core.memory_store` now supports SQLite and PostgreSQL behind the same API
+- [✔] Backend selection via `memory.backend`, `ARGO_MEMORY_BACKEND`, and DSN env vars
+- [✔] PostgreSQL schema for explicit memory records
+- [✔] Conversation-turn table added for long-term recall
+- [✔] Completed LLM turns are stored through the durable backend
+- [✔] Durable conversation-turn recall is included in memory context when relevant
+- [✔] SQLite remains default and requires no setup
+- [✔] Migration script copies existing SQLite memory records into PostgreSQL
+- [✔] Memory tests cover backend selection and turn search
+- [✔] Version registry normalized to v1.8.0
+
+### Next
+- [ ] Add embeddings and pgvector-backed semantic recall
+- [ ] Add UI controls for memory backend health and migration status
+
+---
+
 ## Upcoming
 
 [ ] Mode Discipline
 [ ] Status / Debug Introspection
 [ ] Earned System Controls
+[ ] pgvector semantic memory recall

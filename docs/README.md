@@ -1,6 +1,6 @@
 # ARGO Documentation Index (v1.0.0-voice-core)
 
-Complete navigation for ARGO system documentation. All documentation current as of January 22, 2026.
+Complete navigation for ARGO system documentation. Core memory/backend documentation current as of May 10, 2026.
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
@@ -14,6 +14,7 @@ Complete navigation for ARGO system documentation. All documentation current as 
 2. **[← Foundation Lock](../FOUNDATION_LOCK.md)** — What must NEVER be broken (critical reading)
 3. **[← Release Notes](../RELEASE_NOTES.md)** — Why v1.0.0-voice-core matters, guarantees
 4. **[← Getting Started](../GETTING_STARTED.md)** — Installation and first run
+5. **[PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md)** — Optional v1.8.0 Postgres backend and migration guide
 
 ### For Developers Modifying Code
 
@@ -72,6 +73,18 @@ Highlights:
 - Hardware identity and disk usage are now deterministic (no LLM)
 - Disk queries support per-drive usage and “fullest/most free” queries
 - Music control hardened for preemption and safe stops
+
+## Milestone: PostgreSQL Memory Backend (May 10, 2026)
+
+**Why:** keep SQLite as the local default while opening a reversible path to PostgreSQL-backed long-term memory.
+
+Highlights:
+- `core.memory_store` can resolve SQLite or PostgreSQL from config/environment
+- Existing memory commands can use Postgres without changing pipeline callers
+- Conversation-turn storage table added for future semantic recall
+- Migration script copies `data/memory.db` records into Postgres
+
+See: [PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md)
 
 ## Music Resolver (January 22, 2026)
 

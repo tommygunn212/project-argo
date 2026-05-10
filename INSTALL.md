@@ -1,6 +1,6 @@
 # ARGO Installation Guide
 
-> **Version:** 1.6.4 | **Platform:** Windows 10/11 (x64)
+> **Version:** 1.8.0 | **Platform:** Windows 10/11 (x64)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -121,6 +121,20 @@ python -c "import sounddevice; print(sounddevice.query_devices())"
 | `OPENAI_API_KEY` | Cloud speech recognition | [platform.openai.com](https://platform.openai.com) |
 
 Add to your environment or config.json.
+
+### Memory Backend (Optional PostgreSQL)
+
+ARGO uses SQLite by default and does not require a database server.
+
+To test PostgreSQL-backed durable memory:
+
+```powershell
+$env:ARGO_MEMORY_BACKEND="postgres"
+$env:ARGO_POSTGRES_DSN="postgresql://argo:argo@localhost:5432/argo"
+python scripts/migrate_memory_to_postgres.py --dsn $env:ARGO_POSTGRES_DSN
+```
+
+Leave `ARGO_MEMORY_BACKEND` unset or set it to `sqlite` for the default local file backend.
 
 ---
 

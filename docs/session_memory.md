@@ -8,6 +8,10 @@ It stores recent interactions (utterances, intents, responses) so the LLM can re
 
 **Key principle**: Bounded, transparent, temporary scratchpad. Not learning. Not embeddings. Not personality.
 
+## v1.8.0 Boundary Note
+
+SessionMemory is still RAM-only. Durable memory now lives behind `core.memory_store`, which can use SQLite or PostgreSQL. The new durable `conversation_turns` table is separate from SessionMemory and is intended for future long-term recall experiments.
+
 ---
 
 ## What It Is

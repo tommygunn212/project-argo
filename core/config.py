@@ -275,6 +275,11 @@ _DEFAULT_CONFIG = {
     "personality": {
         "mode": "tommy_gunn"
     },
+    "memory": {
+        "backend": "sqlite",
+        "sqlite_path": "data/memory.db",
+        "postgres_dsn": "",
+    },
     "music": {
         "enabled": True,
         "backend": None,

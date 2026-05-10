@@ -86,6 +86,26 @@ pip install -r requirements.txt
 
 ---
 
+## Memory Backend
+
+ARGO uses SQLite by default for durable explicit memory:
+
+```text
+data/memory.db
+```
+
+To try the optional PostgreSQL backend:
+
+```powershell
+$env:ARGO_MEMORY_BACKEND="postgres"
+$env:ARGO_POSTGRES_DSN="postgresql://argo:argo@localhost:5432/argo"
+python scripts/migrate_memory_to_postgres.py --dsn $env:ARGO_POSTGRES_DSN
+```
+
+If those environment variables are not set, no PostgreSQL server is required.
+
+---
+
 ## Quick Start
 
 ### Terminal 1: Start Ollama

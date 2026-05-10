@@ -12,6 +12,7 @@
 - **Natural language flexibility** — supports colloquial phrasing for core commands.
 - **Self-diagnostics** — ARGO can check its own health and propose fixes.
 - **Security hardened** — localhost-only, no exposed secrets.
+- **Memory backend choice** — SQLite by default, optional PostgreSQL backend for durable long-term memory experiments.
 
 **Web UI (Classic):** http://localhost:8000  
 **Web UI (V2):** http://localhost:8000/v2  
@@ -36,12 +37,14 @@
 
 ```
 Audio → VAD → STT → LLM → TTS
+              ↘︎ Memory backend (SQLite/PostgreSQL)
               ↘︎ WebSocket (live status + logs) → UI (v1 + v2)
 ```
 
 - Audio frames are continuously monitored by **VAD**.
 - Detected speech is transcribed by **STT** (OpenAI Cloud, Faster Whisper, or Azure).
 - Prompts are sent to **GPT-4o-mini** (LLM) with streaming.
+- Durable explicit memories are stored through `core.memory_store` using SQLite by default or PostgreSQL when configured.
 - Responses are synthesized by **TTS** (OpenAI, Edge, or Azure Neural).
 - The UI receives **live logs + status** over WebSocket.
 
@@ -70,6 +73,17 @@ Ensure the model is available:
 ```powershell
 ollama pull qwen:latest
 ```
+
+### Optional PostgreSQL Memory Backend
+SQLite remains the default. To try PostgreSQL for durable memory:
+
+```powershell
+$env:ARGO_MEMORY_BACKEND="postgres"
+$env:ARGO_POSTGRES_DSN="postgresql://argo:argo@localhost:5432/argo"
+python scripts/migrate_memory_to_postgres.py --dsn $env:ARGO_POSTGRES_DSN
+```
+
+PostgreSQL is currently used for explicit memory records and the new conversation-turn storage table. If Postgres is not configured, ARGO stays on `data/memory.db`.
 
 ### Run ARGO
 ```powershell
@@ -195,6 +209,20 @@ Highlights:
 - 13 OpenAI TTS voices (including verse, marin, cedar)
 - Barge-in overhaul: multi-engine stop, suppression guards, buffer clearing
 - Response quality: max_tokens 1024, max_sentences 10, rewritten system prompt
+
+---
+
+## Milestone: PostgreSQL Memory Backend (May 2026)
+
+**Why:** Keep SQLite as the reliable local default while making ARGO ready for stronger long-term memory, semantic recall, and future pgvector work.
+
+Highlights:
+- `core.memory_store` now resolves SQLite or PostgreSQL from config/environment
+- PostgreSQL schema mirrors the durable memory API without changing existing callers
+- Completed LLM conversation turns are stored for long-term recall experiments
+- Matching durable turns are included in future memory context when relevant
+- Migration script copies existing `data/memory.db` records into Postgres
+- Version normalized to v1.8.0 for the memory backend milestone
 
 ---
 

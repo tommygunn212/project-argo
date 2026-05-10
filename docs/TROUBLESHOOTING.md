@@ -93,6 +93,31 @@ python -c "import sounddevice, pvporcupine, whisper, piper; print('All OK')"
 
 ---
 
+### PostgreSQL Memory Backend Fails To Start
+
+**Symptom:** ARGO starts normally with SQLite, but fails after setting `ARGO_MEMORY_BACKEND=postgres`.
+
+**Fix:**
+```powershell
+# Confirm backend selection and DSN
+echo $env:ARGO_MEMORY_BACKEND
+echo $env:ARGO_POSTGRES_DSN
+
+# Confirm psycopg is installed
+python -c "import psycopg; print('psycopg OK')"
+
+# Test migration connectivity
+python scripts/migrate_memory_to_postgres.py --dsn $env:ARGO_POSTGRES_DSN --dry-run
+```
+
+If Postgres is not ready, return to the safe default:
+
+```powershell
+$env:ARGO_MEMORY_BACKEND="sqlite"
+```
+
+---
+
 ## Startup Issues
 
 ### Porcupine Access Key Not Found

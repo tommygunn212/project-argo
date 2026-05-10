@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.8.0 — PostgreSQL Memory Backend (2026-05-10)
+
+### Added
+- Optional PostgreSQL durable memory backend selected by `memory.backend` or `ARGO_MEMORY_BACKEND`.
+- `PostgresMemoryStore` mirrors the existing SQLite `MemoryStore` API for explicit memory commands.
+- Durable `conversation_turns` table for long-term conversation recall experiments.
+- Completed LLM turns are stored through the durable memory backend.
+- Memory context now includes matching durable conversation turns when available.
+- `scripts/migrate_memory_to_postgres.py` copies existing SQLite memory records into PostgreSQL.
+- Environment examples for `ARGO_MEMORY_BACKEND`, `ARGO_MEMORY_SQLITE_PATH`, and `ARGO_POSTGRES_DSN`.
+
+### Changed
+- SQLite remains the default memory backend and fallback path.
+- `core.memory_store.get_memory_store()` now resolves the configured backend without changing callers.
+- Project version normalized to `1.8.0` across `VERSION` and `core/version.py`.
+
+### Tests
+- Added backend selection and conversation-turn storage coverage in `tests/test_memory_store.py`.
+
+---
+
 ## v1.7.0 — Frontend V2, OpenAI Engine Upgrades & Barge-In Overhaul (2026-03-08)
 
 ### Added

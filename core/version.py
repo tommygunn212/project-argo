@@ -3,9 +3,9 @@
 Single source of truth for runtime versioning.
 """
 
-CURRENT_VERSION = "1.6.25"
-CURRENT_MILESTONE = "self-diagnostics-and-security-hardening"
-CURRENT_DATE = "2026-03-07"
+CURRENT_VERSION = "1.8.0"
+CURRENT_MILESTONE = "postgres-memory-backend"
+CURRENT_DATE = "2026-05-10"
 
 VERSION_HISTORY = [
     {
@@ -35,8 +35,18 @@ VERSION_HISTORY = [
     },
     {
         "version": "1.6.25",
-        "date": CURRENT_DATE,
+        "date": "2026-03-07",
         "notes": "Self-diagnostics, security hardening, stability fixes, pinned deps",
+    },
+    {
+        "version": "1.7.0",
+        "date": "2026-03-08",
+        "notes": "Frontend V2, OpenAI STT/TTS engine upgrades, and barge-in overhaul",
+    },
+    {
+        "version": "1.8.0",
+        "date": CURRENT_DATE,
+        "notes": "Optional PostgreSQL memory backend with SQLite fallback and migration tooling",
     },
 ]
 

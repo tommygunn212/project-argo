@@ -24,6 +24,8 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - Barge-in and audio ownership logic (overhauled — both engines, buffer clearing, suppression guards)
 - Timeline event capture for replay/debug
 - Structured session and memory management
+- Durable memory backend selection: SQLite default, PostgreSQL optional
+- Conversation-turn storage table for long-term recall experiments
 - Canonical law and 5 Gates enforcement
 - Frontend text input (bypass STT, type commands directly)
 - Self-diagnostics: ARGO checks its own components (Ollama, Piper, Whisper, audio)
@@ -37,8 +39,8 @@ This document tracks all current and planned features for ARGO, the neural netwo
 
 ### Planned Features (2026+)
 - RAG (Retrieval-Augmented Generation) for self-documentation and deterministic recall
-- SQL/Database integration for structured data queries
-- Advanced session memory and context-aware responses
+- pgvector-backed semantic memory search
+- Advanced session memory and context-aware responses backed by durable conversation turns
 - Plugin/extension system for third-party integrations
 - Multi-user session support
 - Enhanced UI/UX for debugging and control
