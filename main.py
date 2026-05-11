@@ -298,6 +298,15 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 content = (Path(__file__).parent / 'index.html').read_bytes()
             self.wfile.write(content)
+        elif path == '/avatar-test':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            self.end_headers()
+            content = (Path(__file__).parent / 'frontend-v2' / 'avatar-test.html').read_bytes()
+            self.wfile.write(content)
         elif path.startswith('/v2') or path.startswith('/v3'):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
