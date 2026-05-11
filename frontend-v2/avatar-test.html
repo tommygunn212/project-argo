@@ -82,14 +82,52 @@ body {
   animation: idle 7.2s ease-in-out infinite;
 }
 .avatar-shell.talking .avatar {
-  animation: talking 0.42s ease-in-out infinite;
+  animation: talking 0.9s ease-in-out infinite;
+}
+.eye-glow {
+  position: absolute;
+  top: 42.2%;
+  width: 8.2%;
+  height: 4.2%;
+  z-index: 4;
+  opacity: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(125,211,252,0.92), rgba(14,165,233,0.18) 42%, transparent 72%);
+  box-shadow: 0 0 18px rgba(14,165,233,0.45);
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%) scaleX(0.75) scaleY(0.45);
+}
+.eye-left { left: 42.1%; }
+.eye-right { left: 58.3%; }
+.eyelid {
+  position: absolute;
+  top: 38.8%;
+  width: 9.8%;
+  height: 7.6%;
+  z-index: 5;
+  opacity: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(2,6,23,0.92), rgba(2,6,23,0.52));
+  transform: translateX(-50%) scaleY(0);
+  transform-origin: 50% 0%;
+}
+.eyelid-left { left: 42.1%; }
+.eyelid-right { left: 58.3%; }
+.avatar-shell.talking .eye-glow {
+  animation: eyes 2.4s ease-in-out infinite;
+}
+.avatar-shell.talking .eyelid {
+  animation: blink 4.8s ease-in-out infinite;
 }
 .mouth-glow {
   position: absolute;
   left: 50%;
-  top: 61%;
-  width: 18%;
-  height: 3.5%;
+  top: 60.8%;
+  width: 16%;
+  height: 2.5%;
   transform: translate(-50%, -50%) scaleX(0.78) scaleY(0.38);
   border-radius: 999px;
   opacity: 0;
@@ -102,7 +140,41 @@ body {
   box-shadow: 0 0 18px rgba(14,165,233,0.32);
 }
 .avatar-shell.talking .mouth-glow {
-  animation: mouth 0.28s ease-in-out infinite;
+  animation: mouth 0.22s ease-in-out infinite;
+}
+.jaw-glow {
+  position: absolute;
+  left: 50%;
+  top: 66%;
+  width: 22%;
+  height: 12%;
+  z-index: 3;
+  opacity: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scaleY(0.7);
+  background: radial-gradient(circle at 50% 0%, rgba(14,165,233,0.22), transparent 68%);
+  mix-blend-mode: screen;
+}
+.cheek-glow {
+  position: absolute;
+  top: 53%;
+  width: 15%;
+  height: 8%;
+  z-index: 3;
+  opacity: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(245,158,11,0.22), transparent 70%);
+  mix-blend-mode: screen;
+}
+.cheek-left { left: 36%; }
+.cheek-right { right: 34%; }
+.avatar-shell.talking .jaw-glow {
+  animation: jaw 0.22s ease-in-out infinite;
+}
+.avatar-shell.talking .cheek-glow {
+  animation: cheeks 1.2s ease-in-out infinite;
 }
 .controls {
   position: fixed;
@@ -158,18 +230,58 @@ body {
   50% { transform: scale(1.045) translateY(-5px); }
 }
 @keyframes talking {
-  0%, 100% { transform: scale(1.025) translateY(0); filter: brightness(1.04) saturate(1.08); }
-  50% { transform: scale(1.058) translateY(-3px); filter: brightness(1.12) saturate(1.18); }
+  0%, 100% { transform: scale(1.025) translateY(0) rotate(0deg); filter: brightness(1.04) saturate(1.08); }
+  25% { transform: scale(1.047) translateY(-3px) rotate(-0.35deg); }
+  50% { transform: scale(1.058) translateY(-4px) rotate(0.28deg); filter: brightness(1.12) saturate(1.18); }
+  75% { transform: scale(1.041) translateY(-2px) rotate(-0.18deg); }
+}
+@keyframes eyes {
+  0%, 100% {
+    opacity: 0.25;
+    transform: translate(-50%, -50%) scaleX(0.75) scaleY(0.45);
+  }
+  40% {
+    opacity: 0.76;
+    transform: translate(-50%, -50%) scaleX(1.06) scaleY(0.8);
+  }
+  58% {
+    opacity: 0.48;
+    transform: translate(-50%, -50%) scaleX(0.92) scaleY(0.58);
+  }
+}
+@keyframes blink {
+  0%, 86%, 94%, 100% {
+    opacity: 0;
+    transform: translateX(-50%) scaleY(0);
+  }
+  89%, 91% {
+    opacity: 0.88;
+    transform: translateX(-50%) scaleY(1);
+  }
 }
 @keyframes mouth {
   0%, 100% {
-    opacity: 0.28;
-    transform: translate(-50%, -50%) scaleX(0.78) scaleY(0.38);
+    opacity: 0.32;
+    transform: translate(-50%, -50%) scaleX(0.72) scaleY(0.3);
   }
   50% {
-    opacity: 0.78;
-    transform: translate(-50%, -50%) scaleX(1.12) scaleY(1.12);
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scaleX(1.22) scaleY(1.35);
   }
+}
+@keyframes jaw {
+  0%, 100% {
+    opacity: 0.08;
+    transform: translate(-50%, -50%) scaleY(0.58);
+  }
+  50% {
+    opacity: 0.42;
+    transform: translate(-50%, -42%) scaleY(1.05);
+  }
+}
+@keyframes cheeks {
+  0%, 100% { opacity: 0.1; transform: scale(0.85); }
+  50% { opacity: 0.42; transform: scale(1.08); }
 }
 @keyframes scan {
   0% { opacity: 0; transform: translateY(-100%); }
@@ -183,7 +295,14 @@ body {
   <main class="stage">
     <div class="avatar-shell" id="avatarShell">
       <img class="avatar" src="/v2-assets/argo-hedra-default.png" alt="ARGO avatar test">
+      <div class="eye-glow eye-left" aria-hidden="true"></div>
+      <div class="eye-glow eye-right" aria-hidden="true"></div>
+      <div class="eyelid eyelid-left" aria-hidden="true"></div>
+      <div class="eyelid eyelid-right" aria-hidden="true"></div>
       <div class="mouth-glow" aria-hidden="true"></div>
+      <div class="jaw-glow" aria-hidden="true"></div>
+      <div class="cheek-glow cheek-left" aria-hidden="true"></div>
+      <div class="cheek-glow cheek-right" aria-hidden="true"></div>
     </div>
   </main>
   <div class="controls">

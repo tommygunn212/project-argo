@@ -1138,7 +1138,7 @@ input[type="range"]::-moz-range-thumb {
     <div class="page active" id="pageDashboard">
       <div class="dash-hero">
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
-          <img class="avatar-fallback" src="http://127.0.0.1:8000/v2-assets/argo-hedra-default.png" alt="ARGO Hedra default avatar">
+          <img class="avatar-fallback" src="/v2-assets/argo-hedra-default.png" alt="ARGO Hedra default avatar">
           <canvas class="avatar-canvas" id="avatarCanvas" aria-label="ARGO Hedra avatar"></canvas>
           <div class="avatar-hud">
             <span>HEDRA DEFAULT</span>
@@ -1278,7 +1278,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="card-title"><span class="dot" style="background:var(--accent)"></span>REALTIME CONVERSATION</div>
           <div class="voice-avatar-row">
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
-              <img class="avatar-fallback" src="http://127.0.0.1:8000/v2-assets/argo-hedra-default.png" alt="ARGO realtime Hedra default avatar">
+              <img class="avatar-fallback" src="/v2-assets/argo-hedra-default.png" alt="ARGO realtime Hedra default avatar">
               <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="ARGO realtime Hedra avatar"></canvas>
               <div class="avatar-hud">
                 <span>HEDRA DEFAULT</span>
@@ -1905,7 +1905,12 @@ input[type="range"]::-moz-range-thumb {
   </div>
 </div>
 
-<script src="http://127.0.0.1:8000/v2-assets/livekit-client.umd.js"></script>
+<script>
+(function loadBundledLiveKitClient() {
+  const base = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
+  document.write(`<script src="${base}/v2-assets/livekit-client.umd.js"><\/script>`);
+})();
+</script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic

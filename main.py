@@ -106,6 +106,11 @@ root_logger.addHandler(ws_handler)
 
 logger = logging.getLogger("ARGO.Main")
 
+HTTP_HOST = os.getenv("ARGO_HTTP_HOST", "0.0.0.0")
+HTTP_PORT = int(os.getenv("ARGO_HTTP_PORT", "8000"))
+WS_HOST = os.getenv("ARGO_WS_HOST", "0.0.0.0")
+WS_PORT = int(os.getenv("ARGO_WS_PORT", "8001"))
+
 # ============================================================================
 # 6) VERSION / PROFILE INIT
 # ============================================================================
@@ -235,10 +240,11 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == '/api/status':
+            request_host = self.headers.get("Host", f"127.0.0.1:{HTTP_PORT}").split(":", 1)[0]
             self._send_json({
                 "status": "ok",
                 "service": "ARGO Local Voice Assistant",
-                "ws_endpoint": "ws://localhost:8001/ws"
+                "ws_endpoint": f"ws://{request_host}:{WS_PORT}/ws"
             })
         elif path == '/api/livekit-status':
             try:
@@ -763,10 +769,10 @@ def _start_main_loop_thread():
 async def start_server():
     global ui_loop
     ui_loop = asyncio.get_running_loop()
-    logger.info("UI Server running on ws://localhost:8001/ws")
+    logger.info("UI Server running on ws://%s:%s/ws", WS_HOST, WS_PORT)
     while True:
         try:
-            async with websockets.serve(websocket_handler, "127.0.0.1", 8001) as server:
+            async with websockets.serve(websocket_handler, WS_HOST, WS_PORT) as server:
                 logger.info("WebSocket server started, waiting for connections...")
                 await asyncio.Future()
         except asyncio.CancelledError:
@@ -1072,10 +1078,10 @@ if __name__ == "__main__":
     _start_main_loop_thread()
     
     from http.server import ThreadingHTTPServer
-    server = ThreadingHTTPServer(('127.0.0.1', 8000), FrontendHandler)
+    server = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), FrontendHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    logger.info("Frontend HTTP server running on http://127.0.0.1:8000")
+    logger.info("Frontend HTTP server running on http://%s:%s", HTTP_HOST, HTTP_PORT)
     
     try:
         asyncio.run(start_server())
