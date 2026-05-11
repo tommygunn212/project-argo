@@ -462,11 +462,23 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 
 /* ═══════ PAGE: DASHBOARD ═══════ */
 .dash-hero {
-  display: flex;
+  display: grid;
+  grid-template-columns: 300px 360px;
   align-items: center;
   justify-content: center;
   gap: 20px;
+  width: min(100%, 680px);
+  margin-left: auto;
+  margin-right: auto;
   margin-bottom: 20px;
+}
+.dash-hero .avatar-stage {
+  width: 300px;
+  min-width: 300px;
+}
+.dash-hero-copy {
+  width: 360px;
+  min-width: 0;
 }
 
 .avatar-stage {
@@ -578,6 +590,17 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   font-weight: 700;
   letter-spacing: 3px;
   text-transform: uppercase;
+  width: 100%;
+  min-height: 36px;
+  line-height: 1.2;
+}
+.dash-sub-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  min-height: 18px;
+  overflow-wrap: anywhere;
 }
 
 /* Latency ring */
@@ -1020,8 +1043,18 @@ input[type="range"]::-moz-range-thumb {
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-  .dash-hero { flex-direction: column; text-align: center; }
-  .avatar-stage { width: min(300px, 88vw); }
+  .dash-hero {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    width: 100%;
+    text-align: center;
+  }
+  .dash-hero .avatar-stage,
+  .avatar-stage {
+    width: min(300px, 88vw);
+    min-width: 0;
+  }
+  .dash-hero-copy { width: min(360px, 88vw); }
   .voice-avatar-row { grid-template-columns: 1fr; }
   .msg { max-width: 95%; }
 }
@@ -1061,9 +1094,9 @@ input[type="range"]::-moz-range-thumb {
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
           </div>
         </div>
-        <div>
+        <div class="dash-hero-copy">
           <div class="dash-state-text" id="dashStateText" style="color:var(--text-dim)">IDLE</div>
-          <div style="font-size:12px;color:var(--text-dim);margin-top:4px;font-family:var(--font-mono)" id="dashSubText">Waiting for connection...</div>
+          <div class="dash-sub-text" id="dashSubText">Waiting for connection...</div>
         </div>
       </div>
 
