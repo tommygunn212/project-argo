@@ -264,7 +264,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         elif path.startswith('/v2-assets/'):
             asset_name = Path(path).name
             allowed_assets = {
-                'livekit-client.umd.js': 'application/javascript; charset=utf-8',
+                'livekit-client.umd.js': ('vendor', 'application/javascript; charset=utf-8'),
+                'argo-hedra-default.png': ('assets', 'image/png'),
             }
             if asset_name not in allowed_assets:
                 self.send_response(404)
@@ -272,7 +273,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 self._send_cors_headers()
                 self.end_headers()
                 return
-            asset_path = Path(__file__).parent / 'frontend-v2' / 'vendor' / asset_name
+            asset_dir, content_type = allowed_assets[asset_name]
+            asset_path = Path(__file__).parent / 'frontend-v2' / asset_dir / asset_name
             if not asset_path.exists():
                 self.send_response(404)
                 self.send_header('Cache-Control', 'no-store')
@@ -280,7 +282,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
             self.send_response(200)
-            self.send_header('Content-type', allowed_assets[asset_name])
+            self.send_header('Content-type', content_type)
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
