@@ -1829,6 +1829,7 @@ input[type="range"]::-moz-range-thumb {
   </div>
 </div>
 
+<script src="/v2-assets/livekit-client.umd.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic
@@ -1989,11 +1990,18 @@ function logRealtimeClientEvent(phase, payload = {}, level = 'info') {
   }).catch(() => {});
 }
 
-function describeRealtimeStartError(err) {
+function describeRealtimeStartError(err, step = '') {
   const name = err?.name || '';
   const message = err?.message || String(err);
-  if (/failed to fetch|dynamically imported module|import|script|livekit client/i.test(message)) {
+  if (step === 'load_client' || /dynamically imported module|script|livekit client/i.test(message)) {
     return 'The browser could not load the LiveKit client. Refresh this page once, then press Start Realtime again.';
+  }
+  if (/failed to fetch/i.test(message)) {
+    if (step === 'pause_classic') return 'The browser could not reach ARGO control to pause the classic listener. Check that /api/status is reachable, then try again.';
+    if (step === 'livekit_status') return 'The browser could not reach ARGO realtime status. Check that the ARGO server is still running, then try again.';
+    if (step === 'token') return 'The browser could not get a LiveKit token from ARGO. Check the local server, then try again.';
+    if (step === 'connect') return 'The browser could not connect to the LiveKit room. Check that the LiveKit server is still running.';
+    return 'The browser could not reach one of ARGO’s local realtime endpoints. Refresh /v2 and try again.';
   }
   if (name === 'NotAllowedError' || /permission/i.test(message)) {
     return 'Microphone permission was denied. Allow microphone access, then press Start Realtime again.';
@@ -2412,7 +2420,10 @@ function loadScript(url) {
     const existing = document.querySelector(`script[data-livekit-client="${url}"]`);
     if (existing) {
       if (window.LivekitClient) resolve();
-      else reject(new Error(`LiveKit client script present without global: ${url}`));
+      else {
+        existing.remove();
+        reject(new Error(`LiveKit client script present without global: ${url}`));
+      }
       return;
     }
     const script = document.createElement('script');
@@ -2464,17 +2475,24 @@ async function startRealtimeVoice() {
   livekitConnected = false;
   setRealtimeStatus('CONNECTING', 'busy');
   let room = null;
+  let step = 'start';
 
   try {
     logRealtimeClientEvent('start_requested');
+    step = 'pause_classic';
     await pauseClassicForRealtime();
     addSystemLog('Classic listener paused for realtime voice');
 
     // Give the native audio input a short beat to release before browser getUserMedia.
     await delay(450);
 
+    step = 'load_client';
     const lk = await loadLiveKitClient();
+    logRealtimeClientEvent('livekit_client_ready', {
+      message: `version=${lk.version || 'unknown'}`,
+    });
     setRealtimeStatus('MIC CHECK', 'busy');
+    step = 'mic';
     livekitMicTrack = await lk.createLocalAudioTrack({
       echoCancellation: true,
       noiseSuppression: true,
@@ -2482,6 +2500,7 @@ async function startRealtimeVoice() {
     });
     logRealtimeClientEvent('mic_acquired');
 
+    step = 'livekit_status';
     const statusRes = await fetch('/api/livekit-status', { cache: 'no-store' });
     const statusData = await statusRes.json();
     if (!statusRes.ok) throw new Error(statusData.error || 'Realtime status failed');
@@ -2490,6 +2509,7 @@ async function startRealtimeVoice() {
     }
 
     const identity = 'tommy-browser-' + Date.now().toString(36);
+    step = 'token';
     const tokenRes = await fetch('/api/livekit-token?' + new URLSearchParams({ identity }), { cache: 'no-store' });
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok) throw new Error(tokenData.error || 'Realtime token failed');
@@ -2511,11 +2531,13 @@ async function startRealtimeVoice() {
     livekitRoom = room;
 
     setRealtimeStatus('CONNECTING', 'busy');
+    step = 'connect';
     await room.connect(tokenData.url, tokenData.token);
     const publishOptions = { name: 'tommy-mic' };
     if (lk.Track?.Source?.Microphone) {
       publishOptions.source = lk.Track.Source.Microphone;
     }
+    step = 'publish';
     await room.localParticipant.publishTrack(livekitMicTrack, publishOptions);
 
     livekitStarting = false;
@@ -2531,11 +2553,12 @@ async function startRealtimeVoice() {
       try { room.disconnect(); } catch(e) {}
     }
     logRealtimeClientEvent('start_failed', {
+      step,
       name: err?.name || 'Error',
       message: err?.message || String(err),
     }, 'error');
     cleanupRealtimeVoice({ resumeClassic: true, status: 'ERROR' });
-    const friendly = describeRealtimeStartError(err);
+    const friendly = describeRealtimeStartError(err, step);
     setRealtimeError(friendly);
     addSystemLog(`Realtime voice error: ${friendly}`);
   }
@@ -2564,7 +2587,7 @@ function attachLiveKitHandlers(room, lk) {
 
   if (lk.RoomEvent.MediaDevicesError) {
     room.on(lk.RoomEvent.MediaDevicesError, (err) => {
-      const friendly = describeRealtimeStartError(err);
+      const friendly = describeRealtimeStartError(err, 'media_device');
       setRealtimeError(friendly);
       logRealtimeClientEvent('media_device_error', {
         name: err?.name || 'MediaDevicesError',

@@ -196,7 +196,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 body = self._read_json_body()
                 if not isinstance(body, dict):
                     body = {"message": str(body)}
-                allowed_keys = ("phase", "status", "name", "message", "reason", "identity", "room")
+                allowed_keys = ("phase", "status", "step", "name", "message", "reason", "identity", "room")
                 safe = {
                     key: str(body.get(key, ""))[:500]
                     for key in allowed_keys
