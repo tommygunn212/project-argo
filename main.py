@@ -250,15 +250,24 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("[LiveKit] token mint failed")
                 self._send_json({"error": str(exc)}, status=500)
-        elif path == '/v2-assets/livekit-client.esm.mjs':
-            asset_path = Path(__file__).parent / 'frontend-v2' / 'vendor' / 'livekit-client.esm.mjs'
+        elif path.startswith('/v2-assets/'):
+            asset_name = Path(path).name
+            allowed_assets = {
+                'livekit-client.umd.js': 'application/javascript; charset=utf-8',
+            }
+            if asset_name not in allowed_assets:
+                self.send_response(404)
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return
+            asset_path = Path(__file__).parent / 'frontend-v2' / 'vendor' / asset_name
             if not asset_path.exists():
                 self.send_response(404)
                 self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 return
             self.send_response(200)
-            self.send_header('Content-type', 'application/javascript; charset=utf-8')
+            self.send_header('Content-type', allowed_assets[asset_name])
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
