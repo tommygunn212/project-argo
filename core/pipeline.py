@@ -70,6 +70,7 @@ from core.app_registry import resolve_app_name
 # TTS bypass reason for deterministic commands (for logging/debugging)
 TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
 from core.memory_store import get_memory_store
+from core.mem0_memory import get_mem0_memory
 from core.conversation_buffer import ConversationBuffer
 from core.brain import get_brain
 from core.registries import is_capability_enabled, is_permission_allowed, is_module_enabled
@@ -217,6 +218,9 @@ class ArgoPipeline:
             "Do not overplay jokes or punchlines. Stay grounded, human, and relaxed."
         )
         self._memory_store = get_memory_store()
+        self._mem0_memory = get_mem0_memory()
+        if getattr(self._mem0_memory, "enabled", False):
+            self.logger.info("[MEM0] enabled")
         self._ephemeral_memory = {}
         self._brain = get_brain()
         convo_size = 8
@@ -1310,6 +1314,15 @@ class ArgoPipeline:
             self.logger.warning(f"[BRAIN] Context load failed: {e}")
             self._record_timeline("MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
         try:
+            mem0_memory = getattr(self, "_mem0_memory", None)
+            if mem0_memory and getattr(mem0_memory, "enabled", False) and user_text:
+                mem0_context = mem0_memory.format_context(user_text)
+                if mem0_context:
+                    blocks.append(mem0_context)
+        except Exception as e:
+            self.logger.warning(f"[MEM0] Context load failed: {e}")
+            self._record_timeline("MEM0_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
+        try:
             search_turns = getattr(self._memory_store, "search_turns", None)
             if search_turns and user_text:
                 turns = search_turns(user_text, limit=3)
@@ -1324,24 +1337,83 @@ class ArgoPipeline:
             self._record_timeline("DURABLE_MEMORY_CONTEXT_ERROR", stage="memory", interaction_id=interaction_id)
         return "\n\n".join(blocks)
 
+    def _store_mem0_fact(
+        self,
+        category: str,
+        subject: str,
+        relation: str,
+        value: str,
+        source: str,
+        interaction_id: str,
+    ) -> bool:
+        """Store a selected durable fact in Mem0 when the optional layer is enabled."""
+        mem0_memory = getattr(self, "_mem0_memory", None)
+        if not mem0_memory or not getattr(mem0_memory, "enabled", False):
+            return False
+        if self._is_sensitive_memory(subject) or self._is_sensitive_memory(value):
+            return False
+        try:
+            stored = mem0_memory.remember_fact(category, subject, relation, value, source=source)
+            if stored:
+                self.logger.info("[MEM0] fact_stored category=%s source=%s", category, source)
+            return bool(stored)
+        except Exception as e:
+            self.logger.warning(f"[MEM0] Fact store failed: {e}")
+            self._record_timeline("MEM0_STORE_ERROR", stage="memory", interaction_id=interaction_id)
+            return False
+
+    def _delete_mem0_matching(self, query: str, interaction_id: str) -> int:
+        mem0_memory = getattr(self, "_mem0_memory", None)
+        if not query or not mem0_memory or not getattr(mem0_memory, "enabled", False):
+            return 0
+        try:
+            removed = int(mem0_memory.delete_matching(query) or 0)
+            if removed:
+                self.logger.info("[MEM0] memories_deleted count=%s", removed)
+            return removed
+        except Exception as e:
+            self.logger.warning(f"[MEM0] Delete failed: {e}")
+            self._record_timeline("MEM0_DELETE_ERROR", stage="memory", interaction_id=interaction_id)
+            return 0
+
+    def _clear_mem0_user(self, interaction_id: str) -> bool:
+        mem0_memory = getattr(self, "_mem0_memory", None)
+        if not mem0_memory or not getattr(mem0_memory, "enabled", False):
+            return False
+        try:
+            cleared = bool(mem0_memory.clear_user())
+            if cleared:
+                self.logger.info("[MEM0] user_memory_cleared")
+            return cleared
+        except Exception as e:
+            self.logger.warning(f"[MEM0] Clear failed: {e}")
+            self._record_timeline("MEM0_CLEAR_ERROR", stage="memory", interaction_id=interaction_id)
+            return False
+
     def _store_durable_turn(self, user_text: str, assistant_text: str, intent: str, interaction_id: str) -> None:
         """Store a completed conversational turn if the configured backend supports it."""
         try:
             add_turn = getattr(self._memory_store, "add_turn", None)
-            if not add_turn:
-                return
-            turn_id = add_turn(
-                user_text=(user_text or "")[:4000],
-                assistant_text=(assistant_text or "")[:4000],
-                source="llm",
-                intent=intent or None,
-                metadata={"interaction_id": interaction_id},
-            )
-            if turn_id and turn_id > 0:
-                self.logger.info(f"[MEMORY] durable_turn_stored id={turn_id}")
+            if add_turn:
+                turn_id = add_turn(
+                    user_text=(user_text or "")[:4000],
+                    assistant_text=(assistant_text or "")[:4000],
+                    source="llm",
+                    intent=intent or None,
+                    metadata={"interaction_id": interaction_id},
+                )
+                if turn_id and turn_id > 0:
+                    self.logger.info(f"[MEMORY] durable_turn_stored id={turn_id}")
         except Exception as e:
             self.logger.warning(f"[MEMORY] Durable turn store failed: {e}")
             self._record_timeline("DURABLE_MEMORY_STORE_ERROR", stage="memory", interaction_id=interaction_id)
+        try:
+            mem0_memory = getattr(self, "_mem0_memory", None)
+            if mem0_memory and getattr(mem0_memory, "enabled", False):
+                mem0_memory.remember_turn(user_text, assistant_text, intent=intent, interaction_id=interaction_id)
+        except Exception as e:
+            self.logger.warning(f"[MEM0] Turn store failed: {e}")
+            self._record_timeline("MEM0_TURN_STORE_ERROR", stage="memory", interaction_id=interaction_id)
 
     def _parse_memory_write(self, user_text: str) -> dict | None:
         text = user_text.strip()
@@ -1462,6 +1534,14 @@ class ArgoPipeline:
                 else:
                     try:
                         self._memory_store.add_memory(mem_type, key, value, source="explicit_user_request", namespace=namespace)
+                        self._store_mem0_fact(
+                            mem_type.lower(),
+                            key,
+                            "is",
+                            value,
+                            "explicit_user_request",
+                            interaction_id,
+                        )
                         response = "Memory stored."
                         self.logger.info(f"[MEMORY] memory_write_confirmed memory_write_type={mem_type}")
                     except Exception as e:
@@ -1509,6 +1589,7 @@ class ArgoPipeline:
                 response = "Memory store unavailable."
             else:
                 self._ephemeral_memory.clear()
+                self._clear_mem0_user(interaction_id)
                 response = f"Cleared all memory ({count} records)."
             self.broadcast("log", f"Argo: {response}")
             if not self.stop_signal.is_set() and not replay_mode:
@@ -1663,6 +1744,7 @@ class ArgoPipeline:
                         elif tts_text:
                             self.speak(tts_text, interaction_id=interaction_id)
                     return True
+                removed += self._delete_mem0_matching(key, interaction_id)
                 response = f"Deleted memory for '{key}'." if removed else f"No memory found for '{key}'."
             self.broadcast("log", f"Argo: {response}")
             if not self.stop_signal.is_set() and not replay_mode:
@@ -1714,6 +1796,7 @@ class ArgoPipeline:
                         if subject.lower() in f.subject.lower() or subject.lower() in f.value.lower():
                             self._brain.delete_fact(f.subject, f.relation)
                             deleted = True
+                    deleted = bool(self._delete_mem0_matching(subject, interaction_id)) or deleted
                     response = f"Done, I've forgotten about {subject}." if deleted else f"I didn't have anything stored about {subject}."
                     self.broadcast("log", f"Argo: {response}")
                     if not self.stop_signal.is_set() and not replay_mode:
@@ -1737,6 +1820,7 @@ class ArgoPipeline:
                                 self._memory_store.add_memory("FACT", f"{subject}.{relation}", value, source="brain")
                             except Exception:
                                 pass
+                            self._store_mem0_fact(category, subject, relation, value, "brain", interaction_id)
                             display = f"{subject} {relation} {value}"
                             response = f"Got it. I'll remember that."
                             self.logger.info(f"[BRAIN] Stored: {display}")
@@ -1826,6 +1910,7 @@ class ArgoPipeline:
             if write.get("implicit"):
                 try:
                     self._memory_store.add_memory(mem_type, key, value, source="implicit", namespace=namespace)
+                    self._store_mem0_fact(mem_type.lower(), key, "is", value, "implicit", interaction_id)
                     self.logger.info(f"[MEMORY] memory_write_implicit key={key} value={value}")
                     # Natural acknowledgment based on key type
                     if key == "user.name":
@@ -5212,6 +5297,14 @@ class ArgoPipeline:
                                 pending_key,
                                 pending_value,
                                 source="explicit_user_request",
+                            )
+                            self._store_mem0_fact(
+                                "fact",
+                                pending_key,
+                                "is",
+                                pending_value,
+                                "explicit_user_request",
+                                interaction_id,
                             )
                         else:
                             self.logger.warning("[MEMORY] Pending memory missing key or value")

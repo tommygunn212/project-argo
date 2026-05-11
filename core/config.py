@@ -299,6 +299,14 @@ _DEFAULT_CONFIG = {
         "backend": "sqlite",
         "sqlite_path": "data/memory.db",
         "postgres_dsn": "",
+        "mem0": {
+            "enabled": None,
+            "api_key": "",
+            "user_id": "tommy",
+            "search_limit": 5,
+            "context_char_limit": 1200,
+            "auto_store_turns": False,
+        },
     },
     "music": {
         "enabled": True,
