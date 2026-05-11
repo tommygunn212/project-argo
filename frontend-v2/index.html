@@ -502,21 +502,12 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   animation: avatarScan 4.8s linear infinite;
   pointer-events: none;
 }
-.avatar-stage[data-state="LISTENING"] {
-  border-color: rgba(16,185,129,0.5);
-  box-shadow: inset 0 0 40px rgba(16,185,129,0.08), 0 0 24px rgba(16,185,129,0.18);
-}
-.avatar-stage[data-state="TRANSCRIBING"] {
-  border-color: rgba(245,158,11,0.55);
-  box-shadow: inset 0 0 40px rgba(245,158,11,0.08), 0 0 24px rgba(245,158,11,0.14);
-}
-.avatar-stage[data-state="THINKING"] {
-  border-color: rgba(139,92,246,0.55);
-  box-shadow: inset 0 0 40px rgba(139,92,246,0.09), 0 0 24px rgba(139,92,246,0.18);
-}
+.avatar-stage[data-state="LISTENING"],
+.avatar-stage[data-state="TRANSCRIBING"],
+.avatar-stage[data-state="THINKING"],
 .avatar-stage[data-state="SPEAKING"] {
-  border-color: rgba(14,165,233,0.75);
-  box-shadow: inset 0 0 50px rgba(14,165,233,0.12), 0 0 32px rgba(14,165,233,0.24);
+  border-color: rgba(245,158,11,0.55);
+  box-shadow: inset 0 0 40px rgba(245,158,11,0.08), 0 0 24px rgba(14,165,233,0.14);
 }
 .avatar-stage[data-state="ERROR"] {
   border-color: rgba(239,68,68,0.7);
@@ -558,10 +549,10 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   opacity: 0.55;
   transition: height 0.18s ease, background 0.18s ease, opacity 0.18s ease;
 }
-.avatar-stage[data-state="LISTENING"] .avatar-signal span { background: var(--accent3); }
-.avatar-stage[data-state="THINKING"] .avatar-signal span { background: var(--accent2); }
-.avatar-stage[data-state="TRANSCRIBING"] .avatar-signal span { background: var(--accent4); }
-.avatar-stage[data-state="SPEAKING"] .avatar-signal span { background: var(--accent); opacity: 0.9; }
+.avatar-stage[data-state="LISTENING"] .avatar-signal span,
+.avatar-stage[data-state="THINKING"] .avatar-signal span,
+.avatar-stage[data-state="TRANSCRIBING"] .avatar-signal span,
+.avatar-stage[data-state="SPEAKING"] .avatar-signal span { background: var(--accent4); opacity: 0.9; }
 .avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(1) { height: 12px; }
 .avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(2) { height: 7px; }
 .avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(3) { height: 15px; }
@@ -1066,7 +1057,7 @@ input[type="range"]::-moz-range-thumb {
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
           <canvas class="avatar-canvas" id="avatarCanvas" aria-label="ARGO wireframe avatar"></canvas>
           <div class="avatar-hud">
-            <span>ARGO AVATAR</span>
+            <span>HEDRA BASIC</span>
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
           </div>
         </div>
@@ -1205,7 +1196,7 @@ input[type="range"]::-moz-range-thumb {
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
               <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="ARGO realtime wireframe avatar"></canvas>
               <div class="avatar-hud">
-                <span>REALTIME</span>
+                <span>HEDRA BASIC</span>
                 <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
               </div>
             </div>
@@ -1829,7 +1820,7 @@ input[type="range"]::-moz-range-thumb {
   </div>
 </div>
 
-<script src="/v2-assets/livekit-client.umd.js"></script>
+<script src="http://127.0.0.1:8000/v2-assets/livekit-client.umd.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic
@@ -1853,8 +1844,15 @@ let livekitStarting = false;
 let realtimeAvatarMeter = null;
 let avatarAudioLevel = 0;
 let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
+const ARGO_HTTP_ORIGIN = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : window.location.origin;
+const ARGO_WS_URL = window.location.protocol === 'file:' ? 'ws://127.0.0.1:8001/ws' : `ws://${window.location.hostname || '127.0.0.1'}:8001/ws`;
+function argoUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${ARGO_HTTP_ORIGIN}${normalized}`;
+}
 const LIVEKIT_CLIENT_SCRIPT_URLS = [
-  '/v2-assets/livekit-client.umd.js',
+  argoUrl('/v2-assets/livekit-client.umd.js'),
   'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.umd.js',
 ];
 
@@ -1898,7 +1896,7 @@ function switchToChat(prefill) {
 // ═══════ WEBSOCKET ═══════
 function connect() {
   if (ws && ws.readyState <= 1) return;
-  ws = new WebSocket('ws://localhost:8001/ws');
+  ws = new WebSocket(ARGO_WS_URL);
 
   ws.onopen = () => {
     connDot.classList.add('connected');
@@ -1950,7 +1948,7 @@ function delay(ms) {
 }
 
 async function postJson(path, payload) {
-  const res = await fetch(path, {
+  const res = await fetch(argoUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
@@ -1982,7 +1980,7 @@ function logRealtimeClientEvent(phase, payload = {}, level = 'info') {
     room: livekitMeta.room,
     ...payload,
   };
-  fetch('/api/client-log', {
+  fetch(argoUrl('/api/client-log'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -2395,7 +2393,7 @@ function setRealtimeError(message) {
 
 async function refreshRealtimeStatus() {
   try {
-    const res = await fetch('/api/livekit-status', { cache: 'no-store' });
+    const res = await fetch(argoUrl('/api/livekit-status'), { cache: 'no-store' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Realtime status failed');
     livekitMeta = {
@@ -2501,7 +2499,7 @@ async function startRealtimeVoice() {
     logRealtimeClientEvent('mic_acquired');
 
     step = 'livekit_status';
-    const statusRes = await fetch('/api/livekit-status', { cache: 'no-store' });
+    const statusRes = await fetch(argoUrl('/api/livekit-status'), { cache: 'no-store' });
     const statusData = await statusRes.json();
     if (!statusRes.ok) throw new Error(statusData.error || 'Realtime status failed');
     if (!statusData.server_reachable) {
@@ -2510,7 +2508,7 @@ async function startRealtimeVoice() {
 
     const identity = 'tommy-browser-' + Date.now().toString(36);
     step = 'token';
-    const tokenRes = await fetch('/api/livekit-token?' + new URLSearchParams({ identity }), { cache: 'no-store' });
+    const tokenRes = await fetch(argoUrl('/api/livekit-token?' + new URLSearchParams({ identity })), { cache: 'no-store' });
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok) throw new Error(tokenData.error || 'Realtime token failed');
 
@@ -2769,16 +2767,12 @@ function stopSpeaking() {
 
 // ═══════ WIREFRAME AVATAR ═══════
 function avatarColorForState(state, alpha = 1) {
-  const colors = {
-    IDLE: [100, 116, 139],
-    LISTENING: [16, 185, 129],
-    TRANSCRIBING: [245, 158, 11],
-    THINKING: [139, 92, 246],
-    SPEAKING: [14, 165, 233],
-    ERROR: [239, 68, 68],
-  };
-  const c = colors[state] || colors.IDLE;
+  const c = state === 'ERROR' ? [239, 68, 68] : [245, 158, 11];
   return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+}
+
+function avatarAccent(alpha = 1) {
+  return `rgba(14,165,233,${alpha})`;
 }
 
 function avatarVisualState() {
@@ -2827,22 +2821,20 @@ function drawAvatar(canvas, now) {
   const state = avatarVisualState();
   const t = now / 1000;
   const cx = w * 0.5;
-  const cy = h * 0.47 + Math.sin(t * 1.4) * 1.6;
+  const cy = h * 0.47;
   const scale = Math.min(w, h) / 300;
   const headW = 118 * scale;
   const headH = 148 * scale;
   const glow = state === 'SPEAKING' ? 0.95 : state === 'THINKING' ? 0.75 : 0.58;
   const line = avatarColorForState(state, glow);
-  const dim = avatarColorForState(state, 0.24);
-  const faint = avatarColorForState(state, 0.12);
 
   ctx.save();
   ctx.lineWidth = 1.2;
-  ctx.strokeStyle = faint;
+  ctx.strokeStyle = avatarAccent(0.1);
   for (let y = 18; y < h - 16; y += 18) {
     ctx.beginPath();
-    ctx.moveTo(12, y + Math.sin(t * 1.7 + y * 0.03) * 1.5);
-    ctx.lineTo(w - 12, y + Math.cos(t * 1.3 + y * 0.03) * 1.5);
+    ctx.moveTo(12, y);
+    ctx.lineTo(w - 12, y);
     ctx.stroke();
   }
 
@@ -2856,7 +2848,7 @@ function drawAvatar(canvas, now) {
   ctx.stroke();
 
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = dim;
+  ctx.strokeStyle = avatarAccent(0.24);
   ctx.lineWidth = 1;
   for (let i = -2; i <= 2; i++) {
     const offset = i * headW * 0.14;
@@ -2884,7 +2876,7 @@ function drawAvatar(canvas, now) {
     [cx + headW * 0.42, cy - headH * 0.08],
   ]);
 
-  ctx.strokeStyle = avatarColorForState(state, 0.55);
+  ctx.strokeStyle = avatarAccent(0.5);
   drawAvatarLine(ctx, [
     [cx, cy - headH * 0.04],
     [cx - headW * 0.06, cy + headH * 0.08],
@@ -2910,7 +2902,7 @@ function drawAvatar(canvas, now) {
   ctx.fill();
   ctx.stroke();
 
-  ctx.strokeStyle = dim;
+  ctx.strokeStyle = avatarAccent(0.24);
   ctx.lineWidth = 1.4;
   drawAvatarLine(ctx, [
     [cx - headW * 0.28, cy + headH * 0.5],
@@ -2940,9 +2932,9 @@ function drawAvatar(canvas, now) {
     ctx.fill();
   });
 
-  ctx.strokeStyle = avatarColorForState(state, 0.35);
+  ctx.strokeStyle = avatarAccent(0.28);
   ctx.lineWidth = 1;
-  const ringR = (58 + Math.sin(t * 2) * 2) * scale;
+  const ringR = 58 * scale;
   ctx.beginPath();
   ctx.arc(cx, cy, ringR, Math.PI * 0.1, Math.PI * 1.3);
   ctx.stroke();

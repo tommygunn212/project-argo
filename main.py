@@ -149,10 +149,16 @@ def broadcast_msg(msg_type, data):
         asyncio.run_coroutine_threadsafe(send_to_clients(msg), ui_loop)
 
 class FrontendHandler(SimpleHTTPRequestHandler):
+    def _send_cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
     def _send_json(self, payload, status=200):
         self.send_response(status)
         self.send_header('Content-type', 'application/json')
         self.send_header('Cache-Control', 'no-store')
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode())
 
@@ -169,6 +175,11 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         if not raw:
             return {}
         return json.loads(raw.decode("utf-8"))
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.end_headers()
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -258,12 +269,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if asset_name not in allowed_assets:
                 self.send_response(404)
                 self.send_header('Cache-Control', 'no-store')
+                self._send_cors_headers()
                 self.end_headers()
                 return
             asset_path = Path(__file__).parent / 'frontend-v2' / 'vendor' / asset_name
             if not asset_path.exists():
                 self.send_response(404)
                 self.send_header('Cache-Control', 'no-store')
+                self._send_cors_headers()
                 self.end_headers()
                 return
             self.send_response(200)
@@ -271,6 +284,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(asset_path.read_bytes())
         elif path == '/' or path == '/index.html':
