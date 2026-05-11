@@ -129,11 +129,7 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 
 async def _maybe_start_hedra_avatar(session: AgentSession, room):
-    """Start a Hedra LiveKit avatar when explicitly enabled.
-
-    LiveKit's Hedra plugin page currently marks the old Realtime Avatar product
-    as sunset, so this path is opt-in and must never break the core voice loop.
-    """
+    """Start a legacy Hedra LiveKit avatar when explicitly enabled."""
 
     if not _env_enabled("ARGO_HEDRA_AVATAR_ENABLED", False):
         return None
@@ -157,6 +153,10 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         return None
 
     kwargs = {}
+    participant_identity = (os.getenv("HEDRA_AVATAR_PARTICIPANT_IDENTITY") or "").strip()
+    if participant_identity:
+        kwargs["avatar_participant_identity"] = participant_identity
+
     participant_name = (os.getenv("HEDRA_AVATAR_PARTICIPANT_NAME") or "").strip()
     if participant_name:
         kwargs["avatar_participant_name"] = participant_name
@@ -175,9 +175,7 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         with Image.open(image_path) as img:
             kwargs["avatar_image"] = img.convert("RGB").copy()
 
-    logger.warning(
-        "[Hedra] attempting deprecated Hedra avatar path; if Hedra rejects the session, voice continues"
-    )
+    logger.warning("[Hedra] attempting legacy Hedra avatar path; if it fails, voice continues")
     try:
         avatar = hedra.AvatarSession(**kwargs)
         await avatar.start(session, room=room)
