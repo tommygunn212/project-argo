@@ -1852,7 +1852,10 @@ let livekitStarting = false;
 let realtimeAvatarMeter = null;
 let avatarAudioLevel = 0;
 let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
-const LIVEKIT_CLIENT_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.esm.mjs';
+const LIVEKIT_CLIENT_URLS = [
+  '/v2-assets/livekit-client.esm.mjs',
+  'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.esm.mjs',
+];
 
 // ── DOM refs ──
 const $ = id => document.getElementById(id);
@@ -1989,6 +1992,9 @@ function logRealtimeClientEvent(phase, payload = {}, level = 'info') {
 function describeRealtimeStartError(err) {
   const name = err?.name || '';
   const message = err?.message || String(err);
+  if (/failed to fetch|dynamically imported module|import/i.test(message)) {
+    return 'The browser could not load the LiveKit client module. Refresh this page once, then press Start Realtime again.';
+  }
   if (name === 'NotAllowedError' || /permission/i.test(message)) {
     return 'Microphone permission was denied. Allow microphone access, then press Start Realtime again.';
   }
@@ -2403,7 +2409,22 @@ async function refreshRealtimeStatus() {
 
 function loadLiveKitClient() {
   if (!livekitModulePromise) {
-    livekitModulePromise = import(LIVEKIT_CLIENT_URL);
+    livekitModulePromise = (async () => {
+      let lastError = null;
+      for (const url of LIVEKIT_CLIENT_URLS) {
+        try {
+          const mod = await import(url);
+          logRealtimeClientEvent('livekit_client_loaded', { message: url });
+          return mod;
+        } catch (err) {
+          lastError = err;
+          logRealtimeClientEvent('livekit_client_import_failed', {
+            message: `${url}: ${err?.message || String(err)}`,
+          }, 'warn');
+        }
+      }
+      throw lastError || new Error('LiveKit client import failed');
+    })();
   }
   return livekitModulePromise;
 }
@@ -2477,6 +2498,7 @@ async function startRealtimeVoice() {
     addSystemLog(`Realtime voice live: ${livekitMeta.model} / ${livekitMeta.voice}`);
   } catch (err) {
     livekitStarting = false;
+    livekitModulePromise = null;
     if (room && room !== livekitRoom) {
       try { room.disconnect(); } catch(e) {}
     }
