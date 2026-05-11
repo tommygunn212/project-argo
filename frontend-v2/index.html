@@ -468,46 +468,119 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   gap: 20px;
   margin-bottom: 20px;
 }
-.orb-container {
+
+.avatar-stage {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: min(300px, 42vw);
+  min-width: 220px;
+  aspect-ratio: 1 / 1;
+  border: 1px solid rgba(14,165,233,0.28);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(14,165,233,0.08), rgba(10,14,23,0.12)),
+    radial-gradient(circle at 50% 42%, rgba(14,165,233,0.18), transparent 58%),
+    var(--bg-input);
+  overflow: hidden;
+  box-shadow: inset 0 0 40px rgba(14,165,233,0.08), 0 0 24px rgba(14,165,233,0.12);
 }
-.orb {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 40%, var(--accent), var(--accent-dim), var(--bg-primary));
-  box-shadow: var(--glow-lg), inset 0 0 30px rgba(14,165,233,0.2);
-  animation: orbFloat 4s ease-in-out infinite;
-  transition: all 0.5s;
-}
-.orb[data-state="IDLE"] { background: radial-gradient(circle at 40% 40%, #334155, #1e293b, var(--bg-primary)); box-shadow: none; }
-.orb[data-state="LISTENING"] { background: radial-gradient(circle at 40% 40%, var(--accent3), #065f46, var(--bg-primary)); box-shadow: 0 0 30px rgba(16,185,129,0.4); }
-.orb[data-state="TRANSCRIBING"] { background: radial-gradient(circle at 40% 40%, var(--accent4), #78350f, var(--bg-primary)); box-shadow: 0 0 30px rgba(245,158,11,0.4); }
-.orb[data-state="THINKING"] { background: radial-gradient(circle at 40% 40%, var(--accent2), #4c1d95, var(--bg-primary)); box-shadow: 0 0 30px rgba(139,92,246,0.4); animation: orbPulse 1.5s ease-in-out infinite; }
-.orb[data-state="SPEAKING"] { background: radial-gradient(circle at 40% 40%, var(--accent), var(--accent-dim), var(--bg-primary)); box-shadow: var(--glow-lg); }
-.orb[data-state="ERROR"] { background: radial-gradient(circle at 40% 40%, var(--accent-red), #7f1d1d, var(--bg-primary)); }
-
-@keyframes orbFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-}
-@keyframes orbPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.05); opacity: 0.85; }
-}
-.orb-ring {
+.avatar-stage::before {
+  content: '';
   position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  border: 1px solid var(--accent-dim);
-  opacity: 0.5;
-  animation: orbRingSpin 20s linear infinite;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(56,189,248,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56,189,248,0.04) 1px, transparent 1px);
+  background-size: 18px 18px;
+  pointer-events: none;
 }
-.orb-ring:nth-child(2) { inset: -16px; animation-duration: 30s; animation-direction: reverse; opacity: 0.3; }
-@keyframes orbRingSpin { to { transform: rotate(360deg); } }
-
+.avatar-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, rgba(56,189,248,0.08) 50%, transparent 100%);
+  transform: translateY(-100%);
+  animation: avatarScan 4.8s linear infinite;
+  pointer-events: none;
+}
+.avatar-stage[data-state="LISTENING"] {
+  border-color: rgba(16,185,129,0.5);
+  box-shadow: inset 0 0 40px rgba(16,185,129,0.08), 0 0 24px rgba(16,185,129,0.18);
+}
+.avatar-stage[data-state="TRANSCRIBING"] {
+  border-color: rgba(245,158,11,0.55);
+  box-shadow: inset 0 0 40px rgba(245,158,11,0.08), 0 0 24px rgba(245,158,11,0.14);
+}
+.avatar-stage[data-state="THINKING"] {
+  border-color: rgba(139,92,246,0.55);
+  box-shadow: inset 0 0 40px rgba(139,92,246,0.09), 0 0 24px rgba(139,92,246,0.18);
+}
+.avatar-stage[data-state="SPEAKING"] {
+  border-color: rgba(14,165,233,0.75);
+  box-shadow: inset 0 0 50px rgba(14,165,233,0.12), 0 0 32px rgba(14,165,233,0.24);
+}
+.avatar-stage[data-state="ERROR"] {
+  border-color: rgba(239,68,68,0.7);
+  box-shadow: inset 0 0 42px rgba(239,68,68,0.09), 0 0 24px rgba(239,68,68,0.18);
+}
+.avatar-canvas {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+.avatar-hud {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 9px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.avatar-signal {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 16px;
+}
+.avatar-signal span {
+  width: 3px;
+  height: 5px;
+  background: var(--text-dim);
+  opacity: 0.55;
+  transition: height 0.18s ease, background 0.18s ease, opacity 0.18s ease;
+}
+.avatar-stage[data-state="LISTENING"] .avatar-signal span { background: var(--accent3); }
+.avatar-stage[data-state="THINKING"] .avatar-signal span { background: var(--accent2); }
+.avatar-stage[data-state="TRANSCRIBING"] .avatar-signal span { background: var(--accent4); }
+.avatar-stage[data-state="SPEAKING"] .avatar-signal span { background: var(--accent); opacity: 0.9; }
+.avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(1) { height: 12px; }
+.avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(2) { height: 7px; }
+.avatar-stage[data-state="SPEAKING"] .avatar-signal span:nth-child(3) { height: 15px; }
+.voice-avatar-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.voice-avatar-row .avatar-stage {
+  width: 100%;
+  min-width: 0;
+}
+@keyframes avatarScan {
+  0% { transform: translateY(-100%); opacity: 0; }
+  15% { opacity: 0.85; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
 .dash-state-text {
   font-family: var(--font-mono);
   font-size: 28px;
@@ -956,7 +1029,9 @@ input[type="range"]::-moz-range-thumb {
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-  .dash-hero { flex-direction: column; }
+  .dash-hero { flex-direction: column; text-align: center; }
+  .avatar-stage { width: min(300px, 88vw); }
+  .voice-avatar-row { grid-template-columns: 1fr; }
   .msg { max-width: 95%; }
 }
 </style>
@@ -988,10 +1063,12 @@ input[type="range"]::-moz-range-thumb {
     <!-- ── DASHBOARD ── -->
     <div class="page active" id="pageDashboard">
       <div class="dash-hero">
-        <div class="orb-container">
-          <div class="orb-ring"></div>
-          <div class="orb-ring"></div>
-          <div class="orb" id="dashOrb" data-state="IDLE"></div>
+        <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
+          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="ARGO wireframe avatar"></canvas>
+          <div class="avatar-hud">
+            <span>ARGO AVATAR</span>
+            <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
+          </div>
         </div>
         <div>
           <div class="dash-state-text" id="dashStateText" style="color:var(--text-dim)">IDLE</div>
@@ -1124,30 +1201,41 @@ input[type="range"]::-moz-range-thumb {
         <!-- Realtime Conversation -->
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent)"></span>REALTIME CONVERSATION</div>
-          <div class="realtime-status-grid">
-            <div class="config-item">
-              <span class="config-key">Mode</span>
-              <span class="config-val" id="livekitMode">LiveKit / Realtime</span>
+          <div class="voice-avatar-row">
+            <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
+              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="ARGO realtime wireframe avatar"></canvas>
+              <div class="avatar-hud">
+                <span>REALTIME</span>
+                <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
+              </div>
             </div>
-            <div class="config-item">
-              <span class="config-key">Status</span>
-              <span class="config-val" id="livekitStatus">OFFLINE</span>
-            </div>
-            <div class="config-item">
-              <span class="config-key">Room</span>
-              <span class="config-val" id="livekitRoom">argo-live</span>
-            </div>
-            <div class="config-item">
-              <span class="config-key">Voice</span>
-              <span class="config-val" id="livekitVoice">marin</span>
+            <div>
+              <div class="realtime-status-grid">
+                <div class="config-item">
+                  <span class="config-key">Mode</span>
+                  <span class="config-val" id="livekitMode">LiveKit / Realtime</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-key">Status</span>
+                  <span class="config-val" id="livekitStatus">OFFLINE</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-key">Room</span>
+                  <span class="config-val" id="livekitRoom">argo-live</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-key">Voice</span>
+                  <span class="config-val" id="livekitVoice">marin</span>
+                </div>
+              </div>
+              <div class="quick-actions">
+                <button class="btn btn-primary" id="livekitStartBtn" onclick="startRealtimeVoice()">▶ Start Realtime</button>
+                <button class="btn btn-danger" id="livekitStopBtn" onclick="stopRealtimeVoice()" disabled>■ Stop Realtime</button>
+                <button class="btn" onclick="refreshRealtimeStatus()">↻ Refresh</button>
+              </div>
+              <div class="livekit-error" id="livekitError"></div>
             </div>
           </div>
-          <div class="quick-actions">
-            <button class="btn btn-primary" id="livekitStartBtn" onclick="startRealtimeVoice()">▶ Start Realtime</button>
-            <button class="btn btn-danger" id="livekitStopBtn" onclick="stopRealtimeVoice()" disabled>■ Stop Realtime</button>
-            <button class="btn" onclick="refreshRealtimeStatus()">↻ Refresh</button>
-          </div>
-          <div class="livekit-error" id="livekitError"></div>
         </div>
 
         <!-- Engine Selection -->
@@ -1761,6 +1849,8 @@ let livekitMicTrack = null;
 let livekitModulePromise = null;
 let livekitConnected = false;
 let livekitStarting = false;
+let realtimeAvatarMeter = null;
+let avatarAudioLevel = 0;
 let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
 const LIVEKIT_CLIENT_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.esm.mjs';
 
@@ -1770,7 +1860,8 @@ const connDot = $('connDot');
 const connLabel = $('connLabel');
 const stateBadge = $('stateBadge');
 const turnCounter = $('turnCounter');
-const dashOrb = $('dashOrb');
+const avatarStages = [$('dashAvatarStage'), $('voiceAvatarStage')].filter(Boolean);
+const avatarCanvases = [$('avatarCanvas'), $('voiceAvatarCanvas')].filter(Boolean);
 const dashStateText = $('dashStateText');
 const dashSubText = $('dashSubText');
 const chatMessages = $('chatMessages');
@@ -1785,6 +1876,7 @@ function switchPage(pageId) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   $(pageId).classList.add('active');
   document.querySelector(`.nav-btn[data-page="${pageId}"]`).classList.add('active');
+  resizeAvatarCanvases();
   if (pageId === 'pageChat') {
     chatMessages.scrollTop = chatMessages.scrollHeight;
     chatInput.focus();
@@ -1939,7 +2031,7 @@ function handleStatus(state) {
   currentState = state;
   stateBadge.setAttribute('data-state', state);
   stateBadge.textContent = state;
-  dashOrb.setAttribute('data-state', state);
+  setAvatarState(state);
   dashStateText.textContent = state;
 
   const colors = {
@@ -2272,6 +2364,7 @@ function setRealtimeStatus(status, tone = 'dim') {
   const stopBtn = $('livekitStopBtn');
   if (startBtn) startBtn.disabled = livekitStarting || livekitConnected || status === 'CONNECTING';
   if (stopBtn) stopBtn.disabled = !livekitStarting && !livekitConnected && status !== 'CONNECTING';
+  setAvatarState(avatarVisualState());
 }
 
 function setRealtimeError(message) {
@@ -2410,11 +2503,13 @@ function attachLiveKitHandlers(room, lk) {
     audioEl.dataset.livekitAudio = 'true';
     audioEl.style.display = 'none';
     document.body.appendChild(audioEl);
+    setupRealtimeAvatarMeter(track);
     logRealtimeClientEvent('remote_audio_subscribed');
   });
 
   room.on(lk.RoomEvent.TrackUnsubscribed, (track) => {
     track.detach().forEach(el => el.remove());
+    stopRealtimeAvatarMeter();
   });
 
   if (lk.RoomEvent.MediaDevicesError) {
@@ -2438,6 +2533,7 @@ function attachLiveKitHandlers(room, lk) {
 
 function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}) {
   document.querySelectorAll('[data-livekit-audio="true"]').forEach(el => el.remove());
+  stopRealtimeAvatarMeter();
   if (livekitMicTrack) {
     try { livekitMicTrack.stop(); } catch(e) {}
     livekitMicTrack = null;
@@ -2596,6 +2692,256 @@ function toggleMic() {
 function stopSpeaking() {
   sendControl('FORCE_RELEASE_AUDIO');
   addSystemLog('Stop speaking requested');
+}
+
+// ═══════ WIREFRAME AVATAR ═══════
+function avatarColorForState(state, alpha = 1) {
+  const colors = {
+    IDLE: [100, 116, 139],
+    LISTENING: [16, 185, 129],
+    TRANSCRIBING: [245, 158, 11],
+    THINKING: [139, 92, 246],
+    SPEAKING: [14, 165, 233],
+    ERROR: [239, 68, 68],
+  };
+  const c = colors[state] || colors.IDLE;
+  return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+}
+
+function avatarVisualState() {
+  if (livekitConnected) {
+    return avatarAudioLevel > 0.035 ? 'SPEAKING' : 'LISTENING';
+  }
+  if (livekitStarting) return 'THINKING';
+  return currentState || 'IDLE';
+}
+
+function setAvatarState(state = avatarVisualState()) {
+  avatarStages.forEach(stage => stage.setAttribute('data-state', state || 'IDLE'));
+}
+
+function resizeAvatarCanvases() {
+  const dpr = window.devicePixelRatio || 1;
+  avatarCanvases.forEach(canvas => {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    canvas.dataset.dpr = String(dpr);
+  });
+}
+
+function drawAvatarLine(ctx, points) {
+  if (!points.length) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i][0], points[i][1]);
+  }
+  ctx.stroke();
+}
+
+function drawAvatar(canvas, now) {
+  const ctx = canvas.getContext('2d');
+  const dpr = parseFloat(canvas.dataset.dpr || '1');
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  if (!w || !h) return;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const state = avatarVisualState();
+  const t = now / 1000;
+  const cx = w * 0.5;
+  const cy = h * 0.47 + Math.sin(t * 1.4) * 1.6;
+  const scale = Math.min(w, h) / 300;
+  const headW = 118 * scale;
+  const headH = 148 * scale;
+  const glow = state === 'SPEAKING' ? 0.95 : state === 'THINKING' ? 0.75 : 0.58;
+  const line = avatarColorForState(state, glow);
+  const dim = avatarColorForState(state, 0.24);
+  const faint = avatarColorForState(state, 0.12);
+
+  ctx.save();
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = faint;
+  for (let y = 18; y < h - 16; y += 18) {
+    ctx.beginPath();
+    ctx.moveTo(12, y + Math.sin(t * 1.7 + y * 0.03) * 1.5);
+    ctx.lineTo(w - 12, y + Math.cos(t * 1.3 + y * 0.03) * 1.5);
+    ctx.stroke();
+  }
+
+  ctx.shadowBlur = 16;
+  ctx.shadowColor = avatarColorForState(state, 0.55);
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 1.8;
+
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, headW * 0.52, headH * 0.55, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = dim;
+  ctx.lineWidth = 1;
+  for (let i = -2; i <= 2; i++) {
+    const offset = i * headW * 0.14;
+    ctx.beginPath();
+    ctx.ellipse(cx + offset, cy, headW * (0.52 - Math.abs(i) * 0.06), headH * 0.55, 0, -Math.PI * 0.5, Math.PI * 0.5);
+    ctx.stroke();
+  }
+  for (let i = -2; i <= 2; i++) {
+    const y = cy + i * headH * 0.16;
+    ctx.beginPath();
+    ctx.ellipse(cx, y, headW * (0.48 - Math.abs(i) * 0.07), headH * 0.14, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = avatarColorForState(state, 0.8);
+  ctx.lineWidth = 1.5;
+  drawAvatarLine(ctx, [
+    [cx - headW * 0.42, cy - headH * 0.08],
+    [cx - headW * 0.18, cy - headH * 0.13],
+    [cx - headW * 0.04, cy - headH * 0.08],
+  ]);
+  drawAvatarLine(ctx, [
+    [cx + headW * 0.04, cy - headH * 0.08],
+    [cx + headW * 0.18, cy - headH * 0.13],
+    [cx + headW * 0.42, cy - headH * 0.08],
+  ]);
+
+  ctx.strokeStyle = avatarColorForState(state, 0.55);
+  drawAvatarLine(ctx, [
+    [cx, cy - headH * 0.04],
+    [cx - headW * 0.06, cy + headH * 0.08],
+    [cx + headW * 0.06, cy + headH * 0.1],
+  ]);
+
+  const speakingPulse = state === 'SPEAKING'
+    ? Math.max(0.18, avatarAudioLevel * 1.4 + Math.abs(Math.sin(t * 10)) * 0.22)
+    : state === 'TRANSCRIBING'
+      ? 0.12 + Math.abs(Math.sin(t * 8)) * 0.05
+      : 0.04;
+  const mouthW = headW * (0.22 + speakingPulse * 0.08);
+  const mouthH = headH * (0.015 + speakingPulse * 0.11);
+  const mouthY = cy + headH * 0.22;
+  ctx.strokeStyle = avatarColorForState(state, state === 'SPEAKING' ? 1 : 0.55);
+  ctx.fillStyle = avatarColorForState(state, state === 'SPEAKING' ? 0.16 : 0.04);
+  ctx.beginPath();
+  ctx.moveTo(cx - mouthW, mouthY);
+  ctx.lineTo(cx - mouthW * 0.42, mouthY + mouthH);
+  ctx.lineTo(cx + mouthW * 0.42, mouthY + mouthH);
+  ctx.lineTo(cx + mouthW, mouthY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = dim;
+  ctx.lineWidth = 1.4;
+  drawAvatarLine(ctx, [
+    [cx - headW * 0.28, cy + headH * 0.5],
+    [cx - headW * 0.18, cy + headH * 0.72],
+    [cx + headW * 0.18, cy + headH * 0.72],
+    [cx + headW * 0.28, cy + headH * 0.5],
+  ]);
+  drawAvatarLine(ctx, [
+    [cx - headW * 0.75, cy + headH * 0.83],
+    [cx - headW * 0.25, cy + headH * 0.64],
+    [cx + headW * 0.25, cy + headH * 0.64],
+    [cx + headW * 0.75, cy + headH * 0.83],
+  ]);
+
+  ctx.fillStyle = avatarColorForState(state, 0.88);
+  const nodes = [
+    [cx - headW * 0.35, cy - headH * 0.24],
+    [cx + headW * 0.35, cy - headH * 0.24],
+    [cx - headW * 0.42, cy + headH * 0.12],
+    [cx + headW * 0.42, cy + headH * 0.12],
+    [cx, cy - headH * 0.5],
+    [cx, cy + headH * 0.48],
+  ];
+  nodes.forEach(([x, y]) => {
+    ctx.beginPath();
+    ctx.arc(x, y, 2.3 * scale, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.strokeStyle = avatarColorForState(state, 0.35);
+  ctx.lineWidth = 1;
+  const ringR = (58 + Math.sin(t * 2) * 2) * scale;
+  ctx.beginPath();
+  ctx.arc(cx, cy, ringR, Math.PI * 0.1, Math.PI * 1.3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, ringR + 15 * scale, Math.PI * 1.12, Math.PI * 1.92);
+  ctx.stroke();
+
+  ctx.fillStyle = avatarColorForState(state, state === 'SPEAKING' ? 0.26 : 0.12);
+  const meterW = Math.max(16, w * 0.18);
+  const meterH = Math.max(3, avatarAudioLevel * 32);
+  ctx.fillRect(w - meterW - 12, h - 23 - meterH, meterW, meterH);
+  ctx.restore();
+}
+
+function drawAvatarLoop(now) {
+  setAvatarState(avatarVisualState());
+  avatarCanvases.forEach(canvas => drawAvatar(canvas, now));
+  if (!livekitConnected && currentState === 'SPEAKING') {
+    avatarAudioLevel = 0.1 + Math.abs(Math.sin(now / 90)) * 0.18;
+  } else if (!livekitConnected) {
+    avatarAudioLevel *= 0.9;
+  }
+  requestAnimationFrame(drawAvatarLoop);
+}
+
+function initAvatar() {
+  resizeAvatarCanvases();
+  drawAvatarLoop(performance.now());
+}
+
+function stopRealtimeAvatarMeter() {
+  if (!realtimeAvatarMeter) {
+    avatarAudioLevel = 0;
+    return;
+  }
+  if (realtimeAvatarMeter.raf) cancelAnimationFrame(realtimeAvatarMeter.raf);
+  try { realtimeAvatarMeter.source.disconnect(); } catch(e) {}
+  try { realtimeAvatarMeter.audioContext.close(); } catch(e) {}
+  realtimeAvatarMeter = null;
+  avatarAudioLevel = 0;
+}
+
+function setupRealtimeAvatarMeter(track) {
+  stopRealtimeAvatarMeter();
+  const mediaTrack = track.mediaStreamTrack;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!mediaTrack || !AudioCtx) return;
+  try {
+    const audioContext = new AudioCtx();
+    const source = audioContext.createMediaStreamSource(new MediaStream([mediaTrack]));
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    realtimeAvatarMeter = { audioContext, source, analyser, data, raf: null };
+
+    const sample = () => {
+      if (!realtimeAvatarMeter) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const centered = data[i] - 128;
+        sum += centered * centered;
+      }
+      avatarAudioLevel = Math.min(1, Math.sqrt(sum / data.length) / 38);
+      realtimeAvatarMeter.raf = requestAnimationFrame(sample);
+    };
+    sample();
+  } catch (err) {
+    avatarAudioLevel = 0;
+    addSystemLog('Avatar audio meter unavailable');
+  }
 }
 
 // ═══════ LOGGING ═══════
@@ -2804,7 +3150,10 @@ function colorSliderValue(id, val, el) {
 }
 
 // ═══════ INIT ═══════
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  resizeAvatarCanvases();
+});
 window.addEventListener('beforeunload', () => {
   if (livekitRoom) {
     try { livekitRoom.disconnect(); } catch(e) {}
@@ -2812,6 +3161,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 function init() {
+  initAvatar();
   initWaveform();
   initGateSliders();
   connect();
