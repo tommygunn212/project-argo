@@ -742,19 +742,12 @@ class PiperOutputSink(OutputSink):
     
     def speak(self, text: str, interaction_id: Optional[int] = None) -> None:
         """
-        Speak text synchronously (wrapper around send).
+        Speak text synchronously — blocks until all audio has finished playing.
         
         Used by Coordinator which uses sync interface.
-        Queues text for background playback.
-        
-        When FORCE_BLOCKING_TTS=true (testing mode):
-        - Waits for all sentences to be queued
-        - Waits for worker thread to play all sentences
-        - Returns only after audio is fully played
-        
-        When FORCE_BLOCKING_TTS=false (normal mode):
-        - Queues sentences and returns immediately
-        - Audio plays in background
+        Queues text for worker thread, then waits for playback to complete
+        before returning. This prevents the mic listener from resuming
+        (and cutting off audio) while ARGO is still speaking.
         
         Args:
             text: Text to synthesize and play
@@ -768,26 +761,24 @@ class PiperOutputSink(OutputSink):
         log_event(f"TTS START (interaction_id={interaction_id})")
         self._send_sync(text)
         
-        # FORCE_BLOCKING_TTS: Wait for all audio to be played (testing mode)
-        if FORCE_BLOCKING_TTS:
-            # Wait for queue to drain and worker thread to go idle
-            timeout_seconds = 30.0  # Safety timeout
-            start_time = time.time()
-            
-            while time.time() - start_time < timeout_seconds:
-                # Check if queue is empty and worker is idle
+        # Always wait for playback to complete before returning.
+        # Without this, the coordinator resumes the mic listener immediately
+        # and the still-playing audio gets cut off.
+        timeout_seconds = 120.0  # Long responses can take a while
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            # Check if queue is empty and worker is idle
+            if self.text_queue.empty() and self.is_idle():
+                # Double-check after brief pause to confirm truly done
+                time.sleep(0.1)
                 if self.text_queue.empty() and self.is_idle():
-                    # Small sleep to ensure truly complete
-                    time.sleep(0.1)
-                    if self.text_queue.empty() and self.is_idle():
-                        break
-                
-                # Yield to allow worker thread to run
-                time.sleep(0.05)
+                    break
             
-            # If we hit timeout, log warning but don't fail
-            if time.time() - start_time >= timeout_seconds:
-                self.logger.warning(f"[TTS] FORCE_BLOCKING_TTS: Timeout waiting for playback to complete")
+            # Yield to allow worker thread to run
+            time.sleep(0.05)
+        # If we hit timeout, log warning but don't fail
+        if time.time() - start_time >= timeout_seconds:
+            self.logger.warning(f"[TTS] Timeout ({timeout_seconds}s) waiting for playback to complete")
 
     
     def stop_interrupt(self) -> None:

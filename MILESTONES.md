@@ -91,6 +91,26 @@
 - [ ] Add embeddings and pgvector-backed semantic recall
 - [ ] Add UI controls for memory backend health and migration status
 
+## ✅ Milestone: LiveKit Realtime Voice + Cortana Companion Groundwork (v1.9.0 — 2026-06-03)
+
+**Goal:** Make ARGO feel like a fast room assistant: smooth back-and-forth voice, clean interruption, a stable Cortana-style visual identity, and a clear path to speaker identity and mobile use.
+
+### Completed
+- [✔] LiveKit/OpenAI Realtime path is the preferred smooth conversation mode
+- [✔] Frontend V2 quick action renamed to **Start Smooth Voice**
+- [✔] Realtime interruption defaults tuned to `0.08s` min interruption and `0.22s` false-interruption timeout
+- [✔] Cortana portrait asset is served locally as the dashboard/voice fallback visual
+- [✔] Legacy Hedra Realtime avatar path is documented and disabled by default after provider shutdown
+- [✔] Speechmatics, Silero, turn-detector, and noise-cancellation LiveKit plugins are included for the speaker-ID experiment path
+- [✔] `/api/livekit-status` reports speaker identity readiness and avatar fallback state
+- [✔] `/api/mobile-access` reports the same-network iPad/phone URL
+- [✔] Behavior tuning UI exposes graded action-check loosen/tighten controls
+
+### Next
+- [ ] Add a dedicated Speechmatics speaker-ID sidecar that maps recurring voices to names
+- [ ] Choose a current LiveKit avatar provider for real facial animation
+- [ ] Add HTTPS or trusted local cert flow for easier mobile microphone permissions
+
 ---
 
 ## Upcoming

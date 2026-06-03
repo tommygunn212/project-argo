@@ -254,6 +254,15 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("[LiveKit] status failed")
                 self._send_json({"error": str(exc)}, status=500)
+        elif path == '/api/mobile-access':
+            try:
+                from core.livekit_config import mobile_access_status
+
+                request_host = self.headers.get("Host", f"127.0.0.1:{HTTP_PORT}")
+                self._send_json(mobile_access_status(request_host))
+            except Exception as exc:
+                logger.exception("[Mobile] access status failed")
+                self._send_json({"error": str(exc)}, status=500)
         elif path == '/api/livekit-token':
             try:
                 from core.livekit_config import build_livekit_token_response
@@ -272,6 +281,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             allowed_assets = {
                 'livekit-client.umd.js': ('vendor', 'application/javascript; charset=utf-8'),
                 'argo-hedra-default.png': ('assets', 'image/png'),
+                'cortana_portrait_smirky.png': ('assets', 'image/png'),
             }
             if asset_name not in allowed_assets:
                 self.send_response(404)
@@ -569,6 +579,11 @@ def _handle_override(payload: dict):
             pass
     if key == "tts_model" and pipeline_ref:
         pipeline_ref.set_tts_model(str(value))
+    if pipeline_ref and hasattr(pipeline_ref, "apply_runtime_tuning"):
+        try:
+            pipeline_ref.apply_runtime_tuning()
+        except Exception:
+            logger.exception("[OVERRIDE] Failed to apply runtime tuning")
     log_event(f"UI_CMD_SET_OVERRIDE {key}={value}", stage="ui")
     broadcast_msg("runtime_overrides", get_runtime_overrides())
 
@@ -920,6 +935,13 @@ def main_loop():
     current_interaction_id = ""
     voiced_ms_accumulator = 0
     POST_TTS_COOLDOWN = 0.75  # seconds to suppress VAD after TTS ends (echo guard)
+
+    def runtime_float(key: str, default: float, minimum: float, maximum: float) -> float:
+        try:
+            value = float(RUNTIME_OVERRIDES.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(maximum, value))
     
     while SERVER_ENABLED:
         if pipeline.illegal_transition:
@@ -936,6 +958,10 @@ def main_loop():
         # VAD Logic
         # Frame is float32. L2 Norm of 512 samples.
         volume = np.linalg.norm(frame) * 10
+        active_vad_threshold = runtime_float("vad_threshold", vad_threshold, 0.001, 20.0)
+        active_barge_in_threshold = runtime_float("barge_in_threshold", barge_in_threshold, 0.001, 30.0)
+        active_silence_seconds = runtime_float("silence_seconds", silence_seconds, 0.1, 5.0)
+        active_silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * active_silence_seconds)
         
         owner = audio.get_audio_owner() if audio else "NONE"
         try:
@@ -955,13 +981,13 @@ def main_loop():
             and not pipeline.is_speaking
             and not is_recording
             and not in_echo_cooldown
-            and volume >= vad_threshold
+            and volume >= active_vad_threshold
             and pipeline.current_state == "LISTENING"
         ):
             current_interaction_id = str(uuid.uuid4())
-            logger.info(f"[VAD] Speech detected (volume: {volume:.2f}, threshold: {vad_threshold})")
+            logger.info(f"[VAD] Speech detected (volume: {volume:.2f}, threshold: {active_vad_threshold})")
             log_event(
-                f"VAD_START rms={volume:.2f} threshold={vad_threshold}",
+                f"VAD_START rms={volume:.2f} threshold={active_vad_threshold}",
                 stage="vad",
                 interaction_id=current_interaction_id,
             )
@@ -980,7 +1006,7 @@ def main_loop():
         # Echo-aware: Raise barge-in threshold during TTS to prevent self-hearing triggers.
         # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
         barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
-        effective_barge_threshold = barge_in_threshold * 3.5 if pipeline.is_speaking else barge_in_threshold
+        effective_barge_threshold = active_barge_in_threshold * 3.5 if pipeline.is_speaking else active_barge_in_threshold
         if pipeline.is_speaking and volume >= effective_barge_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
             allowed = pipeline.current_state == "SPEAKING"
             logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={effective_barge_threshold:.2f}) !!!")
@@ -1009,14 +1035,14 @@ def main_loop():
             speech_buffer.append(frame)
 
             # Only count voiced frames (rms >= threshold)
-            if volume >= vad_threshold:
+            if volume >= active_vad_threshold:
                 voiced_ms_accumulator += (BLOCK_SIZE / INPUT_SAMPLE_RATE) * 1000
                 silence_counter = 0
             else:
                 silence_counter += 1
 
             # Stop Recording after silence
-            if silence_counter > silence_threshold:
+            if silence_counter > active_silence_threshold:
                 # Only allow VAD_END if at least 180 ms of voiced frames have been accumulated
                 if voiced_ms_accumulator < 180:
                     logger.debug(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")

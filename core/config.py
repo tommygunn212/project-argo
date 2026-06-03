@@ -285,6 +285,10 @@ _DEFAULT_CONFIG = {
         "min_interruption_duration": 0.12,
         "false_interruption_timeout": 0.35,
     },
+    "speaker_identity": {
+        "enabled": False,
+        "provider": "speechmatics",
+    },
     "llm": {
         "model": "qwen:latest",
         "base_url": "http://localhost:11434",

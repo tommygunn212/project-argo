@@ -64,8 +64,8 @@ from core.app_control import (
 )
 from core.app_registry import APP_REGISTRY
 from core.system_volume import get_status as get_system_volume_status, set_volume_percent as set_system_volume_percent, adjust_volume_percent as adjust_system_volume_percent, mute_volume as mute_system_volume, unmute_volume as unmute_system_volume
-from core.app_launch import launch_app, resolve_app_launch_target
-from core.app_registry import resolve_app_name
+from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
+from core.app_registry import get_supported_app_displays, resolve_app_name
 
 # TTS bypass reason for deterministic commands (for logging/debugging)
 TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
@@ -453,6 +453,78 @@ class ArgoPipeline:
         # requesting clarification naturally than canned quips.
         return False
 
+    def _ambiguous_short_question_prompt(self, text: str, request_kind: str, topic: str | None = None) -> str | None:
+        """Ask for grounding before answering terse shorthand like "what is mc2"."""
+        if request_kind != "QUESTION" or topic or not self._has_interrogative_structure(text):
+            return None
+        question_structure = {
+            "what",
+            "whats",
+            "where",
+            "when",
+            "why",
+            "how",
+            "who",
+            "which",
+            "is",
+            "are",
+            "do",
+            "does",
+            "did",
+            "can",
+            "could",
+            "would",
+            "should",
+            "will",
+            "mean",
+            "means",
+            "meaning",
+            "many",
+            "much",
+        }
+        meaningful = [token for token in self._get_meaningful_tokens(text) if token not in question_structure]
+        if not meaningful or len(meaningful) > 2:
+            return None
+
+        known_singletons = {
+            "argo",
+            "ai",
+            "api",
+            "cpu",
+            "date",
+            "day",
+            "email",
+            "gpu",
+            "home",
+            "light",
+            "lights",
+            "memory",
+            "music",
+            "name",
+            "ram",
+            "status",
+            "system",
+            "temperature",
+            "time",
+            "volume",
+            "weather",
+        }
+        opaque_terms = []
+        for token in meaningful:
+            if token in known_singletons:
+                continue
+            has_alpha = bool(re.search(r"[a-z]", token))
+            has_digit = bool(re.search(r"\d", token))
+            is_short_code = len(token) <= 4 and has_alpha
+            is_mixed_code = len(token) <= 8 and has_alpha and has_digit
+            if is_short_code or is_mixed_code:
+                opaque_terms.append(token)
+
+        if not opaque_terms:
+            return None
+        term = opaque_terms[0]
+        return f"When you say '{term}', do you mean something from ARGO or your setup, or the general meaning?"
+
     def _sanitize_tts_text(self, text: str, enforce_confidence: bool = True, deterministic: bool = False) -> str:
         if not text or not text.strip():
             return ""
@@ -747,6 +819,52 @@ class ArgoPipeline:
         except Exception:
             pass
         return False
+
+    def _runtime_float(self, key: str, default: float, minimum: float, maximum: float) -> float:
+        try:
+            value = float(self.runtime_overrides.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(maximum, value))
+
+    def apply_runtime_tuning(self) -> None:
+        """Apply live UI behavior-tuning overrides to pipeline thresholds."""
+        self._stt_min_rms_threshold = self._runtime_float(
+            "stt_min_rms_threshold",
+            self._stt_min_rms_threshold,
+            0.0,
+            0.2,
+        )
+        self._stt_silence_ratio_threshold = self._runtime_float(
+            "stt_silence_ratio_threshold",
+            self._stt_silence_ratio_threshold,
+            0.0,
+            1.0,
+        )
+        self._stt_min_duration_s = self._runtime_float(
+            "stt_min_duration_s",
+            self._stt_min_duration_s,
+            0.05,
+            5.0,
+        )
+        self._vad_silence_pad_ms = int(self._runtime_float(
+            "vad_silence_pad_ms",
+            float(self._vad_silence_pad_ms),
+            0.0,
+            3000.0,
+        ))
+        self._tts_min_confidence = self._runtime_float(
+            "tts_min_confidence",
+            self._tts_min_confidence,
+            0.0,
+            1.0,
+        )
+        self._personal_mode_min_confidence = self._runtime_float(
+            "personal_mode_min_confidence",
+            self._personal_mode_min_confidence,
+            0.0,
+            1.0,
+        )
 
     def _broadcast_turn_info(self) -> None:
         """Broadcast current turn count to frontend."""
@@ -1443,6 +1561,21 @@ class ArgoPipeline:
                 "display": f"Call me {name_value}",
                 "implicit": True,
             }
+
+        implicit_preference = re.search(
+            r"^i\s+(?:prefer|like)\s+(.+?)(?:\.|!|\?|$)",
+            lower,
+        )
+        if implicit_preference:
+            preference_value = implicit_preference.group(1).strip(" ,.-")
+            if preference_value and 2 <= len(preference_value) <= 180:
+                return {
+                    "type": "PREFERENCE",
+                    "key": "user.preference",
+                    "value": preference_value,
+                    "display": f"I prefer {preference_value}",
+                    "implicit": True,
+                }
         
         # Check for EXPLICIT memory writes (require trigger word)
         match = re.search(r"\b(remember that|remember this|remember|save this|don't forget|dont forget|store this|add this to memory)\b", lower)
@@ -1962,34 +2095,72 @@ class ArgoPipeline:
             interaction_id=interaction_id,
         )
 
-    def _evaluate_gates(self, capability_key: str, module_key: str, interaction_id: str) -> tuple[bool, str]:
-        # PERSONAL MODE: Gates are advisory only — always allow
-        if self.runtime_overrides.get("personal_mode", False):
-            for gate in GATES_ORDER:
-                self._log_gate(gate, True, "personal_mode_bypass", interaction_id)
-            return True, ""
-        for gate in GATES_ORDER:
+    def _gate_check_level(self, gate: Gate) -> str:
+        key = f"gate_{gate.value.lower()}_level"
+        raw = self.runtime_overrides.get(key, 0)
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered in {"loose", "advisory", "off", "0"}:
+                return "loose"
+            if lowered in {"balanced", "normal", "1"}:
+                return "balanced"
+            if lowered in {"strict", "tight", "on", "2"}:
+                return "strict"
+            return "loose"
+        try:
+            numeric = int(float(raw))
+        except (TypeError, ValueError):
+            numeric = 0
+        if numeric <= 0:
+            return "loose"
+        if numeric == 1:
+            return "balanced"
+        return "strict"
+
+    def _evaluate_single_gate(
+        self,
+        gate: Gate,
+        capability_key: str,
+        module_key: str,
+    ) -> tuple[bool, str]:
+        allowed = True
+        reason = ""
+        if gate == Gate.VALIDATION:
+            if not is_capability_enabled(capability_key):
+                allowed = False
+                reason = f"capability:{capability_key}"
+            elif not is_module_enabled(module_key):
+                allowed = False
+                reason = f"module:{module_key}"
+        elif gate == Gate.PERMISSION:
+            if not is_permission_allowed(capability_key):
+                allowed = False
+                reason = f"permission:{capability_key}"
+        elif gate == Gate.SAFETY:
             allowed = True
-            reason = ""
-            if gate == Gate.VALIDATION:
-                if not is_capability_enabled(capability_key):
-                    allowed = False
-                    reason = f"capability:{capability_key}"
-                elif not is_module_enabled(module_key):
-                    allowed = False
-                    reason = f"module:{module_key}"
-            elif gate == Gate.PERMISSION:
-                if not is_permission_allowed(capability_key):
-                    allowed = False
-                    reason = f"permission:{capability_key}"
-            elif gate == Gate.SAFETY:
-                allowed = True
-            elif gate == Gate.RESOURCE:
-                if capability_key == "music_playback" and not self.runtime_overrides.get("music_enabled", True):
-                    allowed = False
-                    reason = "music_disabled"
-            elif gate == Gate.AUDIT:
-                allowed = True
+        elif gate == Gate.RESOURCE:
+            if capability_key == "music_playback" and not self.runtime_overrides.get("music_enabled", True):
+                allowed = False
+                reason = "music_disabled"
+        elif gate == Gate.AUDIT:
+            allowed = True
+        return allowed, reason
+
+    def _evaluate_gates(self, capability_key: str, module_key: str, interaction_id: str) -> tuple[bool, str]:
+        personal_mode = self.runtime_overrides.get("personal_mode", False)
+        for gate in GATES_ORDER:
+            level = self._gate_check_level(gate)
+            if personal_mode and level != "strict":
+                self._log_gate(gate, True, f"{level}_personal", interaction_id)
+                continue
+            if not personal_mode and level == "loose":
+                self._log_gate(gate, True, "loose_advisory", interaction_id)
+                continue
+            allowed, reason = self._evaluate_single_gate(gate, capability_key, module_key)
+            if reason:
+                reason = f"{level}:{reason}"
+            else:
+                reason = level
             self._log_gate(gate, allowed, reason, interaction_id)
             if not allowed:
                 return False, f"{gate.value}:{reason}".rstrip(":")
@@ -3049,8 +3220,9 @@ class ArgoPipeline:
             return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
         app_key = resolve_app_name(user_text)
         if not app_key:
+            supported = ", ".join(get_supported_app_displays())
             if action == "close":
-                message = "Which app should I close? I can close Notepad, Word, Edge, Calculator, or File Explorer."
+                message = f"Which app should I close? I can close {supported}."
             else:
                 message = "I don't have a known application called that."
             self.logger.info(f"Argo: {message}")
@@ -3101,7 +3273,7 @@ class ArgoPipeline:
     def _respond_with_focus_control(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
         target = getattr(intent, "target", None) if intent else None
         if not target:
-            message = "Which app should I focus? I can focus Notepad, Word, Edge, Calculator, or File Explorer."
+            message = f"Which app should I focus? I can focus {', '.join(get_supported_app_displays())}."
             return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
         allowed, reason = self._evaluate_gates("app_focus_control", "app_focus", interaction_id)
         if not allowed:
@@ -3369,7 +3541,7 @@ class ArgoPipeline:
         app_key = getattr(intent, "target", None) or resolve_app_launch_target(user_text)
         if not app_key:
             self.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
-            message = "I can open Notepad, Calculator, Microsoft Edge, File Explorer, or PowerShell."
+            message = f"I can open {', '.join(get_supported_launch_displays())}."
             self.logger.info(f"Argo: {message}")
             return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
 
@@ -5699,6 +5871,18 @@ class ArgoPipeline:
         )
         if request_kind == "ACTION" and intent is None:
             request_kind = "QUESTION"
+
+        ambiguity_prompt = self._ambiguous_short_question_prompt(user_text, request_kind, topic)
+        if ambiguity_prompt:
+            self.logger.info("[CLARIFY] triggered reason=ambiguous_short_question text=\"%s\"", safe_utterance)
+            self._record_timeline("AMBIGUOUS_SHORT_QUESTION_GUARD", stage="pipeline", interaction_id=interaction_id)
+            self._respond_with_clarification(
+                interaction_id,
+                replay_mode,
+                overrides,
+                prompt=ambiguity_prompt,
+            )
+            return
 
         low_confidence_audio = not self.strict_lab_mode and stt_conf < 0.50
         if (

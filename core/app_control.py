@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import logging
 import ctypes
+import time
 from ctypes import wintypes
 
 import psutil
 
-from core.app_registry import APP_REGISTRY, resolve_app_name
+from core.app_registry import APP_REGISTRY, get_supported_app_displays, resolve_app_name
 
 LOGGER = logging.getLogger("ARGO.AppControl")
 
@@ -28,6 +30,8 @@ BLOCKED_PROCESSES = {
     "wininit.exe",
     "winlogon.exe",
 }
+
+WRITABLE_APPS = {"notepad", "word"}
 
 
 def _get_foreground_pid() -> int | None:
@@ -210,11 +214,70 @@ def focus_app_deterministic(app_key: str) -> tuple[bool, str, str]:
     return False, f"I couldn't focus {display}.", "failed"
 
 
+def write_text_to_app(app_key: str, text: str) -> tuple[bool, str]:
+    """Write text into a supported writable desktop app via clipboard paste."""
+    if app_key not in WRITABLE_APPS:
+        return False, "I can only type into Notepad or Word right now."
+
+    meta = APP_REGISTRY.get(app_key)
+    if not meta:
+        return False, "I don't have a known application called that."
+
+    display = meta.get("display", app_key.capitalize())
+    focus_title = meta.get("focus_title", display)
+    payload = (text or "").strip()
+    if not payload:
+        return False, f"There was nothing to insert into {display}."
+
+    if not is_app_running(app_key):
+        ok, msg = open_app(app_key)
+        if not ok:
+            return False, msg
+        time.sleep(1.0 if app_key == "word" else 0.35)
+
+    ok, msg, _ = focus_app_deterministic(app_key)
+    if not ok:
+        return False, msg
+    time.sleep(0.12)
+
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')); "
+        "Set-Clipboard -Value $text; "
+        "Start-Sleep -Milliseconds 120; "
+        f"if ($ws.AppActivate('{focus_title}')) {{ "
+        "Start-Sleep -Milliseconds 120; "
+        "$ws.SendKeys('^v'); "
+        "'true' "
+        "} else { 'false' }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+        pasted = "true" in (result.stdout or "").lower()
+    except Exception:
+        pasted = False
+
+    if pasted:
+        LOGGER.info("[APP_WRITE] app=%s result=success chars=%s", app_key, len(payload))
+        return True, f"Inserted it into {display}."
+
+    LOGGER.info("[APP_WRITE] app=%s result=failed chars=%s", app_key, len(payload))
+    return False, f"I couldn't insert it into {display}."
+
+
 def app_status_response(query: str) -> str:
     app = resolve_app_name(query)
     if app:
         running = is_app_running(app)
-        return f"{app.capitalize()} is {'running' if running else 'not running'}."
+        display = APP_REGISTRY.get(app, {}).get("display", app.title())
+        return f"{display} is {'running' if running else 'not running'}."
     running = list_running_apps()
     if not running:
         return "No applications are running."

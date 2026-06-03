@@ -19,7 +19,16 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io
 from livekit.plugins import openai
 
+try:
+    from livekit.plugins import hedra as hedra_plugin
+except Exception as exc:  # pragma: no cover - optional avatar dependency
+    hedra_plugin = None
+    HEDRA_PLUGIN_IMPORT_ERROR = exc
+else:
+    HEDRA_PLUGIN_IMPORT_ERROR = None
+
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
+from core.livekit_config import speaker_identity_status
 
 
 ROOT = Path(__file__).resolve().parent
@@ -61,6 +70,14 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         getattr(ctx.job.room, "name", cfg.room),
         cfg.model,
         cfg.voice,
+    )
+    speaker_status = speaker_identity_status(cfg)
+    logger.info(
+        "[SpeakerID] enabled=%s provider=%s ready=%s mode=%s",
+        speaker_status["enabled"],
+        speaker_status["provider"],
+        speaker_status["ready"],
+        speaker_status["mode"],
     )
 
     await ctx.connect()
@@ -134,7 +151,8 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
     if not _env_enabled("ARGO_HEDRA_AVATAR_ENABLED", False):
         return None
 
-    if not os.getenv("HEDRA_API_KEY"):
+    hedra_api_key = (os.getenv("HEDRA_API_KEY") or "").strip()
+    if not hedra_api_key:
         logger.warning("[Hedra] ARGO_HEDRA_AVATAR_ENABLED is true but HEDRA_API_KEY is missing")
         return None
 
@@ -144,15 +162,14 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         logger.warning("[Hedra] Set HEDRA_AVATAR_ID or HEDRA_AVATAR_IMAGE to start a Hedra avatar")
         return None
 
-    try:
-        from livekit.plugins import hedra
-    except ImportError:
+    if hedra_plugin is None:
         logger.warning(
-            "[Hedra] livekit.plugins.hedra is not installed; the core realtime voice path will continue"
+            "[Hedra] livekit.plugins.hedra is not available; the core realtime voice path will continue: %s",
+            HEDRA_PLUGIN_IMPORT_ERROR,
         )
         return None
 
-    kwargs = {}
+    kwargs = {"api_key": hedra_api_key}
     participant_identity = (os.getenv("HEDRA_AVATAR_PARTICIPANT_IDENTITY") or "").strip()
     if participant_identity:
         kwargs["avatar_participant_identity"] = participant_identity
@@ -177,7 +194,7 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
 
     logger.warning("[Hedra] attempting legacy Hedra avatar path; if it fails, voice continues")
     try:
-        avatar = hedra.AvatarSession(**kwargs)
+        avatar = hedra_plugin.AvatarSession(**kwargs)
         await avatar.start(session, room=room)
         logger.info("[Hedra] avatar session started")
         return avatar

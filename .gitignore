@@ -109,3 +109,11 @@ policies/
 system/
 this_dir_does_not_exist/
 whisper.cpp/
+
+# Local personal/import scratch
+_git_status.txt
+data/tommy_knowledge/
+docs/Todo/
+ha_ip.txt
+setup_homeassistant_vm.ps1
+to  install/

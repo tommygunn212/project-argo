@@ -131,3 +131,15 @@ def test_pipeline_memory_context_includes_mem0(tmp_path):
 
     assert "MEM0 LONG-TERM MEMORY" in context
     assert "fast back-and-forth" in context
+
+
+def test_parse_memory_write_detects_implicit_preference():
+    pipeline = ArgoPipeline(DummyAudio(), lambda kind, payload: None)
+
+    write = pipeline._parse_memory_write("I prefer quick back and forth replies.")
+
+    assert write is not None
+    assert write["type"] == "PREFERENCE"
+    assert write["key"] == "user.preference"
+    assert write["value"] == "quick back and forth replies"
+    assert write["implicit"] is True

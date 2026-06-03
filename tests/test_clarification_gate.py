@@ -140,3 +140,23 @@ def test_flag_persists_until_canonical_hit(tmp_path):
     # Should NOT have clarification (flag already set)
     assert not any("clarif" in msg.lower() for msg in logs), f"Should not clarify twice: {logs}"
     assert pipeline._session_flags.get("clarification_asked") is True, "Flag should still be True"
+
+
+def test_short_opaque_question_requests_grounding(tmp_path):
+    pipeline = ArgoPipeline(DummyAudio(), lambda kind, payload: None)
+    pipeline._memory_store = MemoryStore(tmp_path / "memory.db")
+
+    prompt = pipeline._ambiguous_short_question_prompt("what is mc2", "QUESTION")
+
+    assert prompt is not None
+    assert "mc2" in prompt
+    assert "general meaning" in prompt
+
+
+def test_normal_short_question_does_not_request_grounding(tmp_path):
+    pipeline = ArgoPipeline(DummyAudio(), lambda kind, payload: None)
+    pipeline._memory_store = MemoryStore(tmp_path / "memory.db")
+
+    prompt = pipeline._ambiguous_short_question_prompt("what time is it", "QUESTION")
+
+    assert prompt is None

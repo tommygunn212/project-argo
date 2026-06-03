@@ -14,22 +14,30 @@ import socket
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from importlib import metadata
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from dotenv import load_dotenv
 
 from core.config import get_config
 
 
 DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_REALTIME_INSTRUCTIONS = (
     "You are ARGO, Tommy's realtime voice assistant. Speak like a capable, fun "
-    "room assistant, not a research lab system. Keep most replies to one or two "
-    "short sentences unless Tommy asks for depth. Be interruptible: when Tommy "
-    "starts talking, stop cleanly and listen. Do not lecture about gates, policy, "
-    "or architecture unless Tommy asks. You are connected to the realtime voice "
-    "room; do not claim app, computer, or home actions unless a tool integration "
-    "is explicitly connected for that action."
+    "room assistant, not a research lab system. Prioritize fast back-and-forth "
+    "conversation: answer in one short sentence by default, two only when useful. "
+    "Do not narrate thinking, do not over-explain, and do not add filler before "
+    "the answer. Be highly interruptible: when Tommy starts talking, stop cleanly "
+    "and listen without apologizing or recapping the interruption. If a short "
+    "phrase is ambiguous, ask one quick grounding question instead of guessing. "
+    "Do not lecture about gates, policy, or architecture unless Tommy asks. You "
+    "are connected to the realtime voice room; do not claim app, computer, or "
+    "home actions unless a tool integration is explicitly connected for that action."
 )
 
 
@@ -50,6 +58,8 @@ class LiveKitRealtimeConfig:
     token_ttl_minutes: int
     min_interruption_duration: float
     false_interruption_timeout: float
+    speaker_id_enabled: bool
+    speaker_id_provider: str
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -84,18 +94,24 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
                 cfg,
                 "ARGO_REALTIME_MIN_INTERRUPTION_DURATION",
                 "livekit.min_interruption_duration",
-                0.12,
+                0.08,
             ),
-            0.12,
+            0.08,
         ),
         false_interruption_timeout=_float(
             _env_or_config(
                 cfg,
                 "ARGO_REALTIME_FALSE_INTERRUPTION_TIMEOUT",
                 "livekit.false_interruption_timeout",
-                0.35,
+                0.22,
             ),
-            0.35,
+            0.22,
+        ),
+        speaker_id_enabled=_bool(
+            _env_or_config(cfg, "ARGO_SPEAKER_ID_ENABLED", "speaker_identity.enabled", False)
+        ),
+        speaker_id_provider=_env_or_config(
+            cfg, "ARGO_SPEAKER_ID_PROVIDER", "speaker_identity.provider", "speechmatics"
         ),
     )
 
@@ -160,6 +176,7 @@ def build_livekit_token_response(
 
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
     cfg = get_livekit_realtime_config(config)
+    speaker_status = speaker_identity_status(cfg)
     return {
         "enabled": cfg.enabled,
         "mode": "livekit_realtime",
@@ -169,6 +186,53 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         "model": cfg.model,
         "voice": cfg.voice,
         "server_reachable": _socket_reachable(cfg.url),
+        "avatar": {
+            "image": os.getenv("HEDRA_AVATAR_IMAGE", ""),
+            "legacy_hedra_enabled": _bool(os.getenv("ARGO_HEDRA_AVATAR_ENABLED", False)),
+            "legacy_hedra_available": bool(os.getenv("HEDRA_API_KEY")),
+            "note": "Hedra realtime is legacy; ARGO keeps the Cortana portrait as the local visual fallback.",
+        },
+        "speaker_identity": speaker_status,
+    }
+
+
+def mobile_access_status(request_host: str | None = None) -> dict[str, Any]:
+    host = _clean_request_host(request_host) or _best_lan_ip() or "127.0.0.1"
+    http_port = _int(os.getenv("ARGO_HTTP_PORT", "8000"), 8000)
+    ws_port = _int(os.getenv("ARGO_WS_PORT", "8001"), 8001)
+    return {
+        "host": host,
+        "http_url": f"http://{host}:{http_port}/v2",
+        "ws_url": f"ws://{host}:{ws_port}/ws",
+        "livekit": livekit_status(),
+        "note": "Use this URL from an iPad or phone on the same network; browser microphone permission must be allowed.",
+    }
+
+
+def speaker_identity_status(cfg: LiveKitRealtimeConfig | None = None) -> dict[str, Any]:
+    cfg = cfg or get_livekit_realtime_config()
+    provider = str(cfg.speaker_id_provider or "speechmatics").strip().lower()
+    api_key_ready = bool(os.getenv("SPEECHMATICS_API_KEY", "").strip()) if provider == "speechmatics" else False
+    plugin_ready = False
+    plugin_error = ""
+    if provider == "speechmatics":
+        try:
+            metadata.version("livekit-plugins-speechmatics")
+        except Exception as exc:  # pragma: no cover - depends on optional package install
+            plugin_error = str(exc)
+        else:
+            plugin_ready = True
+    else:
+        plugin_error = f"Unsupported speaker identity provider: {provider}"
+
+    return {
+        "enabled": bool(cfg.speaker_id_enabled),
+        "provider": provider,
+        "api_key_ready": api_key_ready,
+        "plugin_ready": plugin_ready,
+        "ready": bool(cfg.speaker_id_enabled and api_key_ready and plugin_ready),
+        "mode": "experimental_sidecar",
+        "error": plugin_error,
     }
 
 
@@ -207,6 +271,24 @@ def _clean_name(value: str) -> str:
 def _clean_identity(value: str) -> str:
     cleaned = _clean_name(value)
     return cleaned or f"tommy-{uuid.uuid4().hex[:8]}"
+
+
+def _clean_request_host(value: str | None) -> str:
+    if not value:
+        return ""
+    host = value.split(":", 1)[0].strip()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return host
+    return re.sub(r"[^A-Za-z0-9_.:-]", "", host)[:96]
+
+
+def _best_lan_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return ""
 
 
 def _socket_reachable(url: str) -> bool:

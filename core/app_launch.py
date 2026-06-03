@@ -7,6 +7,7 @@ Control only. No files, URLs, or arguments.
 from __future__ import annotations
 
 import subprocess
+import re
 from typing import Dict, List, Optional
 
 
@@ -38,9 +39,21 @@ def resolve_app_launch_target(text: str) -> Optional[str]:
     lowered = text.lower()
     for canonical, meta in APP_LAUNCH_APPS.items():
         aliases = meta.get("aliases", [])
-        if any(alias in lowered for alias in aliases):
-            return canonical
+        for alias in aliases:
+            if re.search(rf"\b{re.escape(alias)}\b", lowered):
+                return canonical
     return None
+
+
+def get_supported_launch_displays() -> list[str]:
+    display_map = {
+        "notepad": "Notepad",
+        "calculator": "Calculator",
+        "microsoft edge": "Microsoft Edge",
+        "file explorer": "File Explorer",
+        "powershell": "PowerShell",
+    }
+    return [display_map.get(key, key.title()) for key in APP_LAUNCH_APPS]
 
 
 def launch_app(app_key: str) -> bool:

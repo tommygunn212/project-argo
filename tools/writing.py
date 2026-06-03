@@ -206,6 +206,32 @@ def draft_blog(
     return Draft(path)
 
 
+def draft_document(
+    title: str,
+    body: str,
+    doc_type: str = "document",
+    recipient: str = "",
+) -> Draft:
+    """Create a general document or letter draft."""
+    ensure_workspace()
+    slug = _safe_filename(title or doc_type)
+    filename = f"doc_{_timestamp_slug()}_{slug}.txt"
+    path = DOCS_DIR / filename
+
+    meta = [
+        f"Type: {doc_type.title()}",
+        f"Title: {title or doc_type.title()}",
+        f"Date: {datetime.now().strftime('%B %d, %Y')}",
+    ]
+    if recipient:
+        meta.insert(2, f"To: {recipient}")
+
+    content = "\n".join(meta) + "\n---\n\n" + body.strip() + "\n"
+    path.write_text(content, encoding="utf-8")
+    logger.info(f"[WRITING] Document draft created: {path}")
+    return Draft(path)
+
+
 def parse_blog_request(text: str) -> Dict[str, str]:
     """
     Parse voice command into blog components.
@@ -222,6 +248,42 @@ def parse_blog_request(text: str) -> Dict[str, str]:
     )
     if about_match:
         result["title"] = about_match.group(1).strip().rstrip(".,!?")
+
+    return result
+
+
+def parse_document_request(text: str) -> Dict[str, str]:
+    """
+    Parse voice command into document/letter components.
+
+    Examples:
+      "write a letter to Paul about the photo drives"
+      "draft a document about the classroom plan"
+    """
+    result = {"title": "", "recipient": "", "doc_type": "document", "raw": text}
+    if re.search(r"\bletter\b", text, re.IGNORECASE):
+        result["doc_type"] = "letter"
+
+    to_match = re.search(
+        r"(?:to|for)\s+([a-zA-Z][a-zA-Z\s.'-]+?)(?:\s+about|\s+regarding|\s+on|\s*$)",
+        text,
+        re.IGNORECASE,
+    )
+    if to_match:
+        result["recipient"] = to_match.group(1).strip().rstrip(",.")
+
+    topic_match = re.search(r"(?:about|regarding|on)\s+(.+)", text, re.IGNORECASE)
+    if topic_match:
+        result["title"] = topic_match.group(1).strip().rstrip(".,!?")
+    else:
+        cleaned = re.sub(
+            r"^(write|draft|compose|create)\s+(me\s+)?(a\s+|an\s+)?(letter|document|doc)\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned:
+            result["title"] = cleaned.rstrip(".,!?")
 
     return result
 
@@ -431,6 +493,35 @@ def build_blog_prompt(
         f"No bullet points or lists unless absolutely needed.\n"
         f"Keep it 300-500 words.\n"
         f"Return ONLY the blog post text, nothing else."
+    )
+
+
+def build_document_prompt(
+    title: str,
+    doc_type: str = "document",
+    recipient: str = "",
+    tone: str = "clear, natural, and direct",
+    from_name: str = "Tommy",
+) -> str:
+    """Build an LLM prompt for a letter or general document."""
+    if doc_type == "letter":
+        target = recipient or "the intended recipient"
+        return (
+            f"Write a short letter from {from_name} to {target}.\n"
+            f"Topic: {title}\n"
+            f"Tone: {tone}\n"
+            "Keep it personal, readable, and grounded.\n"
+            "No bullet points or lists.\n"
+            "Keep it concise unless the topic clearly needs more.\n"
+            "Return ONLY the letter text, nothing else."
+        )
+    return (
+        f"Write a short document for {from_name}.\n"
+        f"Topic: {title}\n"
+        f"Tone: {tone}\n"
+        "Keep it organized, conversational, and easy to read.\n"
+        "No bullet points or lists unless they are clearly useful.\n"
+        "Return ONLY the document text, nothing else."
     )
 
 

@@ -5,7 +5,7 @@ Single source of truth for runtime versioning.
 
 CURRENT_VERSION = "1.9.0"
 CURRENT_MILESTONE = "livekit-realtime-voice"
-CURRENT_DATE = "2026-05-10"
+CURRENT_DATE = "2026-06-03"
 
 VERSION_HISTORY = [
     {
@@ -51,7 +51,7 @@ VERSION_HISTORY = [
     {
         "version": "1.9.0",
         "date": CURRENT_DATE,
-        "notes": "LiveKit plus OpenAI Realtime voice path for fast conversation and native interruption",
+        "notes": "LiveKit plus OpenAI Realtime voice path, Cortana portrait fallback, mobile access status, and Speechmatics speaker-ID readiness",
     },
 ]
 

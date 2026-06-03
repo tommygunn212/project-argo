@@ -23,6 +23,8 @@ EXCLUDE_DIRS = {
     "runtime",
     "whisper.cpp",
 }
+EXCLUDE_FILES = {"music_index.json", "package-lock.json"}
+EXCLUDE_PATHS = {"images"}  # subdirs to skip within data dirs
 
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
@@ -38,10 +40,10 @@ class DocChunk:
 
 def _iter_files(root: Path) -> Iterable[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS and d not in EXCLUDE_PATHS]
         for name in filenames:
             path = Path(dirpath) / name
-            if path.suffix.lower() in INCLUDE_EXT:
+            if path.suffix.lower() in INCLUDE_EXT and name not in EXCLUDE_FILES:
                 yield path
 
 
@@ -139,17 +141,29 @@ def rebuild_index() -> None:
 
 
 def _flush(conn: sqlite3.Connection, batch: List[Tuple[str, int, int, str]]) -> None:
-    conn.executemany(
-        "INSERT INTO chunks(path, start_line, end_line, text) VALUES(?, ?, ?, ?)",
-        batch,
-    )
-    conn.executemany(
-        "INSERT INTO chunks_fts(rowid, text) VALUES(last_insert_rowid(), ?)",
-        [(b[3],) for b in batch],
-    )
+    for path, start, end, text in batch:
+        cur = conn.execute(
+            "INSERT INTO chunks(path, start_line, end_line, text) VALUES(?, ?, ?, ?)",
+            (path, start, end, text),
+        )
+        conn.execute(
+            "INSERT INTO chunks_fts(rowid, text) VALUES(?, ?)",
+            (cur.lastrowid, text),
+        )
+
+
+def _sanitize_query(query: str) -> str:
+    """Sanitize query for FTS5 MATCH: keep alphanumeric + spaces, join with OR."""
+    words = re.findall(r"[a-zA-Z0-9]+", query.lower())
+    if not words:
+        return ""
+    return " OR ".join(words)
 
 
 def query_index(query: str, limit: int = 8) -> List[DocChunk]:
+    sanitized = _sanitize_query(query)
+    if not sanitized:
+        return []
     conn = _connect_db(DB_PATH)
     cursor = conn.execute(
         """
@@ -160,7 +174,7 @@ def query_index(query: str, limit: int = 8) -> List[DocChunk]:
         ORDER BY bm25(chunks_fts)
         LIMIT ?
         """,
-        (query, limit),
+        (sanitized, limit),
     )
     rows = cursor.fetchall()
     conn.close()

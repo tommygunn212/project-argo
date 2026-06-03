@@ -2,6 +2,10 @@ requests==2.31.0
 ollama==0.1.0
 openai>=2.36,<3
 livekit-agents[openai]>=1.5,<1.6
+livekit-plugins-speechmatics>=1.5,<1.6
+livekit-plugins-silero>=1.5,<1.6
+livekit-plugins-turn-detector>=1.5,<1.6
+livekit-plugins-noise-cancellation>=0.2,<0.3
 livekit-plugins-hedra==1.4.6
 livekit-api>=1.1,<1.2
 mem0ai>=2.0,<3

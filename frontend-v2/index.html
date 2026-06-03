@@ -1138,10 +1138,10 @@ input[type="range"]::-moz-range-thumb {
     <div class="page active" id="pageDashboard">
       <div class="dash-hero">
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
-          <img class="avatar-fallback" src="/v2-assets/argo-hedra-default.png" alt="ARGO Hedra default avatar">
+          <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="ARGO Hedra portrait avatar">
           <canvas class="avatar-canvas" id="avatarCanvas" aria-label="ARGO Hedra avatar"></canvas>
           <div class="avatar-hud">
-            <span>HEDRA DEFAULT</span>
+            <span>HEDRA PORTRAIT</span>
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
           </div>
         </div>
@@ -1219,14 +1219,22 @@ input[type="range"]::-moz-range-thumb {
             <span class="config-key">Audio Owner</span>
             <span class="config-val" id="infoAudioOwner">NONE</span>
           </div>
+          <div class="config-item">
+            <span class="config-key">Speaker ID</span>
+            <span class="config-val" id="infoSpeakerId">OFF</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">iPad URL</span>
+            <span class="config-val" id="infoMobileUrl">LOCAL ONLY</span>
+          </div>
         </div>
 
         <!-- Quick Actions -->
         <div class="card">
           <div class="card-title"><span class="dot"></span>QUICK ACTIONS</div>
           <div class="quick-actions" style="margin-bottom:12px">
-            <button class="btn btn-primary" onclick="sendControl('RESUME')">▶ Start Listening</button>
-            <button class="btn" onclick="sendControl('PAUSE')">⏸ Pause</button>
+            <button class="btn btn-primary" onclick="startVoiceConversation()">▶ Start Smooth Voice</button>
+            <button class="btn" onclick="pauseVoiceConversation()">⏸ Pause</button>
             <button class="btn btn-danger" onclick="sendControl('FULL_RESET'); clearDropdownSettings()">⟲ Reset</button>
           </div>
           <div class="quick-actions" style="margin-bottom:12px">
@@ -1278,10 +1286,10 @@ input[type="range"]::-moz-range-thumb {
           <div class="card-title"><span class="dot" style="background:var(--accent)"></span>REALTIME CONVERSATION</div>
           <div class="voice-avatar-row">
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
-              <img class="avatar-fallback" src="/v2-assets/argo-hedra-default.png" alt="ARGO realtime Hedra default avatar">
+              <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="ARGO realtime Hedra portrait avatar">
               <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="ARGO realtime Hedra avatar"></canvas>
               <div class="avatar-hud">
-                <span>HEDRA DEFAULT</span>
+                <span>HEDRA PORTRAIT</span>
                 <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
               </div>
             </div>
@@ -1305,8 +1313,8 @@ input[type="range"]::-moz-range-thumb {
                 </div>
               </div>
               <div class="quick-actions">
-                <button class="btn btn-primary" id="livekitStartBtn" onclick="startRealtimeVoice()">▶ Start Realtime</button>
-                <button class="btn btn-danger" id="livekitStopBtn" onclick="stopRealtimeVoice()" disabled>■ Stop Realtime</button>
+                <button class="btn btn-primary" id="livekitStartBtn" onclick="startVoiceConversation()">▶ Start Smooth Voice</button>
+                <button class="btn btn-danger" id="livekitStopBtn" onclick="stopRealtimeVoice({ resumeClassic: false })" disabled>■ Stop Smooth Voice</button>
                 <button class="btn" onclick="refreshRealtimeStatus()">↻ Refresh</button>
               </div>
               <div class="livekit-error" id="livekitError"></div>
@@ -1475,9 +1483,9 @@ input[type="range"]::-moz-range-thumb {
           </div>
         </div>
 
-        <!-- Gate Tuning Sliders -->
+        <!-- Behavior Tuning Sliders -->
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>GATE TUNING — AUDIO INPUT</div>
+          <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>BEHAVIOR TUNING — AUDIO INPUT</div>
 
           <div class="slider-row">
             <div class="slider-info">
@@ -1547,7 +1555,7 @@ input[type="range"]::-moz-range-thumb {
         </div>
 
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>GATE TUNING — SPEECH RECOGNITION</div>
+          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>BEHAVIOR TUNING — SPEECH RECOGNITION</div>
 
           <div class="slider-row">
             <div class="slider-info">
@@ -1595,7 +1603,7 @@ input[type="range"]::-moz-range-thumb {
         </div>
 
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>GATE TUNING — RESPONSE OUTPUT</div>
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>BEHAVIOR TUNING — RESPONSE OUTPUT</div>
 
           <div class="slider-row">
             <div class="slider-info">
@@ -1642,8 +1650,67 @@ input[type="range"]::-moz-range-thumb {
           </div>
         </div>
 
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>ACTION CHECKS</div>
+
+          <div class="slider-row">
+            <div class="slider-info">
+              <div class="slider-name">Validation</div>
+              <div class="slider-hint">Checks capability and module availability</div>
+            </div>
+            <div class="slider-track">
+              <input type="range" id="sliderGateValidation" min="0" max="2" step="1" value="0">
+            </div>
+            <div class="slider-value" id="sliderGateValidationVal">Loose</div>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-info">
+              <div class="slider-name">Permission</div>
+              <div class="slider-hint">Checks whether ARGO is allowed to use a capability</div>
+            </div>
+            <div class="slider-track">
+              <input type="range" id="sliderGatePermission" min="0" max="2" step="1" value="0">
+            </div>
+            <div class="slider-value" id="sliderGatePermissionVal">Loose</div>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-info">
+              <div class="slider-name">Safety</div>
+              <div class="slider-hint">Reserved for confirmations on risky actions</div>
+            </div>
+            <div class="slider-track">
+              <input type="range" id="sliderGateSafety" min="0" max="2" step="1" value="0">
+            </div>
+            <div class="slider-value" id="sliderGateSafetyVal">Loose</div>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-info">
+              <div class="slider-name">Resource</div>
+              <div class="slider-hint">Checks toggles such as music enabled/disabled</div>
+            </div>
+            <div class="slider-track">
+              <input type="range" id="sliderGateResource" min="0" max="2" step="1" value="0">
+            </div>
+            <div class="slider-value" id="sliderGateResourceVal">Loose</div>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-info">
+              <div class="slider-name">Audit</div>
+              <div class="slider-hint">Controls how much action-check detail ARGO logs</div>
+            </div>
+            <div class="slider-track">
+              <input type="range" id="sliderGateAudit" min="0" max="2" step="1" value="0">
+            </div>
+            <div class="slider-value" id="sliderGateAuditVal">Loose</div>
+          </div>
+        </div>
+
         <div style="display:flex;justify-content:flex-end;gap:8px;">
-          <button class="btn btn-sm" id="resetGatesBtn">↺ Reset All to Defaults</button>
+          <button class="btn btn-sm" id="resetGatesBtn">↺ Reset Behavior Defaults</button>
         </div>
 
         <!-- STT Metrics -->
@@ -1934,7 +2001,13 @@ let livekitStarting = false;
 let realtimeAvatarMeter = null;
 let realtimeAvatarVideoEls = [];
 let avatarAudioLevel = 0;
-let livekitMeta = { model: 'gpt-realtime', voice: 'marin', room: 'argo-live' };
+let livekitMeta = {
+  model: 'gpt-realtime',
+  voice: 'marin',
+  room: 'argo-live',
+  speakerIdentity: { enabled: false, ready: false, provider: 'speechmatics' },
+  mobileUrl: ''
+};
 const ARGO_HTTP_ORIGIN = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : window.location.origin;
 const ARGO_WS_URL = window.location.protocol === 'file:' ? 'ws://127.0.0.1:8001/ws' : `ws://${window.location.hostname || '127.0.0.1'}:8001/ws`;
 function argoUrl(path) {
@@ -2063,6 +2136,19 @@ function resumeClassicAfterRealtime() {
   });
 }
 
+async function startVoiceConversation() {
+  if (livekitConnected || livekitStarting || livekitRoom) return;
+  await startRealtimeVoice();
+}
+
+function pauseVoiceConversation() {
+  if (livekitRoom || livekitStarting) {
+    stopRealtimeVoice({ resumeClassic: false });
+    return;
+  }
+  sendControl('PAUSE');
+}
+
 function logRealtimeClientEvent(phase, payload = {}, level = 'info') {
   const body = {
     level,
@@ -2083,7 +2169,7 @@ function describeRealtimeStartError(err, step = '') {
   const name = err?.name || '';
   const message = err?.message || String(err);
   if (step === 'load_client' || /dynamically imported module|script|livekit client/i.test(message)) {
-    return 'The browser could not load the LiveKit client. Refresh this page once, then press Start Realtime again.';
+    return 'The browser could not load the LiveKit client. Refresh this page once, then press Start Smooth Voice again.';
   }
   if (/failed to fetch/i.test(message)) {
     if (step === 'pause_classic') return 'The browser could not reach ARGO control to pause the classic listener. Check that /api/status is reachable, then try again.';
@@ -2093,7 +2179,7 @@ function describeRealtimeStartError(err, step = '') {
     return 'The browser could not reach one of ARGO’s local realtime endpoints. Refresh /v2 and try again.';
   }
   if (name === 'NotAllowedError' || /permission/i.test(message)) {
-    return 'Microphone permission was denied. Allow microphone access, then press Start Realtime again.';
+    return 'Microphone permission was denied. Allow microphone access, then press Start Smooth Voice again.';
   }
   if (name === 'NotFoundError' || /device not found|no audio/i.test(message)) {
     return 'No microphone was found for browser realtime voice.';
@@ -2307,6 +2393,7 @@ function handleOverrides(data) {
   if (data.barge_in_enabled !== undefined) $('toggleBargeIn').checked = data.barge_in_enabled;
   if (data.music_enabled !== undefined) $('toggleMusic').checked = data.music_enabled;
   if (data.personality_mode) $('personalitySelect').value = data.personality_mode;
+  syncBehaviorSliders(data);
 }
 
 function handleEngineConfig(data) {
@@ -2491,16 +2578,51 @@ async function refreshRealtimeStatus() {
       model: data.model || livekitMeta.model,
       voice: data.voice || livekitMeta.voice,
       room: data.room || livekitMeta.room,
+      speakerIdentity: data.speaker_identity || livekitMeta.speakerIdentity,
+      mobileUrl: livekitMeta.mobileUrl,
     };
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
+    updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
     if (!livekitConnected) {
       setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
     }
+    refreshMobileAccessStatus();
     updatePipelineDisplay();
   } catch (err) {
     setRealtimeStatus('ERROR', 'error');
     setRealtimeError(err.message || String(err));
+  }
+}
+
+async function refreshMobileAccessStatus() {
+  try {
+    const res = await fetch(argoUrl('/api/mobile-access'), { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Mobile access status failed');
+    livekitMeta.mobileUrl = data.http_url || livekitMeta.mobileUrl;
+    const el = $('infoMobileUrl');
+    if (el) el.textContent = livekitMeta.mobileUrl || 'LOCAL ONLY';
+  } catch (err) {
+    const el = $('infoMobileUrl');
+    if (el) el.textContent = 'UNAVAILABLE';
+  }
+}
+
+function updateSpeakerIdentityDisplay(status) {
+  const el = $('infoSpeakerId');
+  if (!el) return;
+  if (!status || !status.enabled) {
+    el.textContent = 'OFF';
+    el.style.color = 'var(--text-dim)';
+    return;
+  }
+  if (status.ready) {
+    el.textContent = `${status.provider || 'speechmatics'} READY`;
+    el.style.color = 'var(--accent3)';
+  } else {
+    el.textContent = `${status.provider || 'speechmatics'} NOT READY`;
+    el.style.color = 'var(--accent-red)';
   }
 }
 
@@ -2607,9 +2729,12 @@ async function startRealtimeVoice() {
       model: tokenData.model || statusData.model || livekitMeta.model,
       voice: tokenData.voice || statusData.voice || livekitMeta.voice,
       room: tokenData.room || statusData.room || livekitMeta.room,
+      speakerIdentity: statusData.speaker_identity || livekitMeta.speakerIdentity,
+      mobileUrl: livekitMeta.mobileUrl,
     };
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
+    updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
 
     room = new lk.Room({
       adaptiveStream: true,
@@ -2727,10 +2852,10 @@ function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}
   }
 }
 
-function stopRealtimeVoice() {
+function stopRealtimeVoice({ resumeClassic = false } = {}) {
   setRealtimeError('');
-  cleanupRealtimeVoice({ resumeClassic: true, status: 'OFFLINE' });
-  addSystemLog('Realtime voice stopped');
+  cleanupRealtimeVoice({ resumeClassic, status: 'OFFLINE' });
+  addSystemLog('Smooth voice stopped');
 }
 
 function showRealtimeAvatarVideo(track) {
@@ -2886,11 +3011,11 @@ function toggleMic() {
   chatMicActive = !chatMicActive;
   const btn = $('chatMicBtn');
   if (chatMicActive) {
-    sendControl('RESUME');
+    startVoiceConversation().catch(err => addSystemLog(`Smooth voice error: ${err?.message || err}`));
     btn.classList.add('active');
     btn.title = 'Stop listening';
   } else {
-    sendControl('PAUSE');
+    pauseVoiceConversation();
     btn.classList.remove('active');
     btn.title = 'Start listening (mic)';
   }
@@ -3234,7 +3359,7 @@ $('recoveryDeny').addEventListener('click', () => {
   }
 });
 
-// ═══════ GATE SLIDERS ═══════
+// ═══════ BEHAVIOR TUNING SLIDERS ═══════
 const GATE_DEFAULTS = {
   // Audio Input
   sliderVAD: 0.2,
@@ -3252,7 +3377,13 @@ const GATE_DEFAULTS = {
   sliderMaxTokens: 1024,
   sliderMaxSent: 10,
   sliderVerbosity: 4,
-  sliderTemp: 0.7
+  sliderTemp: 0.7,
+  // Action Checks
+  sliderGateValidation: 0,
+  sliderGatePermission: 0,
+  sliderGateSafety: 0,
+  sliderGateResource: 0,
+  sliderGateAudit: 0
 };
 
 const GATE_OVERRIDE_KEYS = {
@@ -3269,7 +3400,12 @@ const GATE_OVERRIDE_KEYS = {
   sliderMaxTokens: 'max_tokens',
   sliderMaxSent: 'max_sentences',
   sliderVerbosity: 'verbosity',
-  sliderTemp: 'temperature'
+  sliderTemp: 'temperature',
+  sliderGateValidation: 'gate_validation_level',
+  sliderGatePermission: 'gate_permission_level',
+  sliderGateSafety: 'gate_safety_level',
+  sliderGateResource: 'gate_resource_level',
+  sliderGateAudit: 'gate_audit_level'
 };
 
 const GATE_DECIMALS = {
@@ -3286,8 +3422,62 @@ const GATE_DECIMALS = {
   sliderMaxTokens: 0,
   sliderMaxSent: 0,
   sliderVerbosity: 0,
-  sliderTemp: 1
+  sliderTemp: 1,
+  sliderGateValidation: 0,
+  sliderGatePermission: 0,
+  sliderGateSafety: 0,
+  sliderGateResource: 0,
+  sliderGateAudit: 0
 };
+
+const ACTION_CHECK_LEVELS = ['Loose', 'Balanced', 'Strict'];
+const ACTION_CHECK_SLIDERS = new Set([
+  'sliderGateValidation',
+  'sliderGatePermission',
+  'sliderGateSafety',
+  'sliderGateResource',
+  'sliderGateAudit'
+]);
+
+function formatBehaviorValue(id, value) {
+  if (ACTION_CHECK_SLIDERS.has(id)) {
+    return ACTION_CHECK_LEVELS[Math.max(0, Math.min(2, Number(value) || 0))];
+  }
+  return Number(value).toFixed(GATE_DECIMALS[id]);
+}
+
+function setBehaviorSlider(id, value, markChanged = true) {
+  const slider = $(id);
+  const valEl = $(id + 'Val');
+  if (!slider || !valEl) return;
+  slider.value = value;
+  valEl.textContent = formatBehaviorValue(id, value);
+  valEl.className = 'slider-value';
+  if (markChanged && !ACTION_CHECK_SLIDERS.has(id)) {
+    colorSliderValue(id, Number(value), valEl);
+  }
+}
+
+function syncBehaviorSliders(data) {
+  Object.entries(GATE_OVERRIDE_KEYS).forEach(([id, key]) => {
+    if (data[key] === undefined) return;
+    let value = data[key];
+    if (ACTION_CHECK_SLIDERS.has(id)) value = normalizeActionCheckLevel(value);
+    setBehaviorSlider(id, value);
+    if (id === 'sliderVAD') $('vadThresholdVal').textContent = Number(value).toFixed(2);
+    if (id === 'sliderBargeIn') $('bargeThresholdVal').textContent = Number(value).toFixed(1);
+  });
+}
+
+function normalizeActionCheckLevel(value) {
+  if (typeof value === 'string') {
+    const lowered = value.toLowerCase();
+    if (lowered === 'balanced') return 1;
+    if (lowered === 'strict') return 2;
+    return 0;
+  }
+  return Math.max(0, Math.min(2, Number(value) || 0));
+}
 
 function initGateSliders() {
   Object.keys(GATE_DEFAULTS).forEach(id => {
@@ -3297,7 +3487,7 @@ function initGateSliders() {
 
     slider.addEventListener('input', () => {
       const v = parseFloat(slider.value);
-      valEl.textContent = v.toFixed(GATE_DECIMALS[id]);
+      valEl.textContent = formatBehaviorValue(id, v);
       colorSliderValue(id, v, valEl);
     });
 
@@ -3305,7 +3495,7 @@ function initGateSliders() {
     slider.addEventListener('change', () => {
       const v = parseFloat(slider.value);
       sendOverride(GATE_OVERRIDE_KEYS[id], v);
-      addSystemLog(`Gate: ${GATE_OVERRIDE_KEYS[id]} = ${v}`);
+      addSystemLog(`Behavior: ${GATE_OVERRIDE_KEYS[id]} = ${formatBehaviorValue(id, v)}`);
       if (id === 'sliderVAD') $('vadThresholdVal').textContent = v.toFixed(2);
       if (id === 'sliderBargeIn') $('bargeThresholdVal').textContent = v.toFixed(1);
     });
@@ -3317,18 +3507,22 @@ function initGateSliders() {
       const valEl = $(id + 'Val');
       if (!slider || !valEl) return;
       const def = GATE_DEFAULTS[id];
-      slider.value = def;
-      valEl.textContent = def.toFixed(GATE_DECIMALS[id]);
-      valEl.className = 'slider-value';
+      setBehaviorSlider(id, def, false);
       sendOverride(GATE_OVERRIDE_KEYS[id], def);
     });
     $('vadThresholdVal').textContent = '0.20';
     $('bargeThresholdVal').textContent = '3.0';
-    addSystemLog('All gates reset to defaults');
+    addSystemLog('Behavior tuning reset to defaults');
   });
 }
 
 function colorSliderValue(id, val, el) {
+  if (ACTION_CHECK_SLIDERS.has(id)) {
+    el.className = 'slider-value';
+    if (Number(val) === 1) el.classList.add('warn');
+    if (Number(val) === 2) el.classList.add('danger');
+    return;
+  }
   const def = GATE_DEFAULTS[id];
   if (def === 0) { el.className = 'slider-value'; return; }
   const pctOff = Math.abs(val - def) / def;

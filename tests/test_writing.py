@@ -31,9 +31,11 @@ from tools.writing import (
     EMAIL_DIR,
     BLOG_DIR,
     NOTES_DIR,
+    DOCS_DIR,
     EXPORTS_DIR,
     draft_email,
     draft_blog,
+    draft_document,
     save_note,
     get_latest_draft,
     list_drafts,
@@ -42,10 +44,12 @@ from tools.writing import (
     export_to_csv,
     parse_email_request,
     parse_blog_request,
+    parse_document_request,
     parse_edit_instruction,
     parse_spreadsheet_request,
     build_email_prompt,
     build_blog_prompt,
+    build_document_prompt,
     build_edit_prompt,
     build_note_expansion_prompt,
     ensure_workspace,
@@ -137,6 +141,16 @@ class TestBlogDraft:
         draft = draft_blog(title="Test Post", body="Body text")
         assert "blog_" in draft.path.name
         assert draft.path.suffix == ".md"
+
+
+class TestDocumentDraft:
+    def test_draft_document_creates_file(self):
+        draft = draft_document(title="Dinner plans", body="Let's meet at seven.", doc_type="letter", recipient="Paul")
+        assert draft.path.exists()
+        assert draft.path.parent.name == "docs"
+        assert "Type: Letter" in draft.content
+        assert "To: Paul" in draft.content
+        assert "Dinner plans" in draft.content
 
 
 class TestNotes:
@@ -303,6 +317,14 @@ class TestBlogParsing:
         assert "alaska" in result["title"].lower()
 
 
+class TestDocumentParsing:
+    def test_parse_letter(self):
+        result = parse_document_request("write a letter to Paul about the photo drives")
+        assert result["doc_type"] == "letter"
+        assert result["recipient"] == "Paul"
+        assert "photo drives" in result["title"].lower()
+
+
 class TestEditParsing:
     def test_parse_make_shorter(self):
         result = parse_edit_instruction("make it shorter")
@@ -340,6 +362,12 @@ class TestPromptBuilders:
         prompt = build_blog_prompt("The Night at the Cat Club")
         assert "Cat Club" in prompt
         assert "blog" in prompt.lower()
+
+    def test_document_prompt(self):
+        prompt = build_document_prompt("Dinner plans", doc_type="letter", recipient="Paul")
+        assert "Dinner plans" in prompt
+        assert "Paul" in prompt
+        assert "letter" in prompt.lower()
 
     def test_edit_prompt(self):
         prompt = build_edit_prompt("Original text here", "make it shorter")
@@ -380,6 +408,10 @@ class TestIntentRouting:
         result = self.parser.parse("draft a blog about the night at the Cat Club")
         assert result.intent_type == self.IntentType.WRITE_BLOG
 
+    def test_write_letter_intent(self):
+        result = self.parser.parse("write a letter to Paul about the photo drives")
+        assert result.intent_type == self.IntentType.WRITE_DOCUMENT
+
     def test_take_note_intent(self):
         result = self.parser.parse("take a note remember to call the studio")
         assert result.intent_type == self.IntentType.WRITE_NOTE
@@ -390,6 +422,10 @@ class TestIntentRouting:
 
     def test_jot_down_intent(self):
         result = self.parser.parse("jot down that the delivery is Thursday")
+        assert result.intent_type == self.IntentType.WRITE_NOTE
+
+    def test_write_this_down_intent(self):
+        result = self.parser.parse("write this down the blue folder is in the office")
         assert result.intent_type == self.IntentType.WRITE_NOTE
 
     def test_edit_draft_intent(self):

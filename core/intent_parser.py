@@ -679,6 +679,7 @@ class IntentType(Enum):
     # Writing & productivity intents
     WRITE_EMAIL = "write_email"
     WRITE_BLOG = "write_blog"
+    WRITE_DOCUMENT = "write_document"
     WRITE_NOTE = "write_note"
     EDIT_DRAFT = "edit_draft"
     LIST_DRAFTS = "list_drafts"
@@ -1507,10 +1508,20 @@ class RuleBasedIntentParser(IntentParser):
                 serious_mode=serious_mode,
             )
 
+        # WRITE_DOCUMENT: "write a letter…", "draft a document…"
+        if re.search(r"\b(write|draft|compose|create)\b.*\b(letter|document|doc)\b", text_lower):
+            return Intent(
+                intent_type=IntentType.WRITE_DOCUMENT,
+                confidence=0.96,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
         # WRITE_NOTE: "take a note", "save a note", "note that…", "jot down…"
-        if re.search(r"\b(take|save|make|jot|write)\b.*\b(note|memo)\b", text_lower) or \
+        if re.search(r"\b(take|save|make|jot|write|capture)\b.*\b(note|memo|idea|thought)\b", text_lower) or \
            re.search(r"^note\s+that\b", text_lower) or \
-           re.search(r"\bjot\s+(this\s+)?down\b", text_lower):
+           re.search(r"\bjot\s+(this\s+)?down\b", text_lower) or \
+           re.search(r"^write\s+(this\s+)?down\b", text_lower):
             return Intent(
                 intent_type=IntentType.WRITE_NOTE,
                 confidence=0.95,

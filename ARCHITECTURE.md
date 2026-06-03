@@ -1,10 +1,13 @@
 # ARGO Architecture
 
-## Current Runtime Summary (Mar 2026)
+## Current Runtime Summary (Jun 2026)
 
-The current runtime is **VAD-only** and runs from main.py with dual UI surfaces.
+The current runtime runs from `main.py` with dual UI surfaces and two voice paths:
+a smooth LiveKit/OpenAI Realtime conversation path, plus the classic local
+STT/LLM/TTS pipeline for command/control fallback.
 
-- Always-listening VAD pipeline (no wake word)
+- **Smooth voice path**: browser mic -> LiveKit WebRTC -> OpenAI Realtime -> LiveKit audio
+- **Classic VAD path**: always-listening local pipeline (no wake word)
 - **Multi-engine STT**: OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime
 - **Multi-engine TTS**: OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime
 - OpenAI GPT-4o-mini LLM with streaming responses
@@ -14,8 +17,24 @@ The current runtime is **VAD-only** and runs from main.py with dual UI surfaces.
 - Local music index (data/music_index.json) with deterministic resolution
 - Optional OpenRGB lighting control via command executor
 - Self-diagnostics and assisted recovery (Phase 1 & 2)
-- Security-hardened: localhost-only binding, no exposed secrets
+- Configurable local/LAN HTTP and WebSocket binds for same-network phone/iPad testing
 - Durable memory backend: SQLite by default, optional PostgreSQL for v1.8.0 long-term memory experiments
+- Cortana portrait fallback in `/v2`; legacy Hedra Realtime is disabled unless explicitly tested
+- Speechmatics speaker-identity readiness is exposed as an opt-in status path
+
+### Smooth Voice Architecture (v1.9.0)
+
+The smooth path is intentionally separate from the classic command loop:
+
+1. The browser joins `argo-live` over LiveKit and publishes microphone audio.
+2. `livekit_realtime_agent.py` joins as `argo-realtime`.
+3. OpenAI Realtime owns listening, speaking, interruption, and short-turn response timing.
+4. `/api/livekit-status` reports room/model/voice, avatar fallback state, and speaker-ID readiness.
+5. `/api/mobile-access` reports the same-network dashboard URL for iPad/phone testing.
+
+Speaker identity is prepared as a Speechmatics-based opt-in layer. It is not
+forced into the OpenAI Realtime session because ARGO's first priority is keeping
+the realtime back-and-forth smooth and interruptible.
 
 ### Frontend V2 Architecture
 

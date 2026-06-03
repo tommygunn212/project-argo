@@ -1,22 +1,27 @@
-# ARGO — Local Voice AI (VAD-Only)
+# ARGO — Local Voice AI
 
-**ARGO** is a fully local, always-listening voice assistant with a first‑class UI debugger and a comprehensive control surface. It runs entirely on your machine and streams live status + logs to the dashboard.
+**ARGO** is a local-first voice assistant with a first-class UI debugger, a smooth LiveKit/OpenAI Realtime conversation path, and a comprehensive control surface. It runs on your machine and streams live status + logs to the dashboard.
 
 **Key points**
-- **Wake word removed by design** — ARGO is VAD‑only (always listening).
+- **Smooth voice mode** — LiveKit WebRTC + OpenAI Realtime is the preferred fast back-and-forth conversation path.
+- **Classic VAD fallback** — the local STT/LLM/TTS pipeline remains available for commands, diagnostics, and fallback speech.
 - **Dual UI surfaces** — original debugger (`/`) and full-featured Frontend V2 (`/v2`).
 - **Multi-engine STT** — OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime.
 - **Multi-engine TTS** — OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime.
+- **Cortana portrait fallback** — `/v2` uses the local Cortana/Hedra portrait asset while realtime avatar providers are evaluated.
+- **Speaker identity groundwork** — Speechmatics speaker-ID readiness is exposed in status for future "who is who" voice detection.
+- **Phone/iPad ready status** — `/api/mobile-access` reports the same-network URL for testing ARGO from another device.
 - **14 gate tuning sliders** — adjust VAD, barge-in, confidence, tokens, and verbosity in real time.
 - **Deterministic system facts** — system health/specs never call the LLM.
 - **Natural language flexibility** — supports colloquial phrasing for core commands.
 - **Self-diagnostics** — ARGO can check its own health and propose fixes.
-- **Security hardened** — localhost-only, no exposed secrets.
+- **Security aware** — binds are configurable; local dev can serve the dashboard to the LAN for phone/iPad testing.
 - **Memory backend choice** — SQLite by default, optional PostgreSQL backend for durable long-term memory experiments.
 
-**Web UI (Classic):** http://localhost:8000  
-**Web UI (V2):** http://localhost:8000/v2  
+**Web UI (Classic):** http://localhost:8000
+**Web UI (V2):** http://localhost:8000/v2
 **WebSocket:** ws://localhost:8001/ws
+**Mobile/iPad status:** http://localhost:8000/api/mobile-access
 
 **Version:** see [core/version.py](core/version.py)
 
@@ -36,12 +41,14 @@
 ## Architecture Overview
 
 ```
-Audio → VAD → STT → LLM → TTS
-              ↘︎ Memory backend (SQLite/PostgreSQL)
-              ↘︎ WebSocket (live status + logs) → UI (v1 + v2)
+Smooth voice: Browser mic → LiveKit WebRTC → OpenAI Realtime → LiveKit audio
+Classic path: Audio → VAD → STT → LLM → TTS
+                         ↘︎ Memory backend (SQLite/PostgreSQL/Mem0)
+                         ↘︎ WebSocket (live status + logs) → UI (v1 + v2)
 ```
 
 - Audio frames are continuously monitored by **VAD**.
+- Smooth voice mode lets one realtime session own listening, speaking, and interruption.
 - Detected speech is transcribed by **STT** (OpenAI Cloud, Faster Whisper, or Azure).
 - Prompts are sent to **GPT-4o-mini** (LLM) with streaming.
 - Durable explicit memories are stored through `core.memory_store` using SQLite by default or PostgreSQL when configured.
@@ -87,11 +94,17 @@ PostgreSQL is currently used for explicit memory records and the new conversatio
 
 ### Run ARGO
 ```powershell
+.\scripts\start_livekit_realtime.ps1
 python main.py
 ```
 
 ### Open the UI Debugger
 - http://localhost:8000
+- http://localhost:8000/v2
+
+### Test From Phone Or iPad
+
+Start ARGO, open `http://localhost:8000/api/mobile-access`, then use the reported `http_url` from a device on the same network. The browser must allow microphone access for **Start Smooth Voice**.
 
 ---
 

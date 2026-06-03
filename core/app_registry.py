@@ -81,6 +81,15 @@ APP_REGISTRY = {
 }
 
 
+def get_supported_app_displays() -> list[str]:
+    displays = []
+    for meta in APP_REGISTRY.values():
+        display = meta.get("display")
+        if display:
+            displays.append(str(display))
+    return displays
+
+
 def resolve_app_name(text: str) -> str | None:
     if not text:
         return None

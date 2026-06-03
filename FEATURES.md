@@ -5,8 +5,9 @@
 This document tracks all current and planned features for ARGO, the neural network command diagnostic system. It is canonical and should be referenced for all self-knowledge and deterministic responses about ARGO's capabilities.
 
 
-### Current Features (Mar 2026)
-- Always-listening VAD pipeline
+### Current Features (Jun 2026)
+- **Smooth voice mode**: LiveKit WebRTC plus OpenAI Realtime for fast back-and-forth conversation and clean interruption
+- Classic always-listening VAD pipeline for fallback speech and command/control work
 - Whisper STT integration
 - Ollama LLM (neural network) for response generation
 - Piper TTS for audio output
@@ -16,7 +17,11 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - **Multi-engine TTS switching**: OpenAI TTS, Edge TTS, Azure Neural — selectable at runtime
 - **Frontend V2** (`/v2`): Full-featured cyberpunk UI with 6 tabs (Dashboard, Chat, Voice, Home, Tools, System)
 - **14 gate tuning sliders**: Real-time adjustment of VAD, barge-in, confidence, token, and verbosity gates
+- **Action check tuning**: Loose/Balanced/Strict controls for behavior gates
 - **Engine configuration panel**: Switch STT/TTS engine, model, and voice from the UI
+- **Cortana portrait fallback**: Local dashboard/voice portrait while current realtime avatar providers are evaluated
+- **Mobile/iPad access status**: `/api/mobile-access` reports the same-network dashboard URL
+- **Speaker identity readiness**: Speechmatics plugin/key status is visible for future "who is who" detection
 - Deterministic system health and hardware queries
 - Local music index and deterministic music resolution
 - OpenRGB lighting control (optional)
@@ -48,6 +53,8 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - More deterministic system health and diagnostics
 - Expanded music/media control
 - Additional language and TTS/STT options
+- Current LiveKit avatar provider for animated facial output
+- Speechmatics speaker-ID sidecar with stored voice/name mappings
 - ...and over 200 more features in the roadmap
 
 ### Terminology

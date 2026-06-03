@@ -122,6 +122,23 @@ class ConversationBuffer:
             lines.append(f"{turn.role}: {turn.content}")
         return "\n".join(lines)
 
+    def as_messages(self, max_exchanges: int = 3) -> List[dict]:
+        """Return conversation history as OpenAI-format message dicts.
+
+        Maps buffer roles to OpenAI roles:
+          User -> "user", Assistant/Argo -> "assistant"
+        """
+        if not self._enabled or not self._turns:
+            return []
+        turns = list(self._turns)
+        if max_exchanges > 0 and len(turns) > max_exchanges * 2:
+            turns = turns[-(max_exchanges * 2):]
+        messages: List[dict] = []
+        for turn in turns:
+            role = "assistant" if turn.role.lower() in ("assistant", "argo") else "user"
+            messages.append({"role": role, "content": turn.content})
+        return messages
+
     def size(self) -> int:
         return len(self._turns)
     

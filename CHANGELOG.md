@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.9.0 — LiveKit Realtime Voice + Cortana Companion Groundwork (2026-06-03)
+
+### Added
+- LiveKit/OpenAI Realtime smooth voice path as the preferred fast conversation mode.
+- Local Cortana portrait fallback served through `/v2-assets/cortana_portrait_smirky.png`.
+- `/api/livekit-status` now reports avatar fallback state and Speechmatics speaker-ID readiness.
+- `/api/mobile-access` reports the same-network dashboard URL for phone/iPad testing.
+- LiveKit Speechmatics, Silero, turn detector, and noise-cancellation plugins in requirements for the speaker-ID experiment path.
+
+### Changed
+- Realtime interruption defaults are tuned for quick back-and-forth conversation.
+- Dashboard shows Speaker ID readiness and iPad URL.
+- Version normalized to `1.9.0` across `VERSION` and `core/version.py`.
+
+### Notes
+- Legacy Hedra Realtime remains disabled by default because the provider returned shutdown errors for the old realtime service.
+- Speaker identity is prepared as an opt-in path and is not forced into the OpenAI Realtime session.
+
+---
+
 ## v1.8.0 — PostgreSQL Memory Backend (2026-05-10)
 
 ### Added

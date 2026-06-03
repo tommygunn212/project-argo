@@ -1,6 +1,6 @@
-# ARGO Documentation Index (v1.0.0-voice-core)
+# ARGO Documentation Index (v1.9.0-livekit-realtime-voice)
 
-Complete navigation for ARGO system documentation. Core memory/backend documentation current as of May 10, 2026.
+Complete navigation for ARGO system documentation. Core voice/avatar/mobile documentation current as of June 3, 2026.
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
@@ -15,6 +15,8 @@ Complete navigation for ARGO system documentation. Core memory/backend documenta
 3. **[← Release Notes](../RELEASE_NOTES.md)** — Why v1.0.0-voice-core matters, guarantees
 4. **[← Getting Started](../GETTING_STARTED.md)** — Installation and first run
 5. **[PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md)** — Optional v1.8.0 Postgres backend and migration guide
+6. **[LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md)** — v1.9.0 smooth voice, mobile access, speaker-ID readiness
+7. **[Hedra / LiveKit Avatar Notes](HEDRA_AVATAR.md)** — Cortana portrait fallback and legacy Hedra status
 
 ### For Developers Modifying Code
 
@@ -337,7 +339,7 @@ Must include:
 
 **Want architecture details?** [Phase 7B State Machine](../PHASE_7B_COMPLETE.md) → [Phase 7B-2 STOP](../PHASE_7B-2_COMPLETE.md) → [Phase 7B-3 Parsing](../PHASE_7B-3_COMPLETE.md)
 
-**Curious about voice?** [Phase 7A-2 Streaming](../PHASE_7A2_STREAMING_COMPLETE.md) → [Option B Results](../OPTION_B_BURNIN_REPORT.md) → [Voice Mode Design](../PHASE_7B_COMPLETE.md)
+**Curious about voice?** [LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md) → [Hedra / LiveKit Avatar Notes](HEDRA_AVATAR.md) → [Voice Mode Design](../PHASE_7B_COMPLETE.md)
 
 **Need complete scope?** [Master Feature List](specs/master-feature-list.md)
 
