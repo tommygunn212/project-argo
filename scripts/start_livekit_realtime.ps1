@@ -2,7 +2,9 @@
 param(
     [string]$LiveKitUrl = "ws://127.0.0.1:7880",
     [string]$ApiKey = "devkey",
-    [string]$ApiSecret = "devsecretdevsecretdevsecretdevsecretdevsecret"
+    [string]$ApiSecret = "devsecretdevsecretdevsecretdevsecretdevsecret",
+    [string]$Room = "argo-live",
+    [string]$AgentIdentity = "argo-realtime"
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,7 +98,7 @@ if (-not $agent) {
     $agentErr = Join-Path $LogDir "argo-realtime-agent.err.log"
     Start-Process `
         -FilePath $Python `
-        -ArgumentList @($AgentFile, "start", "--log-level", "info") `
+        -ArgumentList @($AgentFile, "connect", "--room", $Room, "--participant-identity", $AgentIdentity, "--log-level", "info") `
         -WorkingDirectory $Root `
         -RedirectStandardOutput $agentOut `
         -RedirectStandardError $agentErr `

@@ -2001,6 +2001,11 @@ let livekitStarting = false;
 let realtimeAvatarMeter = null;
 let realtimeAvatarVideoEls = [];
 let avatarAudioLevel = 0;
+const REALTIME_TAB_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const REALTIME_LOCK_KEY = 'argo.realtime.activeTab';
+const REALTIME_LOCK_TTL_MS = 15000;
+let realtimeLockTimer = null;
+let realtimeBroadcast = null;
 let livekitMeta = {
   model: 'gpt-realtime',
   voice: 'marin',
@@ -2019,6 +2024,18 @@ const LIVEKIT_CLIENT_SCRIPT_URLS = [
   argoUrl('/v2-assets/livekit-client.umd.js'),
   'https://cdn.jsdelivr.net/npm/livekit-client@2.18.9/dist/livekit-client.umd.js',
 ];
+
+if ('BroadcastChannel' in window) {
+  realtimeBroadcast = new BroadcastChannel('argo-realtime-voice');
+  realtimeBroadcast.onmessage = event => {
+    const msg = event.data || {};
+    if (msg.tabId === REALTIME_TAB_ID) return;
+    if (msg.type === 'realtime-starting' && livekitRoom) {
+      addSystemLog('Another ARGO tab started smooth voice; this tab disconnected');
+      stopRealtimeVoice({ resumeClassic: false });
+    }
+  };
+}
 
 // ── DOM refs ──
 const $ = id => document.getElementById(id);
@@ -2690,6 +2707,10 @@ async function startRealtimeVoice() {
 
   try {
     logRealtimeClientEvent('start_requested');
+    step = 'single_tab_lock';
+    claimRealtimeTabLock();
+    realtimeBroadcast?.postMessage({ type: 'realtime-starting', tabId: REALTIME_TAB_ID });
+
     step = 'pause_classic';
     await pauseClassicForRealtime();
     addSystemLog('Classic listener paused for realtime voice');
@@ -2783,22 +2804,27 @@ function attachLiveKitHandlers(room, lk) {
     logRealtimeClientEvent('participant_connected', { identity: participant.identity });
   });
 
-  room.on(lk.RoomEvent.TrackSubscribed, (track) => {
+  room.on(lk.RoomEvent.TrackSubscribed, (track, publication, participant) => {
     const isAudio = track.kind === 'audio' || track.kind === lk.Track.Kind.Audio;
     const isVideo = track.kind === 'video' || track.kind === lk.Track.Kind.Video;
+    const identity = participant?.identity || '';
     if (isVideo) {
       showRealtimeAvatarVideo(track);
-      logRealtimeClientEvent('remote_video_subscribed');
+      logRealtimeClientEvent('remote_video_subscribed', { identity });
       return;
     }
     if (!isAudio) return;
+    if (!isRealtimeAgentParticipant(identity)) {
+      logRealtimeClientEvent('remote_audio_ignored', { identity: identity || 'unknown' });
+      return;
+    }
     const audioEl = track.attach();
     audioEl.autoplay = true;
     audioEl.dataset.livekitAudio = 'true';
     audioEl.style.display = 'none';
     document.body.appendChild(audioEl);
     setupRealtimeAvatarMeter(track);
-    logRealtimeClientEvent('remote_audio_subscribed');
+    logRealtimeClientEvent('remote_audio_subscribed', { identity });
   });
 
   room.on(lk.RoomEvent.TrackUnsubscribed, (track) => {
@@ -2830,6 +2856,7 @@ function attachLiveKitHandlers(room, lk) {
 }
 
 function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}) {
+  releaseRealtimeTabLock();
   document.querySelectorAll('[data-livekit-audio="true"]').forEach(el => el.remove());
   stopRealtimeAvatarMeter();
   clearRealtimeAvatarVideo();
@@ -2851,6 +2878,52 @@ function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}
     addSystemLog('Classic listener resumed');
   }
 }
+
+function isRealtimeAgentParticipant(identity) {
+  const normalized = String(identity || '').toLowerCase();
+  if (!normalized) return true;
+  if (normalized.startsWith('tommy-browser-')) return false;
+  return normalized.includes('argo') || normalized.includes('agent') || normalized.includes('avatar');
+}
+
+function claimRealtimeTabLock() {
+  const now = Date.now();
+  const existing = readRealtimeTabLock();
+  if (existing && existing.tabId !== REALTIME_TAB_ID && now - existing.ts < REALTIME_LOCK_TTL_MS) {
+    throw new Error('Smooth voice is already active in another ARGO browser tab. Stop it there or close the extra tab, then try again.');
+  }
+  writeRealtimeTabLock();
+  if (realtimeLockTimer) clearInterval(realtimeLockTimer);
+  realtimeLockTimer = setInterval(writeRealtimeTabLock, 5000);
+}
+
+function readRealtimeTabLock() {
+  try {
+    const raw = localStorage.getItem(REALTIME_LOCK_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+function writeRealtimeTabLock() {
+  try {
+    localStorage.setItem(REALTIME_LOCK_KEY, JSON.stringify({ tabId: REALTIME_TAB_ID, ts: Date.now() }));
+  } catch(e) {}
+}
+
+function releaseRealtimeTabLock() {
+  if (realtimeLockTimer) {
+    clearInterval(realtimeLockTimer);
+    realtimeLockTimer = null;
+  }
+  const existing = readRealtimeTabLock();
+  if (!existing || existing.tabId === REALTIME_TAB_ID || Date.now() - existing.ts > REALTIME_LOCK_TTL_MS) {
+    try { localStorage.removeItem(REALTIME_LOCK_KEY); } catch(e) {}
+  }
+}
+
+window.addEventListener('pagehide', releaseRealtimeTabLock);
 
 function stopRealtimeVoice({ resumeClassic = false } = {}) {
   setRealtimeError('');
