@@ -2,9 +2,7 @@
 param(
     [string]$LiveKitUrl = "ws://127.0.0.1:7880",
     [string]$ApiKey = "devkey",
-    [string]$ApiSecret = "devsecretdevsecretdevsecretdevsecretdevsecret",
-    [string]$Room = "argo-live",
-    [string]$AgentIdentity = "argo-realtime"
+    [string]$ApiSecret = "devsecretdevsecretdevsecretdevsecretdevsecret"
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +53,12 @@ function Test-TcpPort {
 
 function Get-AgentProcess {
     Get-CimInstance Win32_Process |
-        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($AgentFile) }
+        Where-Object {
+            $_.ExecutablePath -and
+            [System.IO.Path]::GetFileName($_.ExecutablePath).Equals("python.exe", [System.StringComparison]::OrdinalIgnoreCase) -and
+            $_.CommandLine -and
+            ($_.CommandLine.Contains($AgentFile) -or $_.CommandLine.Contains("livekit_realtime_agent.py"))
+        }
 }
 
 if (-not (Test-Path $Python)) {
@@ -98,7 +101,7 @@ if (-not $agent) {
     $agentErr = Join-Path $LogDir "argo-realtime-agent.err.log"
     Start-Process `
         -FilePath $Python `
-        -ArgumentList @($AgentFile, "connect", "--room", $Room, "--participant-identity", $AgentIdentity, "--log-level", "info") `
+        -ArgumentList @($AgentFile, "start", "--log-level", "info") `
         -WorkingDirectory $Root `
         -RedirectStandardOutput $agentOut `
         -RedirectStandardError $agentErr `

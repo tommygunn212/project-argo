@@ -12,6 +12,7 @@ import os
 import re
 import socket
 import uuid
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 from importlib import metadata
@@ -159,6 +160,12 @@ def build_livekit_token_response(
         )
 
     token = token_builder.to_jwt()
+    try:
+        dispatch_id = ensure_livekit_agent_dispatch(room_name=room_name, config=cfg)
+    except Exception:
+        # Some local LiveKit builds expose worker dispatch through room config
+        # but return 503 from the agent dispatch API. Do not block browser join.
+        dispatch_id = ""
 
     return {
         "enabled": cfg.enabled,
@@ -168,10 +175,52 @@ def build_livekit_token_response(
         "identity": participant_identity,
         "token": token,
         "agent_name": cfg.agent_name,
+        "agent_dispatch_id": dispatch_id,
         "model": cfg.model,
         "voice": cfg.voice,
         "ttl_minutes": ttl_minutes,
     }
+
+
+def ensure_livekit_agent_dispatch(
+    *,
+    room_name: str | None = None,
+    config: LiveKitRealtimeConfig | None = None,
+) -> str:
+    """Ensure the local ARGO realtime worker is dispatched into the room."""
+
+    cfg = config or get_livekit_realtime_config()
+    if not cfg.agent_name:
+        return ""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("LiveKit dispatch check skipped inside a running event loop")
+
+    async def _ensure() -> str:
+        from livekit import api
+
+        lk = api.LiveKitAPI(url=cfg.url, api_key=cfg.api_key, api_secret=cfg.api_secret)
+        try:
+            room = _clean_name(room_name or cfg.room) or cfg.room
+            existing = await lk.agent_dispatch.list_dispatch(room)
+            for dispatch in existing:
+                if dispatch.agent_name == cfg.agent_name:
+                    return dispatch.id
+            created = await lk.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    room=room,
+                    agent_name=cfg.agent_name,
+                    metadata="argo-realtime",
+                )
+            )
+            return created.id
+        finally:
+            await lk.aclose()
+
+    return asyncio.run(_ensure())
 
 
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
