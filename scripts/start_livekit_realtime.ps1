@@ -55,7 +55,10 @@ function Get-AgentProcess {
     Get-CimInstance Win32_Process |
         Where-Object {
             $_.ExecutablePath -and
-            [System.IO.Path]::GetFileName($_.ExecutablePath).Equals("python.exe", [System.StringComparison]::OrdinalIgnoreCase) -and
+            [System.IO.Path]::GetFullPath($_.ExecutablePath).Equals(
+                [System.IO.Path]::GetFullPath($Python),
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -and
             $_.CommandLine -and
             ($_.CommandLine.Contains($AgentFile) -or $_.CommandLine.Contains("livekit_realtime_agent.py"))
         }

@@ -19,6 +19,7 @@ import threading
 import queue
 import logging
 import collections
+import time
 
 from core.audio_owner import get_audio_owner
 
@@ -73,7 +74,11 @@ class AudioManager:
         self.logger.info("[AUDIO] ================================")
         
         # Audio Data Queue
-        self.input_queue = queue.Queue()
+        self.input_queue = queue.Queue(maxsize=32)  # ~1 second, never unbounded
+        self.input_dropped_frames = 0
+        self.input_status_events = 0
+        self._last_input_report = 0.0
+        self._reported_input_counts = (0, 0)
         
         # Ring Buffer for Pre-roll
         maxlen = int(PRE_ROLL_SECONDS * INPUT_SAMPLE_RATE / BLOCK_SIZE)
@@ -258,13 +263,32 @@ class AudioManager:
     def _audio_callback(self, indata, frames, time_info, status):
         """Audio callback (runs in background thread)."""
         if status:
-            pass # Ignore underflows/overflows in logs to reduce noise
+            self.input_status_events += 1
         
         data = indata.copy()
-        self.input_queue.put(data)
+        try:
+            self.input_queue.put_nowait(data)
+        except queue.Full:
+            # Keep current audio, not seconds-old frames. Never block PortAudio.
+            try:
+                self.input_queue.get_nowait()
+                self.input_dropped_frames += 1
+            except queue.Empty:
+                pass
+            try:
+                self.input_queue.put_nowait(data)
+            except queue.Full:
+                self.input_dropped_frames += 1
 
     def read_frame(self, timeout: float = 1.0):
         """Blocking read for main loop. Returns 512 samples."""
+        counts = (self.input_dropped_frames, self.input_status_events)
+        now = time.monotonic()
+        if counts != self._reported_input_counts and now - self._last_input_report >= 1:
+            self.logger.warning("[AUDIO] Input discontinuity: dropped_frames=%d status_events=%d", *counts)
+            self._reported_input_counts = counts
+            self._last_input_report = now
+            self.ring_buffer.clear()
         try:
             frame = self.input_queue.get(timeout=timeout)
             self.ring_buffer.append(frame)

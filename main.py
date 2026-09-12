@@ -53,6 +53,7 @@ from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.instrumentation import log_event
+from core.sound_cues import get_sound_cue_player
 from system_profile import get_system_profile, get_gpu_profile
 from core.version import CURRENT_VERSION, CURRENT_MILESTONE
 from core.config import (
@@ -126,6 +127,7 @@ logger.info("[SYSTEM] Hardware profile loaded")
 # ============================================================================
 # Hardware Config
 config = get_config()
+sound_cues = get_sound_cue_player(config)
 AUDIO_INPUT_INDEX = config.get("audio.input_device_index")
 AUDIO_OUTPUT_INDEX = config.get("audio.output_device_index")
 
@@ -167,14 +169,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode())
 
-    def _read_json_body(self):
+    def _read_json_body(self, max_bytes=65536):
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
         except ValueError:
             length = 0
         if length <= 0:
             return {}
-        if length > 65536:
+        if length > max_bytes:
             raise ValueError("Request body too large")
         raw = self.rfile.read(length)
         if not raw:
@@ -232,6 +234,27 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
             return
 
+        if path == "/api/vision/analyze-upload":
+            try:
+                body = self._read_json_body(max_bytes=10 * 1024 * 1024)
+                if not isinstance(body, dict):
+                    self._send_json({"error": "Expected JSON body"}, status=400)
+                    return
+                image_data = str(body.get("image_data") or "")
+                prompt = str(body.get("prompt") or "Describe this image for me.").strip()
+                if not prompt:
+                    prompt = "Describe this image for me."
+                from tools.vision import analyze_uploaded_image
+
+                answer = analyze_uploaded_image(image_data, user_prompt=prompt[:1000])
+                self._send_json({"ok": True, "answer": answer})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            except Exception as exc:
+                logger.exception("[VISION] phone image analysis failed")
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
         self._send_json({"error": "Not found"}, status=404)
 
     def do_GET(self):
@@ -282,6 +305,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 'livekit-client.umd.js': ('vendor', 'application/javascript; charset=utf-8'),
                 'argo-hedra-default.png': ('assets', 'image/png'),
                 'cortana_portrait_smirky.png': ('assets', 'image/png'),
+                'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
+                'cortana_hedra_avatar_test.mp4': ('assets', 'video/mp4'),
             }
             if asset_name not in allowed_assets:
                 self.send_response(404)
@@ -314,14 +339,15 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 content = (Path(__file__).parent / 'index.html').read_bytes()
             self.wfile.write(content)
-        elif path == '/avatar-test':
+        elif path in ('/avatar-test', '/cortana-preview'):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
             self.end_headers()
-            content = (Path(__file__).parent / 'frontend-v2' / 'avatar-test.html').read_bytes()
+            preview_file = 'cortana-preview.html' if path == '/cortana-preview' else 'avatar-test.html'
+            content = (Path(__file__).parent / 'frontend-v2' / preview_file).read_bytes()
             self.wfile.write(content)
         elif path.startswith('/v2') or path.startswith('/v3'):
             self.send_response(200)
@@ -435,6 +461,10 @@ def _run_noise_calibration():
 def _interrupt_current_response(reason: str, target_state: str = "LISTENING", clear_buffers: bool = True):
     """Shared UI/audio interrupt path for barge-in, stop, restart, and reset."""
     interaction_id = getattr(pipeline_ref, "current_interaction_id", "") if pipeline_ref else ""
+    try:
+        sound_cues.stop_active_cue(reason, interaction_id=interaction_id)
+    except Exception:
+        pass
     if pipeline_ref and hasattr(pipeline_ref, "interrupt_current_response"):
         try:
             pipeline_ref.interrupt_current_response(
@@ -991,6 +1021,7 @@ def main_loop():
                 stage="vad",
                 interaction_id=current_interaction_id,
             )
+            sound_cues.set_capture_active(True)
             is_recording = True
             silence_counter = 0
             voiced_ms_accumulator = 0
@@ -1027,6 +1058,7 @@ def main_loop():
             # Reset state to listen to new command
             silence_counter = 0
             if not is_recording:
+                sound_cues.set_capture_active(True)
                 is_recording = True
                 preroll = audio.get_preroll()
                 speech_buffer = [preroll] if len(preroll) > 0 else []
@@ -1050,6 +1082,8 @@ def main_loop():
                 is_recording = False
                 silence_counter = 0
                 log_event("VAD_END", stage="vad", interaction_id=current_interaction_id)
+                sound_cues.set_capture_active(False)
+                sound_cues.play("listening_end", interaction_id=current_interaction_id, block=True)
 
                 # Process Audio
                 if len(speech_buffer) > 0:
@@ -1083,23 +1117,19 @@ def main_loop():
                     else:
                         logger.warning(f"[Audio] Input too quiet/silent (peak: {peak:.4f}), ignoring")
                         audio.clear_buffers()
+                        sound_cues.play("error", interaction_id=current_interaction_id)
                         pipeline.transition_state("LISTENING", source="quiet_reject")
                         current_interaction_id = ""
                 else:
                     audio.clear_buffers()
+                    sound_cues.set_capture_active(False)
+                    sound_cues.play("error", interaction_id=current_interaction_id)
                     pipeline.transition_state("LISTENING", source="empty_reject")
                     current_interaction_id = ""
 
 if __name__ == "__main__":
-    # Pre-load whisper model BEFORE any async/threading to avoid native crashes
-    logger.info("Pre-loading Whisper model...")
-    try:
-        import whisper
-        _preloaded_whisper = whisper.load_model("small")
-        logger.info("Whisper model pre-loaded successfully")
-    except Exception as e:
-        logger.warning(f"Whisper pre-load failed: {e}")
-        _preloaded_whisper = None
+    # Engine selection/loading belongs to STTEngineManager. The former local
+    # Whisper preload was never used and also ran when cloud STT was selected.
     
     _start_main_loop_thread()
     

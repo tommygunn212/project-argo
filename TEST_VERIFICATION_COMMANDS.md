@@ -9,7 +9,22 @@ This document reflects the memory safety system tests. Since then, ARGO added:
 - Time/day/date queries
 - Project-wide disclaimer (ARGO_DISCLAIMER.md)
 
-The test lists and counts here may be outdated. Re-run tests to refresh results.
+The historical test lists and counts below are retained for the memory-safety milestone and are not the v1.9.1 release baseline. Use the current focused command first; re-run the full suite before publishing an aggregate count.
+
+## Current v1.9.1 focused verification
+
+```powershell
+I:\argo\.venv\Scripts\python.exe -m pytest `
+  tests/test_voice_audit_repairs.py `
+  tests/test_llm_router.py `
+  tests/test_livekit_config.py `
+  tests/test_realtime_avatar_startup.py `
+  tests/test_sound_cues.py `
+  tests/test_vision_filesystem_planner.py -q
+node tests/test_cortana_avatar.cjs
+```
+
+**Observed on 2026-09-12:** 141 Python tests passed and 4 JavaScript checks passed. This validates the focused repair scope only; hardware microphone, audible-onset, and interruption checks remain manual.
 
 ## Quick Verification
 

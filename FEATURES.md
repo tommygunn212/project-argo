@@ -5,7 +5,7 @@
 This document tracks all current and planned features for ARGO, the neural network command diagnostic system. It is canonical and should be referenced for all self-knowledge and deterministic responses about ARGO's capabilities.
 
 
-### Current Features (Jun 2026)
+### Current Features (Sep 2026)
 - **Smooth voice mode**: LiveKit WebRTC plus OpenAI Realtime for fast back-and-forth conversation and clean interruption
 - Classic always-listening VAD pipeline for fallback speech and command/control work
 - Whisper STT integration
@@ -20,13 +20,16 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - **Action check tuning**: Loose/Balanced/Strict controls for behavior gates
 - **Engine configuration panel**: Switch STT/TTS engine, model, and voice from the UI
 - **Cortana portrait fallback**: Local dashboard/voice portrait while current realtime avatar providers are evaluated
+- **Local Cortana animation**: voice-driven mouth animation with a testable local preview; no retired Hedra realtime endpoint in the active dashboard path
+- **Phone Vision**: manual image upload/capture analysis from `/v2` Tools, including same-network phones
+- **Provider router**: config-driven OpenAI, Ollama, and Gemini selection with a deterministic fallback chain
 - **Mobile/iPad access status**: `/api/mobile-access` reports the same-network dashboard URL
 - **Speaker identity readiness**: Speechmatics plugin/key status is visible for future "who is who" detection
 - Deterministic system health and hardware queries
 - Local music index and deterministic music resolution
 - OpenRGB lighting control (optional)
 - State machine enforcement for all transitions
-- Barge-in and audio ownership logic (overhauled — both engines, buffer clearing, suppression guards)
+- Barge-in and audio ownership logic (overhauled — both engines, selected-device playback, buffer clearing, suppression guards)
 - Timeline event capture for replay/debug
 - Structured session and memory management
 - Durable memory backend selection: SQLite default, PostgreSQL optional
@@ -55,6 +58,7 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - Additional language and TTS/STT options
 - Current LiveKit avatar provider for animated facial output
 - Speechmatics speaker-ID sidecar with stored voice/name mappings
+- `/v2` controls for provider/model/fallback configuration and an explicit paid multi-model compare mode
 - ...and over 200 more features in the roadmap
 
 ### Terminology

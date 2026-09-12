@@ -9,6 +9,7 @@ import base64
 import io
 import logging
 import os
+import re
 from typing import Optional
 
 logger = logging.getLogger("argo.tools.vision")
@@ -60,6 +61,35 @@ def _encode_image_base64(png_bytes: bytes) -> str:
     """Encode raw PNG bytes to a base64 data-URI string for OpenAI vision."""
     b64 = base64.b64encode(png_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+
+def decode_image_data_url(data_url: str, *, max_bytes: int = 8 * 1024 * 1024) -> bytes:
+    """Decode a browser image data URL into raw bytes for vision analysis."""
+
+    if not isinstance(data_url, str) or not data_url.strip():
+        raise ValueError("Missing image data")
+
+    match = re.match(r"^data:image/[a-zA-Z0-9.+-]+;base64,(.+)$", data_url.strip(), re.DOTALL)
+    if not match:
+        raise ValueError("Expected an image data URL")
+
+    try:
+        raw = base64.b64decode(match.group(1), validate=True)
+    except Exception as exc:
+        raise ValueError("Invalid base64 image data") from exc
+
+    if not raw:
+        raise ValueError("Image data is empty")
+    if len(raw) > max_bytes:
+        raise ValueError(f"Image is too large; max {max_bytes} bytes")
+    return raw
+
+
+def analyze_uploaded_image(data_url: str, user_prompt: str = "Describe this image.") -> str:
+    """Analyze an uploaded browser/phone image data URL."""
+
+    image_bytes = decode_image_data_url(data_url)
+    return analyze_image(image_bytes, user_prompt=user_prompt)
 
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,9 @@
 Single source of truth for runtime versioning.
 """
 
-CURRENT_VERSION = "1.9.0"
-CURRENT_MILESTONE = "livekit-realtime-voice"
-CURRENT_DATE = "2026-06-03"
+CURRENT_VERSION = "1.9.1"
+CURRENT_MILESTONE = "voice-reliability-router"
+CURRENT_DATE = "2026-09-12"
 
 VERSION_HISTORY = [
     {
@@ -50,8 +50,13 @@ VERSION_HISTORY = [
     },
     {
         "version": "1.9.0",
-        "date": CURRENT_DATE,
+        "date": "2026-06-03",
         "notes": "LiveKit plus OpenAI Realtime voice path, Cortana portrait fallback, mobile access status, and Speechmatics speaker-ID readiness",
+    },
+    {
+        "version": "1.9.1",
+        "date": CURRENT_DATE,
+        "notes": "Voice reliability repairs, provider routing, phone vision, and local Cortana animation",
     },
 ]
 

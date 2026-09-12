@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.9.1 — Voice Reliability, Provider Routing, and Phone Vision (2026-09-12)
+
+### Added
+- Config-driven `LLMRouter` with OpenAI, Ollama, and Gemini providers; it supports one selected provider and a deterministic fallback chain.
+- Phone Vision upload analysis at `POST /api/vision/analyze-upload`, available from the `/v2` Tools panel.
+- Local Cortana voice-driven animation and a standalone preview page, replacing the retired Hedra realtime dependency in the dashboard path.
+- Auditable `scripts/create_code_request.py` helper for recording a coding request before it is opened in VS Code.
+
+### Changed
+- Classic OpenAI TTS now streams PCM through the AudioManager-selected output device and closes streaming responses reliably on completion, failure, or cancellation.
+- LLM and TTS clients are reused; latency-sensitive SDK paths have explicit idle timeouts and disabled automatic retries.
+- Sentence prefetch, bounded microphone capture, retrieval deadlines, STT cleanup, and continuous streaming resampling were hardened for bounded behavior under failure or overload.
+- `VERSION` and `core/version.py` now identify this checkpoint as `1.9.1`.
+
+### Verification and known limits
+- The focused regression suite passed: 141 Python tests and 4 JavaScript Cortana checks.
+- One hardware OpenAI TTS exercise reached the selected device's stream writer; it is not an end-to-end microphone latency claim.
+- Real microphone interruption, audible-onset measurement, output-underrun diagnosis, and endpointing/AEC evaluation remain open. See `docs/VOICE_AUDIT_FIX_STATUS_2026-09-12.md`.
+
+---
+
 ## v1.9.0 — LiveKit Realtime Voice + Cortana Companion Groundwork (2026-06-03)
 
 ### Added

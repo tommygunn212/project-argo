@@ -26,6 +26,11 @@ from core.config import get_config
 
 
 DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
+HEDRA_REALTIME_RETIRED = True
+HEDRA_REALTIME_NOTICE = (
+    "Hedra retired its realtime avatar service. Voice uses direct LiveKit audio; "
+    "the Cortana portrait remains available locally."
+)
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_REALTIME_INSTRUCTIONS = (
@@ -226,6 +231,7 @@ def ensure_livekit_agent_dispatch(
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
     cfg = get_livekit_realtime_config(config)
     speaker_status = speaker_identity_status(cfg)
+    avatar_status = hedra_avatar_status()
     return {
         "enabled": cfg.enabled,
         "mode": "livekit_realtime",
@@ -235,12 +241,7 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         "model": cfg.model,
         "voice": cfg.voice,
         "server_reachable": _socket_reachable(cfg.url),
-        "avatar": {
-            "image": os.getenv("HEDRA_AVATAR_IMAGE", ""),
-            "legacy_hedra_enabled": _bool(os.getenv("ARGO_HEDRA_AVATAR_ENABLED", False)),
-            "legacy_hedra_available": bool(os.getenv("HEDRA_API_KEY")),
-            "note": "Hedra realtime is legacy; ARGO keeps the Cortana portrait as the local visual fallback.",
-        },
+        "avatar": avatar_status,
         "speaker_identity": speaker_status,
     }
 
@@ -282,6 +283,46 @@ def speaker_identity_status(cfg: LiveKitRealtimeConfig | None = None) -> dict[st
         "ready": bool(cfg.speaker_id_enabled and api_key_ready and plugin_ready),
         "mode": "experimental_sidecar",
         "error": plugin_error,
+    }
+
+
+def hedra_avatar_status() -> dict[str, Any]:
+    """Return safe-to-display Hedra avatar readiness without exposing secrets."""
+
+    image_path_raw = os.getenv("HEDRA_AVATAR_IMAGE", "").strip()
+    image_path = Path(image_path_raw).expanduser() if image_path_raw else None
+    if image_path and not image_path.is_absolute():
+        image_path = Path(__file__).resolve().parents[1] / image_path
+
+    plugin_ready = False
+    plugin_version = ""
+    plugin_error = ""
+    try:
+        plugin_version = metadata.version("livekit-plugins-hedra")
+        plugin_ready = True
+    except Exception as exc:  # pragma: no cover - depends on optional package install
+        plugin_error = str(exc)
+
+    avatar_id_ready = bool(os.getenv("HEDRA_AVATAR_ID", "").strip())
+    image_ready = bool(image_path and image_path.exists())
+    api_key_ready = bool(os.getenv("HEDRA_API_KEY", "").strip())
+    enabled = _bool(os.getenv("ARGO_HEDRA_AVATAR_ENABLED", False))
+
+    return {
+        "enabled": enabled,
+        "provider": "hedra_live_avatar",
+        "api_key_ready": api_key_ready,
+        "avatar_id_ready": avatar_id_ready,
+        "image_ready": image_ready,
+        "image": image_path_raw,
+        "plugin_ready": plugin_ready,
+        "plugin_version": plugin_version,
+        "ready": False,
+        "service_retired": HEDRA_REALTIME_RETIRED,
+        "api_url": os.getenv("HEDRA_API_URL", "https://api.hedra.com/public/livekit/v1/session"),
+        "mode": "livekit_video_track",
+        "fallback": "local_cortana_portrait",
+        "error": HEDRA_REALTIME_NOTICE,
     }
 
 

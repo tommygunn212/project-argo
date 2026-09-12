@@ -33,6 +33,7 @@ data/*.db-shm
 # Temporary files
 temp/
 *.wav
+!assets/sounds/*.wav
 audio/debug/
 *.mp4
 *.jpg

@@ -1,6 +1,8 @@
-# ARGO — Getting Started (VAD‑Only Voice Pipeline)
+# ARGO — Getting Started
 
-**Always‑listening voice system: VAD → Transcribe → LLM → Speak**
+**Classic voice system: VAD → Transcribe → LLM router → Speak**
+
+For the lower-latency smooth path, ARGO also supports Browser mic → LiveKit WebRTC → OpenAI Realtime → LiveKit audio when its LiveKit environment is configured.
 
 This guide walks you through setting up and running the current ARGO pipeline. The wake word has been removed by design.
 
@@ -122,14 +124,19 @@ python main.py
 
 ### Open the UI Debugger
 - http://localhost:8000
+- http://localhost:8000/v2
+
+Use `/v2` for Smooth Voice, Phone Vision, the local Cortana companion, and runtime controls. `docs/LIVEKIT_REALTIME_VOICE.md` covers the required LiveKit variables and browser flow.
 
 ---
 
 ## Expected Behavior
 
-- ARGO continuously listens via VAD.
-- When speech is detected, it transcribes, generates a response, and speaks it.
+- Classic mode continuously listens via VAD. Smooth Voice uses the browser/LiveKit session instead.
+- In classic mode, ARGO transcribes, routes conversational work to the configured LLM provider, and speaks through the selected AudioManager output device.
 - The UI debugger shows live logs, model names, and latency metrics.
+
+The targeted v1.9.1 tests pass, but real microphone interruption and full audible-onset latency measurement are still required before making performance claims.
 
 ---
 

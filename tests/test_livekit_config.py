@@ -2,6 +2,7 @@ from core.livekit_config import (
     DEFAULT_LOCAL_LIVEKIT_SECRET,
     build_livekit_token_response,
     get_livekit_realtime_config,
+    hedra_avatar_status,
     livekit_status,
     mobile_access_status,
     speaker_identity_status,
@@ -83,7 +84,8 @@ def test_livekit_status_is_safe_without_server():
     assert payload["mode"] == "livekit_realtime"
     assert payload["server_reachable"] is False
     assert payload["speaker_identity"]["provider"] == "speechmatics"
-    assert payload["avatar"]["legacy_hedra_enabled"] is False
+    assert payload["avatar"]["provider"] == "hedra_live_avatar"
+    assert "api_key" not in payload["avatar"]
 
 
 def test_realtime_defaults_are_tuned_for_fast_turn_taking(monkeypatch):
@@ -117,3 +119,22 @@ def test_speaker_identity_status_requires_key_and_plugin(monkeypatch):
     assert payload["api_key_ready"] is True
     assert payload["plugin_ready"] is True
     assert payload["ready"] is True
+
+
+def test_retired_hedra_is_not_ready_even_with_key_plugin_and_image(monkeypatch, tmp_path):
+    image = tmp_path / "avatar.png"
+    image.write_bytes(b"fake")
+    monkeypatch.setenv("ARGO_HEDRA_AVATAR_ENABLED", "true")
+    monkeypatch.setenv("HEDRA_API_KEY", "test-secret")
+    monkeypatch.setenv("HEDRA_AVATAR_IMAGE", str(image))
+    monkeypatch.delenv("HEDRA_AVATAR_ID", raising=False)
+
+    payload = hedra_avatar_status()
+
+    assert payload["enabled"] is True
+    assert payload["api_key_ready"] is True
+    assert payload["image_ready"] is True
+    assert payload["ready"] is False
+    assert payload["service_retired"] is True
+    assert "retired" in payload["error"]
+    assert "test-secret" not in str(payload)

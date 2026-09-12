@@ -7,6 +7,8 @@ Run this next to the local LiveKit server for full-duplex voice conversation:
 
 The browser joins a LiveKit room, publishes the mic, receives ARGO audio, and
 OpenAI Realtime handles turn detection and interruption inside the audio stream.
+When enabled, Hedra Live Avatar publishes a remote video track into the same
+room so the browser can replace the local portrait fallback with animation.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ else:
     HEDRA_PLUGIN_IMPORT_ERROR = None
 
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
-from core.livekit_config import speaker_identity_status
+from core.livekit_config import speaker_identity_status, HEDRA_REALTIME_RETIRED, HEDRA_REALTIME_NOTICE
 
 
 ROOT = Path(__file__).resolve().parent
@@ -146,9 +148,15 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 
 async def _maybe_start_hedra_avatar(session: AgentSession, room):
-    """Start a legacy Hedra LiveKit avatar when explicitly enabled."""
+    """Start a Hedra LiveKit avatar when explicitly enabled."""
+
+    # Do not retry the retired endpoint or redirect working voice to a dead avatar.
+    if HEDRA_REALTIME_RETIRED:
+        logger.info("[Avatar] %s", HEDRA_REALTIME_NOTICE)
+        return None
 
     if not _env_enabled("ARGO_HEDRA_AVATAR_ENABLED", False):
+        logger.info("[Hedra] avatar disabled; using local portrait fallback")
         return None
 
     hedra_api_key = (os.getenv("HEDRA_API_KEY") or "").strip()
@@ -170,6 +178,10 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         return None
 
     kwargs = {"api_key": hedra_api_key}
+    api_url = (os.getenv("HEDRA_API_URL") or "").strip()
+    if api_url:
+        kwargs["api_url"] = api_url
+
     participant_identity = (os.getenv("HEDRA_AVATAR_PARTICIPANT_IDENTITY") or "").strip()
     if participant_identity:
         kwargs["avatar_participant_identity"] = participant_identity
@@ -192,11 +204,16 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         with Image.open(image_path) as img:
             kwargs["avatar_image"] = img.convert("RGB").copy()
 
-    logger.warning("[Hedra] attempting legacy Hedra avatar path; if it fails, voice continues")
+    logger.info(
+        "[Hedra] starting live avatar video source=%s participant=%s api_url=%s",
+        "asset_id" if avatar_id else "local_image",
+        participant_identity or "hedra-avatar-agent",
+        api_url or "default",
+    )
     try:
         avatar = hedra_plugin.AvatarSession(**kwargs)
         await avatar.start(session, room=room)
-        logger.info("[Hedra] avatar session started")
+        logger.info("[Hedra] live avatar session started; waiting for remote video track")
         return avatar
     except Exception:
         logger.exception("[Hedra] avatar session failed; continuing without avatar video")

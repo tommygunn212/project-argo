@@ -27,10 +27,11 @@ class OpenAIWhisperSTT:
     # Models that use the newer GPT-4o transcribe path
     GPT4O_MODELS = {"gpt-4o-transcribe", "gpt-4o-mini-transcribe"}
 
-    def __init__(self, model: str = "gpt-4o-mini-transcribe", language: str = "en", prompt: str = ""):
+    def __init__(self, model: str = "gpt-4o-mini-transcribe", language: str = "en", prompt: str = "", timeout_seconds: float = 15.0):
         self.model = model
         self.language = language
         self.prompt = prompt
+        self.timeout_seconds = max(1.0, float(timeout_seconds))
         self._client = None
         self._init_client()
 
@@ -44,7 +45,7 @@ class OpenAIWhisperSTT:
                     "OPENAI_API_KEY not set. "
                     "Set it in your environment or .env file."
                 )
-            self._client = OpenAI(api_key=api_key)
+            self._client = OpenAI(api_key=api_key, timeout=self.timeout_seconds, max_retries=0)
             logger.info("[OPENAI_STT] Client initialized")
         except ImportError:
             raise RuntimeError(

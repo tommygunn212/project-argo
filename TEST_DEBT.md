@@ -2,7 +2,9 @@
 
 This document tracks known test failures that are non-blocking for release.
 
-**Last updated:** v1.6.1 (2026-02-02)
+**Historical snapshot:** v1.6.1 (2026-02-02)
+
+> This tracker has not been re-baselined for v1.9.1. Its counts and individual failures must not be treated as present state. The v1.9.1 focused voice/router suite passed 141 Python tests plus 4 JavaScript checks; a full-suite run is required before replacing this historical inventory.
 
 ---
 

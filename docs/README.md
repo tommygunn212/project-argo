@@ -1,6 +1,6 @@
-# ARGO Documentation Index (v1.9.0-livekit-realtime-voice)
+# ARGO Documentation Index (v1.9.1-voice-reliability-router)
 
-Complete navigation for ARGO system documentation. Core voice/avatar/mobile documentation current as of June 3, 2026.
+Complete navigation for ARGO system documentation. The current implementation checkpoint is v1.9.1 (September 12, 2026). Historical completion reports remain useful evidence for their dated milestones; they are not current performance claims.
 
 **Note:** All documentation and code in this repository are covered by the repository's licensing terms. The ARGO Non-Commercial License applies to all specifications, designs, and implementation guides. Commercial use of any material in these docs requires a separate commercial license agreement.
 
@@ -17,6 +17,9 @@ Complete navigation for ARGO system documentation. Core voice/avatar/mobile docu
 5. **[PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md)** — Optional v1.8.0 Postgres backend and migration guide
 6. **[LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md)** — v1.9.0 smooth voice, mobile access, speaker-ID readiness
 7. **[Hedra / LiveKit Avatar Notes](HEDRA_AVATAR.md)** — Cortana portrait fallback and legacy Hedra status
+8. **[Voice Audit Fix Status](VOICE_AUDIT_FIX_STATUS_2026-09-12.md)** — current repair scope, verification, and limits
+9. **[Next Upgrades](ARGO_NEXT_UPGRADES.md)** — implemented first passes and intentionally deferred product work
+10. **[Documentation Status](DOCUMENTATION_STATUS_2026-09-12.md)** — which documents are current references versus historical records
 
 ### For Developers Modifying Code
 

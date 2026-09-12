@@ -536,6 +536,16 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   opacity: 0;
   z-index: 1;
 }
+.avatar-generated {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  z-index: 1;
+  background: var(--bg-input);
+}
 .avatar-fallback {
   position: absolute;
   inset: 0;
@@ -544,9 +554,38 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   object-fit: cover;
   object-position: center;
   z-index: 1;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+  transform-origin: 50% 58%;
+  will-change: transform, filter;
+}
+.avatar-stage:not(.has-video) .avatar-generated + .avatar-fallback {
+  opacity: 0;
+}
+.avatar-stage:not(.has-video) .avatar-fallback {
+  animation: avatarPortraitIdle 7.2s ease-in-out infinite;
+}
+.avatar-stage[data-state="LISTENING"]:not(.has-video) .avatar-fallback,
+.avatar-stage[data-state="TRANSCRIBING"]:not(.has-video) .avatar-fallback,
+.avatar-stage[data-state="THINKING"]:not(.has-video) .avatar-fallback {
+  filter: brightness(1.06) saturate(1.12);
+}
+.avatar-stage[data-state="SPEAKING"]:not(.has-video) .avatar-fallback {
+  animation: avatarPortraitSpeaking 0.42s ease-in-out infinite;
+  filter: brightness(1.12) saturate(1.2);
+}
+.avatar-stage:not(.has-video) .avatar-canvas {
+  opacity: 0;
+}
+.avatar-stage.local-animated:not(.has-video) .avatar-canvas {
+  opacity: 1;
+}
+.avatar-stage.local-animated:not(.has-video) .avatar-fallback {
+  opacity: 0;
 }
 .avatar-stage.has-video .avatar-fallback {
+  opacity: 0;
+}
+.avatar-stage.has-video .avatar-generated {
   opacity: 0;
 }
 .avatar-stage.has-video .avatar-canvas {
@@ -569,6 +608,9 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 }
 .avatar-stage.has-video::after {
   z-index: 2;
+}
+.avatar-stage:not(.has-video)::before {
+  animation: avatarScan 5.6s linear infinite;
 }
 .avatar-hud {
   position: absolute;
@@ -621,6 +663,16 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   0% { transform: translateY(-100%); opacity: 0; }
   15% { opacity: 0.85; }
   100% { transform: translateY(100%); opacity: 0; }
+}
+@keyframes avatarPortraitIdle {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  28% { transform: translate3d(0.8px, -1.6px, 0) scale(1.006); }
+  55% { transform: translate3d(-0.8px, 0.7px, 0) scale(1.003); }
+  78% { transform: translate3d(0.4px, -0.6px, 0) scale(1.005); }
+}
+@keyframes avatarPortraitSpeaking {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.006); }
+  50% { transform: translate3d(0, -1.4px, 0) scale(1.018); }
 }
 .dash-state-text {
   font-family: var(--font-mono);
@@ -950,6 +1002,44 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   font-size: 11px;
   color: var(--text-dim);
 }
+.phone-vision-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.phone-vision-preview {
+  min-height: 180px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.phone-vision-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.phone-vision-form {
+  display: grid;
+  gap: 10px;
+}
+.phone-vision-result {
+  min-height: 78px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+@media (max-width: 760px) {
+  .phone-vision-grid { grid-template-columns: 1fr; }
+}
 
 /* ═══════ PAGE: SYSTEM ═══════ */
 .config-item {
@@ -1138,10 +1228,10 @@ input[type="range"]::-moz-range-thumb {
     <div class="page active" id="pageDashboard">
       <div class="dash-hero">
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
-          <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="ARGO Hedra portrait avatar">
-          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="ARGO Hedra avatar"></canvas>
+          <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
+          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="Cortana voice-driven portrait"></canvas>
           <div class="avatar-hud">
-            <span>HEDRA PORTRAIT</span>
+            <span>CORTANA PORTRAIT</span>
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
           </div>
         </div>
@@ -1224,6 +1314,10 @@ input[type="range"]::-moz-range-thumb {
             <span class="config-val" id="infoSpeakerId">OFF</span>
           </div>
           <div class="config-item">
+            <span class="config-key">Avatar</span>
+            <span class="config-val" id="infoAvatar">LOCAL PORTRAIT</span>
+          </div>
+          <div class="config-item">
             <span class="config-key">iPad URL</span>
             <span class="config-val" id="infoMobileUrl">LOCAL ONLY</span>
           </div>
@@ -1286,10 +1380,10 @@ input[type="range"]::-moz-range-thumb {
           <div class="card-title"><span class="dot" style="background:var(--accent)"></span>REALTIME CONVERSATION</div>
           <div class="voice-avatar-row">
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
-              <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="ARGO realtime Hedra portrait avatar">
-              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="ARGO realtime Hedra avatar"></canvas>
+              <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
+              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="Cortana voice-driven portrait"></canvas>
               <div class="avatar-hud">
-                <span>HEDRA PORTRAIT</span>
+                <span>CORTANA PORTRAIT</span>
                 <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
               </div>
             </div>
@@ -1845,6 +1939,24 @@ input[type="range"]::-moz-range-thumb {
           </div>
         </div>
 
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>PHONE VISION</div>
+          <div class="phone-vision-grid">
+            <div class="phone-vision-preview" id="phoneVisionPreview">
+              <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);letter-spacing:1px">NO IMAGE</span>
+            </div>
+            <div class="phone-vision-form">
+              <input id="phoneVisionInput" type="file" accept="image/*" capture="environment">
+              <input id="phoneVisionPrompt" type="text" value="What do you see? Tell me anything useful." autocomplete="off">
+              <div class="quick-actions">
+                <button class="btn btn-primary" id="phoneVisionAnalyzeBtn" onclick="analyzePhoneVision()">Analyze Image</button>
+                <button class="btn" onclick="clearPhoneVision()">Clear</button>
+              </div>
+              <div class="phone-vision-result" id="phoneVisionResult">Open this page on your phone, choose the camera, then analyze.</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Music Player -->
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>MUSIC PLAYER</div>
@@ -1976,6 +2088,7 @@ input[type="range"]::-moz-range-thumb {
 (function loadBundledLiveKitClient() {
   const base = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
   document.write(`<script src="${base}/v2-assets/livekit-client.umd.js"><\/script>`);
+  document.write(`<script src="${base}/v2-assets/cortana-avatar.js"><\/script>`);
 })();
 </script>
 <script>
@@ -1999,6 +2112,7 @@ let livekitModulePromise = null;
 let livekitConnected = false;
 let livekitStarting = false;
 let realtimeAvatarMeter = null;
+let avatarAudioContext = null;
 let realtimeAvatarVideoEls = [];
 let avatarAudioLevel = 0;
 const REALTIME_TAB_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2011,6 +2125,7 @@ let livekitMeta = {
   voice: 'marin',
   room: 'argo-live',
   speakerIdentity: { enabled: false, ready: false, provider: 'speechmatics' },
+  avatar: { enabled: false, ready: false, provider: 'hedra_live_avatar' },
   mobileUrl: ''
 };
 const ARGO_HTTP_ORIGIN = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : window.location.origin;
@@ -2152,6 +2267,73 @@ function resumeClassicAfterRealtime() {
     send('control', { command: 'RESUME' });
   });
 }
+
+let phoneVisionImageData = '';
+
+function clearPhoneVision() {
+  phoneVisionImageData = '';
+  const input = $('phoneVisionInput');
+  if (input) input.value = '';
+  const preview = $('phoneVisionPreview');
+  if (preview) {
+    preview.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);letter-spacing:1px">NO IMAGE</span>';
+  }
+  const result = $('phoneVisionResult');
+  if (result) result.textContent = 'Open this page on your phone, choose the camera, then analyze.';
+}
+
+function readPhoneVisionFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    phoneVisionImageData = String(reader.result || '');
+    const preview = $('phoneVisionPreview');
+    if (preview) {
+      preview.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = phoneVisionImageData;
+      img.alt = 'Selected phone vision image';
+      preview.appendChild(img);
+    }
+    const result = $('phoneVisionResult');
+    if (result) result.textContent = 'Image loaded. Press Analyze Image.';
+  };
+  reader.onerror = () => {
+    const result = $('phoneVisionResult');
+    if (result) result.textContent = 'Could not read that image.';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function analyzePhoneVision() {
+  const result = $('phoneVisionResult');
+  const btn = $('phoneVisionAnalyzeBtn');
+  if (!phoneVisionImageData) {
+    if (result) result.textContent = 'Choose or capture an image first.';
+    return;
+  }
+  const prompt = $('phoneVisionPrompt')?.value || 'What do you see?';
+  if (btn) btn.disabled = true;
+  if (result) result.textContent = 'Analyzing image...';
+  try {
+    const data = await postJson('/api/vision/analyze-upload', {
+      image_data: phoneVisionImageData,
+      prompt,
+    });
+    if (result) result.textContent = data.answer || 'No answer returned.';
+    addSystemLog('Phone vision image analyzed');
+  } catch (err) {
+    if (result) result.textContent = err.message || String(err);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.addEventListener('change', (event) => {
+  if (event.target && event.target.id === 'phoneVisionInput') {
+    readPhoneVisionFile(event.target.files?.[0]);
+  }
+});
 
 async function startVoiceConversation() {
   if (livekitConnected || livekitStarting || livekitRoom) return;
@@ -2596,11 +2778,13 @@ async function refreshRealtimeStatus() {
       voice: data.voice || livekitMeta.voice,
       room: data.room || livekitMeta.room,
       speakerIdentity: data.speaker_identity || livekitMeta.speakerIdentity,
+      avatar: data.avatar || livekitMeta.avatar,
       mobileUrl: livekitMeta.mobileUrl,
     };
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
+    updateAvatarProviderDisplay(livekitMeta.avatar);
     if (!livekitConnected) {
       setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
     }
@@ -2641,6 +2825,26 @@ function updateSpeakerIdentityDisplay(status) {
     el.textContent = `${status.provider || 'speechmatics'} NOT READY`;
     el.style.color = 'var(--accent-red)';
   }
+}
+
+function setAvatarHudLabel(text) {
+  avatarStages.forEach(stage => {
+    const label = stage.querySelector('.avatar-hud span');
+    if (label) label.textContent = text;
+  });
+}
+
+function updateAvatarProviderDisplay(status) {
+  const el = $('infoAvatar');
+  if (!el) return;
+  if (realtimeAvatarVideoEls.length) return;
+  const animated = avatarStages.some(stage => stage.classList.contains('local-animated'));
+  const synced = animated && realtimeAvatarMeter?.audioContext.state === 'running';
+  const label = synced ? 'CORTANA · VOICE SYNC' : animated ? 'CORTANA · LOCAL' : 'CORTANA PORTRAIT';
+  el.textContent = label;
+  el.style.color = synced ? 'var(--accent3)' : 'var(--text-dim)';
+  el.title = animated ? 'Local 2D portrait animated from received voice audio; no avatar cloud service.' : 'Static portrait; voice remains available.';
+  setAvatarHudLabel(label);
 }
 
 function loadScript(url) {
@@ -2706,6 +2910,14 @@ async function startRealtimeVoice() {
   let step = 'start';
 
   try {
+    // Resume from this user gesture, before microphone/network awaits lose activation.
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) {
+      try {
+        if (!avatarAudioContext || avatarAudioContext.state === 'closed') avatarAudioContext = new AudioCtx();
+        await avatarAudioContext.resume();
+      } catch (err) { addSystemLog('Local portrait audio analysis unavailable; voice can still connect'); }
+    }
     logRealtimeClientEvent('start_requested');
     step = 'single_tab_lock';
     claimRealtimeTabLock();
@@ -2751,11 +2963,13 @@ async function startRealtimeVoice() {
       voice: tokenData.voice || statusData.voice || livekitMeta.voice,
       room: tokenData.room || statusData.room || livekitMeta.room,
       speakerIdentity: statusData.speaker_identity || livekitMeta.speakerIdentity,
+      avatar: statusData.avatar || livekitMeta.avatar,
       mobileUrl: livekitMeta.mobileUrl,
     };
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
+    updateAvatarProviderDisplay(livekitMeta.avatar);
 
     room = new lk.Room({
       adaptiveStream: true,
@@ -2948,6 +3162,11 @@ function showRealtimeAvatarVideo(track) {
     const label = stage.querySelector('.avatar-hud span');
     if (label) label.textContent = 'LIVE AVATAR';
   });
+  const el = $('infoAvatar');
+  if (el) {
+    el.textContent = 'LIVE AVATAR VIDEO';
+    el.style.color = 'var(--accent3)';
+  }
   addSystemLog('Realtime avatar video connected');
 }
 
@@ -2958,9 +3177,8 @@ function clearRealtimeAvatarVideo() {
   realtimeAvatarVideoEls = [];
   avatarStages.forEach(stage => {
     stage.classList.remove('has-video');
-    const label = stage.querySelector('.avatar-hud span');
-    if (label) label.textContent = 'HEDRA DEFAULT';
   });
+  updateAvatarProviderDisplay(livekitMeta.avatar);
 }
 
 // ═══════ ENGINE SWITCHING ═══════
@@ -3131,158 +3349,39 @@ function resizeAvatarCanvases() {
   });
 }
 
-function drawAvatarLine(ctx, points) {
-  if (!points.length) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0][0], points[0][1]);
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i][0], points[i][1]);
-  }
-  ctx.stroke();
-}
-
-function drawAvatar(canvas, now) {
-  const ctx = canvas.getContext('2d');
-  const dpr = parseFloat(canvas.dataset.dpr || '1');
-  const w = canvas.width / dpr;
-  const h = canvas.height / dpr;
-  if (!w || !h) return;
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  const state = avatarVisualState();
-  const t = now / 1000;
-  const cx = w * 0.5;
-  const cy = h * 0.45;
-  const scale = Math.min(w, h) / 300;
-  const speakingPulse = state === 'SPEAKING'
-    ? Math.max(0.16, avatarAudioLevel * 1.55 + Math.abs(Math.sin(t * 9)) * 0.16)
-    : state === 'TRANSCRIBING'
-      ? 0.08 + Math.abs(Math.sin(t * 6)) * 0.035
-      : 0.035;
-  const headW = 122 * scale;
-  const headH = 146 * scale;
-  const amber = avatarColorForState(state, 1);
-  const cyan = avatarAccent(1);
-
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-
-  const aura = ctx.createRadialGradient(cx, cy, 8 * scale, cx, cy, 112 * scale);
-  aura.addColorStop(0, state === 'ERROR' ? 'rgba(239,68,68,0.34)' : 'rgba(245,158,11,0.24)');
-  aura.addColorStop(0.55, 'rgba(14,165,233,0.11)');
-  aura.addColorStop(1, 'rgba(14,165,233,0)');
-  ctx.fillStyle = aura;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, 116 * scale, 128 * scale, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  const shoulderGrad = ctx.createLinearGradient(cx, cy + headH * 0.38, cx, h - 18);
-  shoulderGrad.addColorStop(0, 'rgba(15,23,42,0.42)');
-  shoulderGrad.addColorStop(1, 'rgba(14,165,233,0.08)');
-  ctx.fillStyle = shoulderGrad;
-  ctx.beginPath();
-  ctx.moveTo(cx - 92 * scale, h - 31 * scale);
-  ctx.quadraticCurveTo(cx - 48 * scale, cy + headH * 0.52, cx - 24 * scale, cy + headH * 0.56);
-  ctx.lineTo(cx + 24 * scale, cy + headH * 0.56);
-  ctx.quadraticCurveTo(cx + 48 * scale, cy + headH * 0.52, cx + 92 * scale, h - 31 * scale);
-  ctx.lineTo(cx + 92 * scale, h - 18 * scale);
-  ctx.lineTo(cx - 92 * scale, h - 18 * scale);
-  ctx.closePath();
-  ctx.fill();
-
-  const neckGrad = ctx.createLinearGradient(cx, cy + headH * 0.38, cx, cy + headH * 0.76);
-  neckGrad.addColorStop(0, 'rgba(245,158,11,0.22)');
-  neckGrad.addColorStop(1, 'rgba(14,165,233,0.1)');
-  ctx.fillStyle = neckGrad;
-  ctx.strokeStyle = avatarAccent(0.22);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(cx - 24 * scale, cy + headH * 0.39, 48 * scale, 58 * scale, 12 * scale);
-  ctx.fill();
-  ctx.stroke();
-
-  const headGrad = ctx.createRadialGradient(cx - headW * 0.16, cy - headH * 0.28, 12 * scale, cx, cy, headH * 0.68);
-  headGrad.addColorStop(0, 'rgba(255,244,205,0.52)');
-  headGrad.addColorStop(0.34, 'rgba(245,158,11,0.28)');
-  headGrad.addColorStop(0.72, 'rgba(15,23,42,0.78)');
-  headGrad.addColorStop(1, 'rgba(2,6,23,0.92)');
-  ctx.shadowBlur = 24;
-  ctx.shadowColor = state === 'ERROR' ? 'rgba(239,68,68,0.42)' : 'rgba(245,158,11,0.4)';
-  ctx.fillStyle = headGrad;
-  ctx.strokeStyle = amber;
-  ctx.lineWidth = 1.7;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, headW * 0.5, headH * 0.56, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  const maskGrad = ctx.createLinearGradient(cx - headW * 0.4, cy, cx + headW * 0.4, cy);
-  maskGrad.addColorStop(0, 'rgba(14,165,233,0.06)');
-  maskGrad.addColorStop(0.5, 'rgba(255,255,255,0.1)');
-  maskGrad.addColorStop(1, 'rgba(245,158,11,0.1)');
-  ctx.fillStyle = maskGrad;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy + headH * 0.02, headW * 0.42, headH * 0.42, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.strokeStyle = avatarAccent(0.34);
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.arc(cx - headW * 0.52, cy, 48 * scale, -Math.PI * 0.35, Math.PI * 0.35);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx + headW * 0.52, cy, 48 * scale, Math.PI * 0.65, Math.PI * 1.35);
-  ctx.stroke();
-
-  ctx.fillStyle = cyan;
-  ctx.shadowBlur = 10;
-  ctx.shadowColor = avatarAccent(0.55);
-  ctx.beginPath();
-  ctx.roundRect(cx - headW * 0.31, cy - headH * 0.13, 28 * scale, 5 * scale, 3 * scale);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.roundRect(cx + headW * 0.08, cy - headH * 0.13, 28 * scale, 5 * scale, 3 * scale);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  const mouthW = headW * (0.23 + speakingPulse * 0.12);
-  const mouthH = headH * (0.025 + speakingPulse * 0.1);
-  const mouthY = cy + headH * 0.22;
-  const mouthGrad = ctx.createLinearGradient(cx, mouthY - mouthH, cx, mouthY + mouthH);
-  mouthGrad.addColorStop(0, 'rgba(2,6,23,0.75)');
-  mouthGrad.addColorStop(1, state === 'SPEAKING' ? 'rgba(14,165,233,0.28)' : 'rgba(245,158,11,0.12)');
-  ctx.fillStyle = mouthGrad;
-  ctx.strokeStyle = state === 'SPEAKING' ? avatarAccent(0.9) : avatarColorForState(state, 0.56);
-  ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  ctx.roundRect(cx - mouthW, mouthY - mouthH * 0.5, mouthW * 2, Math.max(4 * scale, mouthH), 8 * scale);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = state === 'SPEAKING' ? avatarAccent(0.28) : avatarColorForState(state, 0.12);
-  const meterW = Math.max(24, w * 0.16);
-  const meterH = Math.max(3, avatarAudioLevel * 26);
-  ctx.roundRect(w - meterW - 12, h - 24 - meterH, meterW, meterH, 3);
-  ctx.fill();
-  ctx.restore();
-}
+const portraitRenderers = [];
+const portraitEnvelope = window.CortanaAvatar ? new window.CortanaAvatar.Envelope() : null;
+const reducedAvatarMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let lastAvatarFrame = 0;
 
 function drawAvatarLoop(now) {
-  setAvatarState(avatarVisualState());
-  avatarCanvases.forEach(canvas => drawAvatar(canvas, now));
-  if (!livekitConnected && currentState === 'SPEAKING') {
-    avatarAudioLevel = 0.1 + Math.abs(Math.sin(now / 90)) * 0.18;
-  } else if (!livekitConnected) {
-    avatarAudioLevel *= 0.9;
-  }
   requestAnimationFrame(drawAvatarLoop);
+  if (document.hidden || now-lastAvatarFrame < 32) return;
+  const dt = lastAvatarFrame ? (now-lastAvatarFrame)/1000 : 0.033;
+  lastAvatarFrame = now;
+  const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : 0,dt) : 0;
+  setAvatarState(avatarVisualState());
+  portraitRenderers.forEach(renderer => {
+    if (!renderer.canvas.closest('.has-video')) renderer.draw(now,mouth,reducedAvatarMotion.matches);
+  });
+  updateAvatarProviderDisplay(livekitMeta.avatar);
+  if (!livekitConnected) avatarAudioLevel = 0;
 }
 
 function initAvatar() {
-  resizeAvatarCanvases();
+  if (!window.CortanaAvatar) {
+    addSystemLog('Local avatar renderer unavailable; voice remains available with a static portrait.');
+    updateAvatarProviderDisplay(livekitMeta.avatar);
+    return;
+  }
+  avatarCanvases.forEach(canvas => {
+    try {
+      const renderer = new window.CortanaAvatar.Portrait(canvas,argoUrl('/v2-assets/cortana_portrait_smirky.png'));
+      portraitRenderers.push(renderer);
+    } catch (error) {
+      console.warn('Local avatar unavailable; keeping the static portrait',error);
+    }
+  });
   drawAvatarLoop(performance.now());
 }
 
@@ -3293,7 +3392,8 @@ function stopRealtimeAvatarMeter() {
   }
   if (realtimeAvatarMeter.raf) cancelAnimationFrame(realtimeAvatarMeter.raf);
   try { realtimeAvatarMeter.source.disconnect(); } catch(e) {}
-  try { realtimeAvatarMeter.audioContext.close(); } catch(e) {}
+  try { realtimeAvatarMeter.analyser.disconnect(); } catch(e) {}
+  try { realtimeAvatarMeter.silentOutput.disconnect(); } catch(e) {}
   realtimeAvatarMeter = null;
   avatarAudioLevel = 0;
 }
@@ -3304,23 +3404,27 @@ function setupRealtimeAvatarMeter(track) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!mediaTrack || !AudioCtx) return;
   try {
-    const audioContext = new AudioCtx();
+    const audioContext = avatarAudioContext || (avatarAudioContext = new AudioCtx());
     const source = audioContext.createMediaStreamSource(new MediaStream([mediaTrack]));
     const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
+    analyser.fftSize = 1024;
     source.connect(analyser);
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    realtimeAvatarMeter = { audioContext, source, analyser, data, raf: null };
+    const silentOutput = audioContext.createGain();
+    silentOutput.gain.value = 0;
+    analyser.connect(silentOutput);
+    silentOutput.connect(audioContext.destination);
+    const data = new Float32Array(analyser.fftSize);
+    const meter = { audioContext, source, analyser, silentOutput, data, raf: null };
+    realtimeAvatarMeter = meter;
 
     const sample = () => {
-      if (!realtimeAvatarMeter) return;
-      analyser.getByteTimeDomainData(data);
+      if (realtimeAvatarMeter !== meter) return;
+      analyser.getFloatTimeDomainData(data);
       let sum = 0;
       for (let i = 0; i < data.length; i++) {
-        const centered = data[i] - 128;
-        sum += centered * centered;
+        sum += data[i] * data[i];
       }
-      avatarAudioLevel = Math.min(1, Math.sqrt(sum / data.length) / 38);
+      avatarAudioLevel = audioContext.state === 'running' ? Math.sqrt(sum / data.length) : 0;
       realtimeAvatarMeter.raf = requestAnimationFrame(sample);
     };
     sample();

@@ -19,7 +19,8 @@ from core.intent_parser import RuleBasedIntentParser, IntentType
 from tools.vision import (
     parse_vision_command, _encode_image_base64,
     capture_screenshot, describe_screen, read_screen_error,
-    analyze_screen_with_question, analyze_image,
+    analyze_screen_with_question, analyze_image, decode_image_data_url,
+    analyze_uploaded_image,
 )
 from tools.filesystem import (
     search_files, search_by_extension, find_large_files, find_recent_files,
@@ -295,6 +296,20 @@ class TestVisionAnalyzeImage:
             assert "code editor" in result.lower()
             mock_client.chat.completions.create.assert_called_once()
             importlib.reload(tv)
+
+    def test_decode_image_data_url(self):
+        data = "data:image/png;base64,iVBORw0KGgo="
+        assert decode_image_data_url(data) == b"\x89PNG\r\n\x1a\n"
+
+    def test_decode_image_data_url_rejects_non_image(self):
+        with pytest.raises(ValueError):
+            decode_image_data_url("data:text/plain;base64,SGVsbG8=")
+
+    @patch("tools.vision.analyze_image", return_value="I see a phone photo.")
+    def test_analyze_uploaded_image(self, mock_analyze):
+        result = analyze_uploaded_image("data:image/jpeg;base64,/9g=")
+        assert "phone photo" in result
+        mock_analyze.assert_called_once()
 
 
 # ====================================================================

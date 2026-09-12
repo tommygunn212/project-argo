@@ -1,6 +1,6 @@
 # ARGO LiveKit Realtime Voice
 
-Milestone: `1.9.0-livekit-realtime-voice`
+Milestone baseline: `1.9.0-livekit-realtime-voice`; current checkpoint: `1.9.1-voice-reliability-router`
 
 This is the preferred voice-conversation path for ARGO when Tommy wants fast
 back-and-forth conversation with natural interruption.
@@ -13,7 +13,7 @@ back-and-forth conversation with natural interruption.
   interruption inside one realtime session.
 - The classic ARGO STT/LLM/TTS pipeline remains available as fallback and for
   command/control work.
-- The local Cortana portrait is the UI fallback visual while a current realtime
+- Local Cortana voice-driven animation is the UI visual while a current realtime
   avatar provider is selected.
 - Speechmatics speaker-ID readiness is exposed, but it is not forced into the
   OpenAI Realtime session.
@@ -77,6 +77,10 @@ The realtime path avoids that split. The same session owns listening, speaking,
 and interruption, so user speech can cancel assistant speech without waiting for
 an old synthesis/playback queue to unwind.
 
+This architectural difference does not replace live validation. v1.9.1's
+classic-path repair has focused automated coverage, but a current microphone
+turn and physical interruption test are still required for each active path.
+
 ## Cortana Companion Notes
 
 The Cortana-style repo that inspired this pass uses a LiveKit agent pipeline
@@ -87,6 +91,7 @@ Realtime avatar. ARGO keeps the useful parts as separate, inspectable pieces:
   barge-in feel.
 - Speaker identity is prepared through Speechmatics readiness/status and will
   become a sidecar or alternate pipeline when enabled.
-- The Cortana portrait is local and stable in `/v2`.
+- The local Cortana animation is stable in `/v2` and is covered by standalone
+  JavaScript checks.
 - Legacy Hedra Realtime is disabled by default because that provider path is no
   longer available.

@@ -23,7 +23,7 @@
 **WebSocket:** ws://localhost:8001/ws
 **Mobile/iPad status:** http://localhost:8000/api/mobile-access
 
-**Version:** see [core/version.py](core/version.py)
+**Version:** v1.9.1 — see [core/version.py](core/version.py) and [the current release notes](CHANGELOG.md).
 
 **Disclaimer:** See [ARGO_DISCLAIMER.md](ARGO_DISCLAIMER.md)
 
@@ -42,7 +42,7 @@
 
 ```
 Smooth voice: Browser mic → LiveKit WebRTC → OpenAI Realtime → LiveKit audio
-Classic path: Audio → VAD → STT → LLM → TTS
+Classic path: Audio → VAD → STT → LLM router → TTS
                          ↘︎ Memory backend (SQLite/PostgreSQL/Mem0)
                          ↘︎ WebSocket (live status + logs) → UI (v1 + v2)
 ```
@@ -50,7 +50,7 @@ Classic path: Audio → VAD → STT → LLM → TTS
 - Audio frames are continuously monitored by **VAD**.
 - Smooth voice mode lets one realtime session own listening, speaking, and interruption.
 - Detected speech is transcribed by **STT** (OpenAI Cloud, Faster Whisper, or Azure).
-- Prompts are sent to **GPT-4o-mini** (LLM) with streaming.
+- Conversational prompts use the configured **LLM router** (OpenAI, Ollama, or Gemini) with an explicit primary provider and optional fallback chain.
 - Durable explicit memories are stored through `core.memory_store` using SQLite by default or PostgreSQL when configured.
 - Responses are synthesized by **TTS** (OpenAI, Edge, or Azure Neural).
 - The UI receives **live logs + status** over WebSocket.
@@ -105,6 +105,14 @@ python main.py
 ### Test From Phone Or iPad
 
 Start ARGO, open `http://localhost:8000/api/mobile-access`, then use the reported `http_url` from a device on the same network. The browser must allow microphone access for **Start Smooth Voice**.
+
+### Phone Vision
+
+From a phone on the same Wi-Fi, open `/v2`, choose **Tools → Phone Vision**, select or capture an image, enter a question, and press **Analyze Image**. Images are sent only when the visible action is pressed; ARGO does not continuously stream camera frames. See [next upgrades](docs/ARGO_NEXT_UPGRADES.md) for the deliberately deferred live-frame mode.
+
+### Provider routing
+
+`config.json` controls `llm.providers`, `llm.primary`, `llm.fallbacks`, and `llm.mode`. Provider API credentials stay in environment variables. The backend router is implemented; the `/v2` settings controls and a manual compare mode are planned work.
 
 ---
 
@@ -274,7 +282,7 @@ Run the test suite with:
 pytest
 ```
 
-**Current status (v1.6.1):** 451 tests passing, 12 pre-existing failures (test debt), 5 skipped.
+**Verification status (v1.9.1):** 141 focused Python regression tests and 4 JavaScript Cortana checks passed on 2026-09-12. This is not a full-suite baseline; historical test-count documents are retained for context and marked as stale where applicable.
 
 Known test failures are tracked in [TEST_DEBT.md](TEST_DEBT.md). These are non-blocking and do not affect runtime behavior.
 

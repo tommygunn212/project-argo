@@ -29,6 +29,7 @@ from pathlib import Path
 from collections import deque
 
 from core.instrumentation import log_event
+from core.sound_cues import get_sound_cue_player
 from core.config import (
     get_runtime_overrides,
     get_config,
@@ -144,6 +145,13 @@ class ArgoPipeline:
             self._config = get_config()
         except Exception:
             self._config = None
+        self.sound_cues = get_sound_cue_player(self._config)
+        from core.voice_clients import VoiceClients
+        from core.bounded_context import BoundedContext
+        from core.llm_router import LLMRouter
+        self._voice_clients = VoiceClients(self._config)
+        self._llm_router = LLMRouter(self._config, self._voice_clients)
+        self._context_fetcher = BoundedContext()
         self._current_stt_confidence = 1.0
         self._tts_min_text_length = MIN_TTS_TEXT_LEN
         self._tts_min_confidence = MIN_TTS_CONFIDENCE
@@ -639,7 +647,10 @@ class ArgoPipeline:
             if tts_engine == "openai":
                 from core.openai_tts import OpenAIRealtimeTTS
                 voice = tts_voice or "nova"
-                self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                self._openai_tts = OpenAIRealtimeTTS(
+                    voice=voice, model=tts_model,
+                    output_device=getattr(self.audio, "_output_device_index", None),
+                )
                 self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 self.current_voice_key = voice
                 self.logger.info(f"[TTS] OpenAI Realtime Speech ready (voice={voice}, model={tts_model})")
@@ -657,27 +668,9 @@ class ArgoPipeline:
 
         if self.llm_enabled:
             try:
-                llm_backend = "ollama"
-                model_name = "qwen:latest"
-                if self._config is not None:
-                    llm_config = self._config.get("llm", {})
-                    if isinstance(llm_config, dict):
-                        llm_backend = llm_config.get("backend", "ollama")
-                        model_name = llm_config.get("model", model_name)
-                    else:
-                        model_name = self._config.get("llm.model", model_name)
-                self.llm_model_name = model_name
-
-                if llm_backend == "openai":
-                    # Quick validation — no warmup needed for cloud
-                    if not os.environ.get("OPENAI_API_KEY"):
-                        self.logger.warning("[LLM] OPENAI_API_KEY not set — LLM calls will fail")
-                    else:
-                        self.logger.info(f"[LLM] OpenAI cloud ready (model={model_name})")
-                else:
-                    client = ollama.Client(host='http://127.0.0.1:11434')
-                    client.generate(model=model_name, prompt='hi', stream=False)
-                    self.logger.info("LLM model warmed up")
+                self.llm_model_name = self._llm_router.primary_model_name
+                self._llm_router.warmup()
+                self.logger.info("[LLM] Provider router ready (primary=%s)", self.llm_model_name)
             except Exception as e:
                 self.logger.warning(f"LLM Warmup Warning: {e}")
         
@@ -729,6 +722,7 @@ class ArgoPipeline:
                 self.broadcast("illegal_transition", payload)
                 self.broadcast("status", "ERROR")
                 self.broadcast("log", f"ILLEGAL TRANSITION: {old_state} → {new_state}")
+                self._play_sound_cue("error", interaction_id=interaction_id)
                 if self.is_speaking:
                     try:
                         self.stop_signal.set()
@@ -745,6 +739,7 @@ class ArgoPipeline:
                 interaction_id=interaction_id,
             )
             self.broadcast("status", new_state)
+            self._play_state_sound_cue(old_state, new_state, interaction_id)
             return True
 
     def force_state(self, new_state: str, interaction_id: str = "", source: str = "BARGE_IN"):
@@ -757,6 +752,23 @@ class ArgoPipeline:
                 interaction_id=interaction_id,
             )
             self.broadcast("status", new_state)
+
+    def _play_sound_cue(self, cue: str, interaction_id: str = "", block: bool = False) -> None:
+        try:
+            self.sound_cues.play(cue, interaction_id=interaction_id, block=block)
+        except Exception:
+            self.logger.debug("Sound cue failed", exc_info=True)
+
+    def _play_state_sound_cue(self, old_state: str, new_state: str, interaction_id: str = "") -> None:
+        if new_state == "THINKING":
+            self._play_sound_cue("thinking_start", interaction_id=interaction_id)
+        elif new_state == "SPEAKING":
+            self._play_sound_cue("speaking_start", interaction_id=interaction_id, block=True)
+        elif new_state == "LISTENING":
+            if old_state == "SPEAKING":
+                self._play_sound_cue("speaking_end", interaction_id=interaction_id)
+            else:
+                self._play_sound_cue("listening_start", interaction_id=interaction_id)
 
     def reset_interaction(self):
         self.interrupt_current_response("RESET_INTERACTION", target_state="LISTENING")
@@ -786,6 +798,10 @@ class ArgoPipeline:
         """Synchronously cancel active speech and release audio ownership."""
         interaction_id = interaction_id or self.current_interaction_id
         self._record_timeline(f"INTERRUPT {reason}", stage="interrupt", interaction_id=interaction_id)
+        try:
+            self.sound_cues.stop_active_cue(reason, interaction_id=interaction_id)
+        except Exception:
+            pass
         self.stop_signal.set()
         self.stop_tts()
         try:
@@ -2289,6 +2305,35 @@ class ArgoPipeline:
             self._record_timeline("STT_ERROR", stage="stt", interaction_id=interaction_id)
             return ""
 
+    def _stream_llm_text(
+        self,
+        *,
+        prompt: str,
+        system_message: str,
+        convo_messages,
+        temperature: float,
+        max_tokens: int,
+        interaction_id: str = "",
+        model_override: str | None = None,
+    ):
+        if not hasattr(self, "_llm_router"):
+            from core.llm_router import LLMRouter
+            voice_clients = getattr(self, "_voice_clients", None)
+            if voice_clients is None:
+                from core.voice_clients import VoiceClients
+                voice_clients = VoiceClients(getattr(self, "_config", None))
+                self._voice_clients = voice_clients
+            self._llm_router = LLMRouter(getattr(self, "_config", None), voice_clients)
+        return self._llm_router.stream_text(
+            prompt=prompt,
+            system_message=system_message,
+            convo_messages=convo_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            interaction_id=interaction_id,
+            model_override=model_override,
+        )
+
     def generate_response(self, text, interaction_id: str = "", rag_context: str = "", memory_context: str = "", use_convo_buffer: bool = True, intent_type: Optional[str] = None, confidence: float = 1.0):
         """
         Generate a response, enforcing principle/mechanism explanation for knowledge intents.
@@ -2304,75 +2349,28 @@ class ArgoPipeline:
         self.logger.debug(f"[LLM] Full prompt (first 500 chars): {prompt[:500]}")
         full_response = ""
         try:
-            # Determine LLM backend: openai (cloud) or ollama (local)
-            llm_backend = "ollama"
-            model_name = "qwen:latest"
-            if self._config is not None:
-                llm_config = self._config.get("llm", {})
-                if isinstance(llm_config, dict):
-                    llm_backend = llm_config.get("backend", "ollama")
-                    model_name = llm_config.get("model", model_name)
-                else:
-                    model_name = self._config.get("llm.model", model_name)
-
             self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
             start = time.perf_counter()
             first_token_ms = None
-
-            if llm_backend == "openai":
-                # ── OpenAI Cloud LLM (GPT-4o-mini) ──
-                from openai import OpenAI
-                import os
-                openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-                sys_msg = self._get_system_message(mode, serious_mode)
-                messages = [{"role": "system", "content": sys_msg}]
-                messages.extend(convo_messages)
-                messages.append({"role": "user", "content": prompt})
-                stream = openai_client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=500,
-                    stream=True,
-                )
-                for chunk in stream:
-                    if self.stop_signal.is_set():
-                        break
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    part = delta.content if delta and delta.content else ""
-                    if part and first_token_ms is None:
-                        first_token_ms = (time.perf_counter() - start) * 1000
-                        self._record_timeline(
-                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                            stage="llm",
-                            interaction_id=interaction_id,
-                        )
-                    full_response += part
-            else:
-                # ── Ollama Local LLM ──
-                client = ollama.Client(host='http://127.0.0.1:11434')
-                ollama_prompt = self._get_system_message(mode, serious_mode) + "\n\n" + prompt
-                stream = client.generate(
-                    model=model_name, 
-                    prompt=ollama_prompt, 
-                    stream=True,
-                    options={
-                        "temperature": 0.7,
-                        "num_predict": 1024,
-                    }
-                )
-                for chunk in stream:
-                    if self.stop_signal.is_set():
-                        break
-                    part = chunk.get('response', '')
-                    if part and first_token_ms is None:
-                        first_token_ms = (time.perf_counter() - start) * 1000
-                        self._record_timeline(
-                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                            stage="llm",
-                            interaction_id=interaction_id,
-                        )
-                    full_response += part
+            sys_msg = self._get_system_message(mode, serious_mode)
+            for part in self._stream_llm_text(
+                prompt=prompt,
+                system_message=sys_msg,
+                convo_messages=convo_messages,
+                temperature=0.7,
+                max_tokens=1024,
+                interaction_id=interaction_id,
+            ):
+                if self.stop_signal.is_set():
+                    break
+                if part and first_token_ms is None:
+                    first_token_ms = (time.perf_counter() - start) * 1000
+                    self._record_timeline(
+                        f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                        stage="llm",
+                        interaction_id=interaction_id,
+                    )
+                full_response += part
 
             total_ms = (time.perf_counter() - start) * 1000
             self._record_timeline(
@@ -2396,7 +2394,7 @@ class ArgoPipeline:
 
             # Model override for strict instruction-following on knowledge intents
             STRICT_INSTRUCTION_MODEL = "gpt-4.1"  # or your most instruction-reliable model
-            DEFAULT_MODEL = model_name
+            DEFAULT_MODEL = self._llm_router.last_model or self.llm_model_name
             knowledge_intents = {
                 "knowledge_physics",
                 "knowledge_finance",
@@ -2433,32 +2431,20 @@ class ArgoPipeline:
                     )
                     retry_response = ""
                     try:
-                        if llm_backend == "openai":
-                            from openai import OpenAI
-                            import os
-                            openai_client2 = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-                            retry_sys_msg = self._get_system_message(mode, serious_mode)
-                            retry_messages = [{"role": "system", "content": retry_sys_msg}]
-                            retry_messages.extend(convo_messages)
-                            retry_messages.append({"role": "user", "content": retry_prompt})
-                            stream2 = openai_client2.chat.completions.create(
-                                model=model_to_use if model_to_use != DEFAULT_MODEL else model_name,
-                                messages=retry_messages,
-                                temperature=0.7,
-                                max_tokens=1024,
-                                stream=True,
-                            )
-                            for chunk2 in stream2:
-                                if self.stop_signal.is_set():
-                                    break
-                                delta2 = chunk2.choices[0].delta if chunk2.choices else None
-                                retry_response += delta2.content if delta2 and delta2.content else ""
-                        else:
-                            stream2 = client.generate(model=model_to_use, prompt=retry_prompt, stream=True)
-                            for chunk2 in stream2:
-                                if self.stop_signal.is_set():
-                                    break
-                                retry_response += chunk2.get('response', '')
+                        retry_sys_msg = self._get_system_message(mode, serious_mode)
+                        retry_model = model_to_use if model_to_use != DEFAULT_MODEL else None
+                        for chunk2 in self._stream_llm_text(
+                            prompt=retry_prompt,
+                            system_message=retry_sys_msg,
+                            convo_messages=convo_messages,
+                            temperature=0.7,
+                            max_tokens=1024,
+                            interaction_id=interaction_id,
+                            model_override=retry_model,
+                        ):
+                            if self.stop_signal.is_set():
+                                break
+                            retry_response += chunk2
                         retry_response = self._strip_prompt_artifacts(retry_response)
                     except Exception as e:
                         self.logger.error(f"[LLM] Retry Error: {e}")
@@ -4702,15 +4688,6 @@ class ArgoPipeline:
         prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context="")
         prompt = "\n---\n".join([self._build_spoken_style_block(user_text, response_controls), prompt])
 
-        # Determine backend
-        llm_backend = "ollama"
-        model_name = "qwen:latest"
-        if self._config is not None:
-            llm_config = self._config.get("llm", {})
-            if isinstance(llm_config, dict):
-                llm_backend = llm_config.get("backend", "ollama")
-                model_name = llm_config.get("model", model_name)
-
         # ── TTS consumer thread ──────────────────────────────────────
         sentence_q: queue.Queue[Optional[str]] = queue.Queue()
         tts_error = []
@@ -4765,68 +4742,49 @@ class ArgoPipeline:
                                 from core.openai_tts import OpenAIRealtimeTTS
                                 voice = self.openai_voices.get(self.current_voice_key, "nova")
                                 tts_model = self._tts_model
-                                self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                                self._openai_tts = OpenAIRealtimeTTS(
+                                    voice=voice, model=tts_model,
+                                    output_device=getattr(self.audio, "_output_device_index", None),
+                                )
                                 self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                             if tts_generation is None:
                                 tts_generation = self._openai_tts.begin_response()
                             elif self._openai_tts.is_cancelled(tts_generation):
                                 break
-                            # Pre-fetch next sentence while we play this one
-                            prefetch_future = None
-                            next_sent = None
-                            try:
-                                next_sent = sentence_q.get_nowait()
-                                if next_sent is None:
-                                    sentence_q.put(None)  # keep poison pill
-                                    next_sent = None
-                                elif not self.stop_signal.is_set():
-                                    if prefetch_exec is None:
-                                        prefetch_exec = ThreadPoolExecutor(
-                                            max_workers=1, thread_name_prefix="tts-prefetch"
-                                        )
-                                    prefetch_future = prefetch_exec.submit(
-                                        self._openai_tts.synthesize, next_sent, tts_generation
-                                    )
-                            except queue.Empty:
-                                pass
-                            # Stream the current sentence immediately unless it was already pre-fetched.
+                            # A waiting prefetch worker also catches sentences that
+                            # arrive after current playback has already started.
+                            from core.sentence_prefetch import prefetch_next
+                            if prefetch_exec is None:
+                                prefetch_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-prefetch")
+                            prefetch_future = prefetch_exec.submit(
+                                prefetch_next, sentence_q, self._openai_tts,
+                                tts_generation, self.stop_signal, self.logger,
+                            )
                             if pcm_data is None:
                                 self._openai_tts.speak(sentence, generation=tts_generation)
                             else:
                                 self._openai_tts.play_pcm(pcm_data, generation=tts_generation)
                             if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
-                                if prefetch_future is not None:
-                                    prefetch_future.cancel()
+                                prefetch_future.cancel()
                                 break
-                            # Collect pre-fetched audio
-                            if prefetch_future is not None and next_sent is not None:
+                            deadline = time.monotonic() + 30
+                            while True:
+                                if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                    prefetch_future.cancel()
+                                    prefetched = None
+                                    break
                                 try:
-                                    deadline = time.time() + 15
-                                    prefetch_cancelled = False
-                                    while True:
-                                        if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
-                                            prefetch_future.cancel()
-                                            prefetch_cancelled = True
-                                            result = None
-                                            break
-                                        try:
-                                            result = prefetch_future.result(timeout=0.05)
-                                            break
-                                        except FutureTimeout:
-                                            if time.time() >= deadline:
-                                                raise
-                                    if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
+                                    prefetched = prefetch_future.result(timeout=0.05)
+                                    break
+                                except FutureTimeout:
+                                    if time.monotonic() >= deadline:
+                                        self.logger.warning("[TTS-STREAM] Prefetch exceeded turn deadline; cancelling speech")
+                                        self._openai_tts.stop()
+                                        prefetch_future.cancel()
                                         prefetched = None
                                         break
-                                    if prefetch_cancelled:
-                                        break
-                                    prefetched = (next_sent, result)
-                                except Exception as exc:
-                                    if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
-                                        prefetched = None
-                                        break
-                                    self.logger.warning(f"[TTS-STREAM] Pre-fetch failed: {exc}")
-                                    prefetched = (next_sent, None)  # will synthesize inline
+                            if prefetched is None:
+                                break
                         else:
                             if self._edge_tts is None:
                                 from core.output_sink import EdgeTTSOutputSink
@@ -4835,6 +4793,8 @@ class ArgoPipeline:
                     except Exception as e:
                         self.logger.error(f"[TTS-STREAM] Sentence TTS error: {e}")
                         tts_error.append(e)
+                        if tts_engine == "openai" and self._openai_tts is not None:
+                            self._openai_tts.stop()
                         break
             finally:
                 if prefetch_exec is not None:
@@ -4873,102 +4833,47 @@ class ArgoPipeline:
             tts_thread.start()
 
         try:
-            if llm_backend == "openai":
-                from openai import OpenAI
-                import os
-                openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-                sys_msg = self._get_system_message(mode, serious_mode)
-                messages = [{"role": "system", "content": sys_msg}]
-                messages.extend(convo_messages)
-                messages.append({"role": "user", "content": prompt})
-                stream = openai_client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=response_controls["temperature"],
-                    max_tokens=response_controls["max_tokens"],
-                    stream=True,
-                )
-                for chunk in stream:
-                    if self.stop_signal.is_set():
-                        break
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    part = delta.content if delta and delta.content else ""
-                    if not part:
-                        continue
-                    if first_token_ms is None:
-                        first_token_ms = (time.perf_counter() - start) * 1000
-                        self._record_timeline(
-                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                            stage="llm", interaction_id=interaction_id,
-                        )
-                    full_response += part
-                    sentence_buffer += part
+            sys_msg = self._get_system_message(mode, serious_mode)
+            for part in self._stream_llm_text(
+                prompt=prompt,
+                system_message=sys_msg,
+                convo_messages=convo_messages,
+                temperature=response_controls["temperature"],
+                max_tokens=response_controls["max_tokens"],
+                interaction_id=interaction_id,
+            ):
+                if self.stop_signal.is_set():
+                    break
+                if not part:
+                    continue
+                if first_token_ms is None:
+                    first_token_ms = (time.perf_counter() - start) * 1000
+                    self._record_timeline(
+                        f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
+                        stage="llm", interaction_id=interaction_id,
+                    )
+                full_response += part
+                sentence_buffer += part
 
-                    # Flush complete sentences to TTS
-                    while True:
-                        complete, sentence_buffer = self._pop_stream_chunk(
-                            sentence_buffer,
-                            allow_soft_split=(queued_chunks == 0),
-                        )
-                        if not complete:
-                            break
-                        if complete and tts_thread.is_alive():
-                            # Strip non-ASCII and apply persona per sentence
-                            complete = re.sub(r"[^\x00-\x7F]+", "", complete)
-                            tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
-                            if tts_text:
-                                sentence_q.put(tts_text)
-                                queued_chunks += 1
-                                if queued_chunks >= response_controls["max_sentences"]:
-                                    response_truncated = True
-                                    sentence_buffer = ""
-                                    break
-                    if response_truncated:
+                while True:
+                    complete, sentence_buffer = self._pop_stream_chunk(
+                        sentence_buffer,
+                        allow_soft_split=(queued_chunks == 0),
+                    )
+                    if not complete:
                         break
-            else:
-                client = ollama.Client(host='http://127.0.0.1:11434')
-                ollama_prompt = self._get_system_message(mode, serious_mode) + "\n\n" + prompt
-                stream = client.generate(
-                    model=model_name, prompt=ollama_prompt, stream=True,
-                    options={
-                        "temperature": response_controls["temperature"],
-                        "num_predict": response_controls["max_tokens"],
-                    },
-                )
-                for chunk in stream:
-                    if self.stop_signal.is_set():
-                        break
-                    part = chunk.get('response', '')
-                    if not part:
-                        continue
-                    if first_token_ms is None:
-                        first_token_ms = (time.perf_counter() - start) * 1000
-                        self._record_timeline(
-                            f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                            stage="llm", interaction_id=interaction_id,
-                        )
-                    full_response += part
-                    sentence_buffer += part
-
-                    while True:
-                        complete, sentence_buffer = self._pop_stream_chunk(
-                            sentence_buffer,
-                            allow_soft_split=(queued_chunks == 0),
-                        )
-                        if not complete:
-                            break
-                        if complete and tts_thread.is_alive():
-                            complete = re.sub(r"[^\x00-\x7F]+", "", complete)
-                            tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
-                            if tts_text:
-                                sentence_q.put(tts_text)
-                                queued_chunks += 1
-                                if queued_chunks >= response_controls["max_sentences"]:
-                                    response_truncated = True
-                                    sentence_buffer = ""
-                                    break
-                    if response_truncated:
-                        break
+                    if complete and tts_thread.is_alive():
+                        complete = re.sub(r"[^\x00-\x7F]+", "", complete)
+                        tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
+                        if tts_text:
+                            sentence_q.put(tts_text)
+                            queued_chunks += 1
+                            if queued_chunks >= response_controls["max_sentences"]:
+                                response_truncated = True
+                                sentence_buffer = ""
+                                break
+                if response_truncated:
+                    break
 
             # Flush any remaining text in the buffer
             remainder = sentence_buffer.strip()
@@ -5023,6 +4928,7 @@ class ArgoPipeline:
                         break
                 elif time.time() - join_started >= 30:
                     self.logger.warning("[TTS-STREAM] TTS thread did not finish within 30s")
+                    self.stop_tts()
                     break
 
         return full_response
@@ -5044,6 +4950,7 @@ class ArgoPipeline:
             except Exception as e:
                 self.logger.error(f"[TTS] Audio ownership error: {e}")
                 log_event("TTS_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
+                self._play_sound_cue("error", interaction_id=interaction_id)
                 return
 
             if self._tts_engine == "openai":
@@ -5052,7 +4959,10 @@ class ArgoPipeline:
                     from core.openai_tts import OpenAIRealtimeTTS
                     voice = self.openai_voices.get(self.current_voice_key, "nova")
                     tts_model = self._tts_model
-                    self._openai_tts = OpenAIRealtimeTTS(voice=voice, model=tts_model)
+                    self._openai_tts = OpenAIRealtimeTTS(
+                        voice=voice, model=tts_model,
+                        output_device=getattr(self.audio, "_output_device_index", None),
+                    )
                     self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 if self._pending_barge_in_suppression:
                     try:
@@ -5077,6 +4987,7 @@ class ArgoPipeline:
                 self._edge_tts.speak(text)
         except Exception as e:
             self.logger.error(f"[TTS] Error: {e}")
+            self._play_sound_cue("error", interaction_id=interaction_id)
         finally:
             try:
                 self.audio.release_audio("TTS", interaction_id=interaction_id)
@@ -5335,8 +5246,10 @@ class ArgoPipeline:
                 self._record_timeline("STT_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
                 return
 
-            user_text = self.transcribe(audio_data, interaction_id=interaction_id)
-            self.audio.release_audio("STT", interaction_id=interaction_id)
+            try:
+                user_text = self.transcribe(audio_data, interaction_id=interaction_id)
+            finally:
+                self.audio.release_audio("STT", interaction_id=interaction_id)
             confidence_hint = 1.0
             stt_result = self._last_stt_metrics
             if stt_result and "confidence" in stt_result:
@@ -5374,7 +5287,20 @@ class ArgoPipeline:
             self.broadcast("status", "ERROR")
             self._record_timeline("PIPELINE_ERROR", stage="pipeline", interaction_id=interaction_id)
         finally:
-            self.processing_lock.release()
+            try:
+                self._recover_failed_turn(interaction_id)
+            finally:
+                self.processing_lock.release()
+
+    def _recover_failed_turn(self, interaction_id):
+        """Restore a failed/empty turn without overriding pause or a newer turn."""
+        if (self.current_interaction_id != interaction_id or self.stop_signal.is_set()
+                or self.is_speaking):
+            return
+        if self.current_state in {"TRANSCRIBING", "THINKING", "SPEAKING"}:
+            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+            self._record_timeline("INTERACTION_RECOVERED", stage="pipeline",
+                                  interaction_id=interaction_id)
 
     # PERSONAL MODE CONTRACT:
     # - If text exists, ALWAYS respond.
@@ -6608,12 +6534,16 @@ class ArgoPipeline:
             except Exception as e:
                 self.logger.warning(f"[BRAIN] before_llm failed: {e}")
 
-            # Fetch RAG + memory context IN PARALLEL (saves ~50-200ms)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                rag_future = pool.submit(self._get_rag_context, user_text, interaction_id)
-                mem_future = pool.submit(self._get_memory_context, interaction_id, user_text=user_text)
-                rag_context = rag_future.result(timeout=5)
-                memory_context = mem_future.result(timeout=5)
+            context, missing = self._context_fetcher.fetch({
+                "rag": lambda: self._get_rag_context(user_text, interaction_id),
+                "memory": lambda: self._get_memory_context(interaction_id, user_text=user_text),
+            }, timeout=5.0, stop=self.stop_signal)
+            rag_context = context.get("rag", "")
+            memory_context = context.get("memory", "")
+            if missing:
+                self.logger.warning("[CONTEXT] Skipped unavailable retrieval: %s", ", ".join(missing))
+                self._record_timeline("CONTEXT_INCOMPLETE " + ",".join(missing),
+                                      stage="context", interaction_id=interaction_id)
             
             # Brain provides its own last-exchange context, so always mark as buffered
             llm_context_scope = "buffered"
@@ -6648,6 +6578,7 @@ class ArgoPipeline:
         if not ai_text.strip():
             self.logger.warning("[LLM] Empty response")
             self.broadcast("log", "Argo: [No response]")
+            self._recover_failed_turn(interaction_id)
             return
         # NOTE: broadcast already sent inside _generate_and_speak_streamed (before TTS wait)
         self._conversation_buffer.add("Assistant", ai_text)

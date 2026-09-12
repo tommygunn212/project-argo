@@ -2,6 +2,29 @@
 
 ---
 
+## ✅ Milestone: Voice Reliability, Provider Routing, and Phone Vision (v1.9.1 — 2026-09-12)
+
+**Goal:** Make the classic voice path bounded and observable under failure, add a safe provider boundary, and expose useful phone/local-avatar first passes without overstating live hardware results.
+
+### Completed
+- [✔] Streaming OpenAI TTS uses the AudioManager-selected device and closes its response on completion, failure, and cancellation.
+- [✔] Capture queue is bounded; stale audio is cleared after discontinuity; LLM/TTS clients are reused with explicit latency-sensitive SDK settings.
+- [✔] Sentence prefetch, cancellation generations, retrieval deadlines, STT failure cleanup, and continuous streaming resampling have focused regression coverage.
+- [✔] `LLMRouter` routes conversational work through OpenAI, Ollama, or Gemini with deterministic fallback ordering.
+- [✔] Phone Vision supports an explicit user-initiated image upload from `/v2`.
+- [✔] Local Cortana mouth animation replaces the retired Hedra realtime path in the active dashboard flow.
+- [✔] Focused verification completed: 141 Python tests and 4 JavaScript checks passed.
+
+### Still required before declaring voice validation complete
+- [ ] Real microphone turns on classic and LiveKit paths.
+- [ ] Physical-device interruption validation and output-underrun diagnosis.
+- [ ] Separate endpointing, network/SDK, device-write, and audible-onset timing measurements.
+- [ ] UI controls for provider settings and explicit multi-model compare mode.
+
+See `docs/VOICE_AUDIT_FIX_STATUS_2026-09-12.md` for measured facts and limits.
+
+---
+
 ## ✅ Milestone: Deterministic Core Stabilization (v1.6.1 — 2026-02-02)
 
 **Goal:** Ensure canonical / deterministic commands bypass STT confidence gates and never fall back to LLM speculation.

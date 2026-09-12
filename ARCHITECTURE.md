@@ -1,16 +1,16 @@
 # ARGO Architecture
 
-## Current Runtime Summary (Jun 2026)
+## Current Runtime Summary (Sep 2026, v1.9.1)
 
 The current runtime runs from `main.py` with dual UI surfaces and two voice paths:
 a smooth LiveKit/OpenAI Realtime conversation path, plus the classic local
 STT/LLM/TTS pipeline for command/control fallback.
 
 - **Smooth voice path**: browser mic -> LiveKit WebRTC -> OpenAI Realtime -> LiveKit audio
-- **Classic VAD path**: always-listening local pipeline (no wake word)
+- **Classic VAD path**: bounded-capture local pipeline (no wake word), with selected-device output ownership and cancellation generations
 - **Multi-engine STT**: OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime
 - **Multi-engine TTS**: OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime
-- OpenAI GPT-4o-mini LLM with streaming responses
+- **LLM router**: OpenAI, Ollama, or Gemini with config-driven primary selection and optional deterministic fallback
 - **Frontend V1** (`/`): Original UI debugger
 - **Frontend V2** (`/v2`): Full-featured cyberpunk UI with 6 tabs, gate tuning, and engine switching
 - Deterministic system health + hardware queries (no LLM)
@@ -19,10 +19,10 @@ STT/LLM/TTS pipeline for command/control fallback.
 - Self-diagnostics and assisted recovery (Phase 1 & 2)
 - Configurable local/LAN HTTP and WebSocket binds for same-network phone/iPad testing
 - Durable memory backend: SQLite by default, optional PostgreSQL for v1.8.0 long-term memory experiments
-- Cortana portrait fallback in `/v2`; legacy Hedra Realtime is disabled unless explicitly tested
+- Local voice-driven Cortana animation in `/v2`; legacy Hedra Realtime is disabled unless explicitly tested
 - Speechmatics speaker-identity readiness is exposed as an opt-in status path
 
-### Smooth Voice Architecture (v1.9.0)
+### Smooth Voice Architecture (v1.9.1)
 
 The smooth path is intentionally separate from the classic command loop:
 
@@ -47,6 +47,19 @@ Frontend V2 is a single-file HTML/CSS/JS application served at `/v2`. It communi
 4. **Home** — Home Assistant quick commands and entity status
 5. **Tools** — 12 tool launch cards (music, lighting, diagnostics, etc.)
 6. **System** — Diagnostics, recovery proposals, system log, runtime overrides
+
+The Tools tab includes a manual Phone Vision upload path. It sends an image only
+when the user presses Analyze; continuous camera-frame streaming is intentionally
+not implemented.
+
+### Classic Voice Reliability Boundaries (v1.9.1)
+
+The classic path streams OpenAI TTS through `AudioManager` rather than global
+sounddevice playback, reuses OpenAI/Ollama clients, bounds microphone capture,
+and preserves continuous resampler state across chunks. Retrieval is bounded by
+a shared deadline and can return partial available context. These are code and
+focused-test improvements, not a claim that end-to-end microphone latency has
+been measured. See `docs/VOICE_AUDIT_FIX_STATUS_2026-09-12.md`.
 
 **Gate Tuning Sliders (3 groups, 14 total):**
 - Audio Input: VAD Threshold, Barge-in Threshold, Min RMS, Silence Timeout, VAD Silence Pad, Min Speech Duration

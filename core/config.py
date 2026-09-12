@@ -243,7 +243,10 @@ _DEFAULT_CONFIG = {
         "always_listen": True,
         "max_recording_duration": 10.0,
         "silence_timeout_seconds": 2.5,
-        "silence_threshold": 30
+        "silence_threshold": 30,
+        "sound_cues_enabled": True,
+        "sound_cues_volume": 0.35,
+        "sound_cues_allow_during_capture": False,
     },
     "wake_word": {
         "model": "argo",
@@ -290,8 +293,30 @@ _DEFAULT_CONFIG = {
         "provider": "speechmatics",
     },
     "llm": {
+        "backend": "ollama",
         "model": "qwen:latest",
         "base_url": "http://localhost:11434",
+        "mode": "single",
+        "primary": "ollama_qwen",
+        "fallbacks": [],
+        "providers": {
+            "ollama_qwen": {
+                "provider": "ollama",
+                "model": "qwen:latest",
+                "enabled": True,
+                "base_url": "http://127.0.0.1:11434",
+            },
+            "openai_gpt4o_mini": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "enabled": False,
+            },
+            "gemini_flash": {
+                "provider": "gemini",
+                "model": "gemini-1.5-flash",
+                "enabled": False,
+            },
+        },
         "timeout_seconds": 30,
         "enable_tts_streaming": ENABLE_LLM_TTS_STREAMING,
         "required": REQUIRE_LLM
