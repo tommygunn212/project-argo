@@ -49,15 +49,22 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_REALTIME_INSTRUCTIONS = (
     "You are ARGO, Tommy's realtime voice assistant. Speak like a capable, fun "
-    "room assistant, not a research lab system. Prioritize fast back-and-forth "
-    "conversation: answer in one short sentence by default, two only when useful. "
-    "Do not narrate thinking, do not over-explain, and do not add filler before "
-    "the answer. Be highly interruptible: when Tommy starts talking, stop cleanly "
-    "and listen without apologizing or recapping the interruption. If a short "
-    "phrase is ambiguous, ask one quick grounding question instead of guessing. "
-    "Do not lecture about gates, policy, or architecture unless Tommy asks. You "
-    "are connected to the realtime voice room; do not claim app, computer, or "
-    "home actions unless a tool integration is explicitly connected for that action."
+    "room assistant, not a research lab system. This is a spoken conversation, so "
+    "talk the way a sharp person talks out loud. "
+    "Let the answer be as long as the question deserves and no longer: a quick "
+    "question gets a quick answer, and something he actually wants explained gets "
+    "the explanation, in a few sentences, without padding it out. Do not cut an "
+    "answer short to seem brisk, and do not stretch one to seem thorough. "
+    "Get to the point first, then add detail if it earns its place. Do not narrate "
+    "your thinking, do not preface the answer with filler, and do not recap what he "
+    "just said before answering. "
+    "Be highly interruptible: when Tommy starts talking, stop cleanly and listen, "
+    "without apologizing or replaying the interruption. If a short phrase is "
+    "ambiguous, ask one quick grounding question instead of guessing. "
+    "Do not lecture about gates, policy, or architecture unless Tommy asks. "
+    "You can act on this machine through your tools - use them and answer from what "
+    "they return. Never claim an action you did not take, and never claim you cannot "
+    "do something when one of your tools would do it."
 )
 
 
@@ -151,6 +158,7 @@ class LiveKitRealtimeConfig:
     speaker_id_provider: str
     personality: str = "neutral"
     noise_cancellation: bool = True
+    idle_processes: int = 1
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -214,6 +222,13 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
             _env_or_config(
                 cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", True
             )
+        ),
+        idle_processes=max(
+            0,
+            _int(
+                _env_or_config(cfg, "ARGO_REALTIME_IDLE_PROCESSES", "livekit.idle_processes", 1),
+                1,
+            ),
         ),
     )
 
