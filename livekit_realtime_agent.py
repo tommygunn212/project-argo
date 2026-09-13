@@ -282,7 +282,9 @@ def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
         api_key=cfg.api_key,
         api_secret=cfg.api_secret,
         load_threshold=float("inf"),
-        num_idle_processes=0,
+        # One warm executor: the first connect of a session was paying a
+        # ~574 ms cold start before ARGO could hear anything.
+        num_idle_processes=cfg.idle_processes,
         log_level="INFO",
     )
 
@@ -471,8 +473,8 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         return None
 
 
-server = build_agent_server()
-
-
 if __name__ == "__main__":
-    cli.run_app(server)
+    # Built here, not at import. build_agent_server() calls _apply_livekit_env,
+    # which mutates os.environ, and opens a LiveKit AgentServer - importing this
+    # module to inspect its tools or to test them should do neither.
+    cli.run_app(build_agent_server())
