@@ -96,3 +96,35 @@ def test_launchable_list_is_substantial_and_names_the_pins():
     assert d["ok"]
     assert d["count"] > 50, "resolution should cover installed software, not a handful"
     assert d["pinned"], "taskbar pins should be reported separately"
+
+
+# --- spoken names are spaced, installed names are not ----------------------
+
+@pytest.mark.parametrize("said,squashed", [
+    ("orca slicer", "orcaslicer"),
+    ("Orca Slicer", "orcaslicer"),
+    ("v l c", "vlc"),
+    ("note-pad++", "notepad"),
+])
+def test_squash_drops_spaces_and_punctuation(said, squashed):
+    assert R._squash(said) == squashed
+
+
+def test_spaced_speech_matches_run_together_name():
+    """'orca slicer' resolved to None while 'orcaslicer' worked."""
+    assert R._score("orca slicer", "orcaslicer") == 3
+    assert R._score("orca slicer", "orcaslicer 2.3") == 2
+
+
+def test_squashing_does_not_invent_a_match():
+    assert R._score("orca slicer", "prusaslicer") == 0
+
+
+def test_orca_slicer_resolves_as_spoken():
+    hit = R.resolve("orca slicer")
+    assert hit, "spoken two-word name must resolve"
+    assert "orca" in hit["name"].lower()
+
+
+def test_shortest_name_still_wins_at_equal_score():
+    assert R._best("cura", ["ultimaker cura website", "cura"]) == "cura"

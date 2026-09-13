@@ -135,15 +135,32 @@ def _registry_app_paths() -> dict[str, str]:
     return found
 
 
+def _squash(value: str) -> str:
+    """Drop spaces and punctuation so 'orca slicer' matches 'OrcaSlicer'."""
+    return "".join(ch for ch in (value or "").lower() if ch.isalnum())
+
+
 def _score(said: str, candidate: str) -> int:
-    """Exact beats prefix beats substring. 0 means no match."""
-    if said == candidate:
-        return 3
-    if candidate.startswith(said):
-        return 2
-    if said in candidate:
-        return 1
-    return 0
+    """Exact beats prefix beats substring. 0 means no match.
+
+    Compared twice: once as spoken, once with spaces and punctuation
+    squashed out, because installed names run words together
+    ("OrcaSlicer") while people say them apart ("orca slicer").
+    """
+    best = 0
+    for a, b in ((said, candidate), (_squash(said), _squash(candidate))):
+        if not a or not b:
+            continue
+        if a == b:
+            score = 3
+        elif b.startswith(a):
+            score = 2
+        elif a in b:
+            score = 1
+        else:
+            score = 0
+        best = max(best, score)
+    return best
 
 
 def _best(said: str, names) -> Optional[str]:
@@ -152,11 +169,10 @@ def _best(said: str, names) -> Optional[str]:
         s = _score(said, name)
         # Prefer the shortest name at a given score: "chrome" should beat
         # "chrome remote desktop".
-        if s > best_score or (s == s and s == best_score and best and len(name) < len(best) and s > 0):
-            if s > best_score:
-                best, best_score = name, s
-            elif s == best_score and s > 0 and len(name) < len(best):
-                best = name
+        if s > best_score:
+            best, best_score = name, s
+        elif s == best_score and s > 0 and best and len(name) < len(best):
+            best = name
     return best if best_score else None
 
 
