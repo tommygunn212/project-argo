@@ -367,6 +367,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 'livekit-client.umd.js': ('vendor', 'application/javascript; charset=utf-8'),
                 'argo-hedra-default.png': ('assets', 'image/png'),
                 'cortana_portrait_smirky.png': ('assets', 'image/png'),
+                'argo_cyber_male.png': ('assets', 'image/png'),
                 'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
                 'cortana_hedra_avatar_test.mp4': ('assets', 'video/mp4'),
             }
@@ -1049,6 +1050,12 @@ def main_loop():
     # Lower threshold = Easier to trigger (more false positives)
     # Default: 5.0, Quiet room: 3.0, Noisy environment: 7.0-10.0
     config_vad_threshold = float(config.get("audio.vad_threshold", os.getenv("ARGO_VAD_THRESHOLD", "5.0")))
+    # Hard ceiling on what calibration may raise the threshold to, as a
+    # multiple of the configured baseline. Without it, one noisy calibration
+    # window makes ARGO permanently deaf until restart.
+    CALIBRATION_MAX_MULTIPLE = float(
+        config.get("audio.calibration_max_multiple", os.getenv("ARGO_CALIBRATION_MAX_MULTIPLE", "3.0"))
+    )
     barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
 
     # --- AMBIENT NOISE CALIBRATION ---
@@ -1082,6 +1089,26 @@ def main_loop():
         adaptive_threshold = max(noise_peak * 1.5, noise_floor * multiplier)
         # Never go below config minimum
         adaptive_threshold = max(adaptive_threshold, config_vad_threshold)
+        # ...and never above the ceiling. If something was PLAYING during the
+        # calibration window - music, ARGO's own TTS, a test run - the p95 is
+        # not ambient noise, and 1.5x it lands above anything a voice will
+        # ever reach. ARGO then stops responding to speech entirely until
+        # someone restarts it. Measured on this machine: quiet room -> 0.200,
+        # room with audio playing -> 1.272.
+        ceiling = config_vad_threshold * CALIBRATION_MAX_MULTIPLE
+        if adaptive_threshold > ceiling:
+            logger.warning(
+                "[CALIBRATE] Measured floor implies a threshold of %.3f, above the "
+                "ceiling of %.3f (%.1fx the configured %.3f). Something was probably "
+                "making noise. Clamping - recalibrate in a quiet room.",
+                adaptive_threshold, ceiling, CALIBRATION_MAX_MULTIPLE, config_vad_threshold,
+            )
+            broadcast_msg(
+                "log",
+                "Calibration heard too much noise - threshold clamped. "
+                "Recalibrate in a quiet room.",
+            )
+            adaptive_threshold = ceiling
         vad_threshold = adaptive_threshold
         barge_in_threshold = adaptive_threshold * 1.2
         logger.info(
