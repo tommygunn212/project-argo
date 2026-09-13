@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE = """
 import os, sys
 sys.path.insert(0, r"{root}")
+os.environ.pop("LIVEKIT_URL", None)
 before = {{k: os.environ.get(k) for k in
           ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_AGENT_NAME")}}
 import livekit_realtime_agent  # noqa: F401

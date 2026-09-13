@@ -97,7 +97,11 @@ def test_realtime_defaults_are_tuned_for_fast_turn_taking(monkeypatch):
 
     assert cfg.min_interruption_duration == 0.08
     assert cfg.false_interruption_timeout == 0.22
-    assert "fast back-and-forth" in cfg.instructions
+    # Interruption stays fast, but reply LENGTH is no longer capped: the
+    # instructions used to say "answer in one short sentence by default",
+    # which is what made ARGO sound clipped next to ChatGPT voice mode.
+    assert "one short sentence" not in cfg.instructions
+    assert "as long as the question deserves" in cfg.instructions
 
 
 def test_mobile_access_status_uses_request_host(monkeypatch):

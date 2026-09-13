@@ -6,14 +6,13 @@ It is wired now - and wired so that a broken plugin degrades to raw audio
 instead of taking voice down with it.
 """
 
-import os
-
 import pytest
 
-os.environ.setdefault("LIVEKIT_URL", "ws://localhost:7880")
-
-from core.livekit_config import get_livekit_realtime_config  # noqa: E402
-import livekit_realtime_agent as agent_mod  # noqa: E402
+# No os.environ.setdefault("LIVEKIT_URL", ...) here. Importing the agent no
+# longer builds a server, so nothing needs it - and setting it leaks into the
+# whole pytest process and breaks test_livekit_config's URL defaults.
+from core.livekit_config import get_livekit_realtime_config
+import livekit_realtime_agent as agent_mod
 
 
 def test_noise_cancellation_is_on_by_default():

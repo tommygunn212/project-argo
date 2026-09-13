@@ -10,24 +10,12 @@ import json
 
 import pytest
 
-import os
+# The agent module no longer builds a server at import, so importing it here
+# no longer sets LIVEKIT_URL and friends. The snapshot/restore dance that used
+# to sit here is gone with its cause; test_agent_import_is_clean guards it.
+import livekit_realtime_agent as agent_mod
 
-# Importing the agent runs build_agent_server() at module scope, which does
-# os.environ.setdefault("LIVEKIT_URL", ...). That leaked into the rest of the
-# suite and made tests using a fake unreachable URL see the real server.
-# Snapshot before the import, restore after.
-_LIVEKIT_ENV = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_AGENT_NAME")
-_env_before = {k: os.environ.get(k) for k in _LIVEKIT_ENV}
-
-import livekit_realtime_agent as agent_mod  # noqa: E402
-
-for _key, _value in _env_before.items():
-    if _value is None:
-        os.environ.pop(_key, None)
-    else:
-        os.environ[_key] = _value
-
-from core import realtime_tools as T  # noqa: E402
+from core import realtime_tools as T
 
 
 EXPECTED_TOOLS = [
