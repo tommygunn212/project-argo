@@ -81,6 +81,85 @@ LISTENING_ENABLED = False
 SERVER_ENABLED = True
 main_loop_thread = None
 
+# ---------------------------------------------------------------------------
+# Microphone ownership
+# ---------------------------------------------------------------------------
+# Smooth Voice (LiveKit) and the classic STT/TTS pipeline must never hold the
+# microphone at the same time. Two open mics in one room is how ARGO ends up
+# hearing its own speakers: barge-in trips on its own voice and Whisper
+# invents words out of the tail.
+#
+# This is deliberately a MODE and not a liveness check. While Smooth Voice is
+# selected it owns the microphone even when LiveKit is disconnected, the
+# worker is dead, the browser is reconnecting, or a second tab is open. Only
+# an explicit switch back to classic releases it. The mode is persisted so a
+# server restart does not quietly hand the microphone back either.
+VOICE_MODE_SMOOTH = "smooth"
+VOICE_MODE_CLASSIC = "classic"
+VOICE_MODE_FILE = Path(__file__).resolve().parent / "runtime" / "voice_mode.json"
+VOICE_MODE = VOICE_MODE_CLASSIC
+
+# Phases the browser reports while it holds a LiveKit microphone.
+SMOOTH_VOICE_LIVE_PHASES = {
+    "live", "livekit_client_ready", "mic_acquired", "connecting",
+    "remote_audio_subscribed",
+}
+
+
+def _load_voice_mode() -> str:
+    """Read the persisted mode. A missing or damaged file means classic."""
+    try:
+        raw = json.loads(VOICE_MODE_FILE.read_text(encoding="utf-8"))
+        mode = str(raw.get("mode", "")).strip().lower()
+        if mode in (VOICE_MODE_SMOOTH, VOICE_MODE_CLASSIC):
+            return mode
+    except FileNotFoundError:
+        pass
+    except Exception:
+        logger.warning("[VoiceMode] unreadable %s; defaulting to classic", VOICE_MODE_FILE)
+    return VOICE_MODE_CLASSIC
+
+
+def _save_voice_mode(mode: str) -> None:
+    try:
+        VOICE_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = VOICE_MODE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"mode": mode}, indent=2), encoding="utf-8")
+        tmp.replace(VOICE_MODE_FILE)
+    except Exception:
+        logger.warning("[VoiceMode] could not persist mode", exc_info=True)
+
+
+def _set_voice_mode(mode: str, reason: str) -> None:
+    """Change who owns the microphone, and stop the other path immediately."""
+    global VOICE_MODE, LISTENING_ENABLED
+    mode = mode if mode in (VOICE_MODE_SMOOTH, VOICE_MODE_CLASSIC) else VOICE_MODE_CLASSIC
+    changed = mode != VOICE_MODE
+    VOICE_MODE = mode
+    _save_voice_mode(mode)
+    if changed:
+        logger.info("[VoiceMode] %s owns the microphone (%s)", mode, reason)
+        broadcast_msg("voice_mode", {"mode": mode, "reason": reason})
+    if mode == VOICE_MODE_SMOOTH and LISTENING_ENABLED:
+        logger.warning("[VoiceMode] classic listener was running; stopping it")
+        LISTENING_ENABLED = False
+        if audio_ref:
+            try:
+                audio_ref.stop()
+            except Exception:
+                logger.debug("[VoiceMode] could not stop classic audio", exc_info=True)
+
+
+def _note_smooth_voice_phase(phase: str) -> None:
+    """Claim the microphone for Smooth Voice from the browser's own phases.
+
+    Only claims. Nothing the browser reports ever RELEASES the microphone -
+    not "disconnected", not "error", not a closed tab. Releasing is an
+    explicit user action, handled in the control path.
+    """
+    if (phase or "").strip().lower() in SMOOTH_VOICE_LIVE_PHASES:
+        _set_voice_mode(VOICE_MODE_SMOOTH, f"smooth voice phase: {phase}")
+
 # Self-diagnostics and assisted recovery (Phase 1 & 2)
 diagnostics_ref = None
 recovery_ref = None
@@ -249,6 +328,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     logger.warning("[CLIENT] %s", line)
                 else:
                     logger.info("[CLIENT] %s", line)
+                _note_smooth_voice_phase(safe.get("phase", ""))
                 self._send_json({"ok": True})
             except Exception as exc:
                 logger.exception("[HTTP] client log failed")
@@ -602,7 +682,24 @@ def _handle_control(command):
             except Exception:
                 pass
         broadcast_msg("status", "IDLE")
-    elif cmd == "RESUME":
+    elif cmd in ("RESUME", "USE_CLASSIC_VOICE"):
+        if cmd == "USE_CLASSIC_VOICE":
+            # The explicit switch: the only thing that takes the microphone
+            # back from Smooth Voice.
+            _set_voice_mode(VOICE_MODE_CLASSIC, "user switched to classic voice")
+        elif VOICE_MODE == VOICE_MODE_SMOOTH:
+            # A disconnect, a dead worker, a reconnect or a second tab must
+            # never reopen the classic microphone behind Tommy's back.
+            logger.warning(
+                "[VoiceMode] refused RESUME: Smooth Voice owns the microphone"
+            )
+            log_event("UI_CMD_START_VAD_REFUSED", stage="ui")
+            broadcast_msg(
+                "log",
+                "Smooth Voice owns the microphone. Switch to classic voice to use it.",
+            )
+            broadcast_msg("voice_mode", {"mode": VOICE_MODE, "reason": "resume refused"})
+            return
         log_event("UI_CMD_START_VAD", stage="ui")
         LISTENING_ENABLED = True
         log_event("CONTROL_RESUME", stage="control")
@@ -930,6 +1027,17 @@ def _handle_code_repair_response(payload: dict):
     )
     log_event(f"CODE_REPAIR_{result.get('status', 'unknown').upper()}", stage="recovery")
     broadcast_msg("code_repair_result", result)
+
+
+def _restore_voice_mode() -> None:
+    """Reload microphone ownership at startup.
+
+    Without this, restarting the server would silently hand the microphone
+    back to the classic path while Tommy still had Smooth Voice selected.
+    """
+    global VOICE_MODE
+    VOICE_MODE = _load_voice_mode()
+    logger.info("[VoiceMode] restored: %s owns the microphone", VOICE_MODE)
 
 
 def _start_main_loop_thread():
@@ -1326,6 +1434,7 @@ if __name__ == "__main__":
     # Engine selection/loading belongs to STTEngineManager. The former local
     # Whisper preload was never used and also ran when cloud STT was selected.
     
+    _restore_voice_mode()
     _start_main_loop_thread()
     
     from http.server import ThreadingHTTPServer

@@ -3275,7 +3275,9 @@ async function startRealtimeVoice() {
       name: err?.name || 'Error',
       message: err?.message || String(err),
     }, 'error');
-    cleanupRealtimeVoice({ resumeClassic: true, status: 'ERROR' });
+    // Do not hand the microphone back: a realtime failure is a failure
+    // to show, not a reason to open the classic mic behind his back.
+    cleanupRealtimeVoice({ resumeClassic: false, status: 'ERROR' });
     const friendly = describeRealtimeStartError(err, step);
     setRealtimeError(friendly);
     addSystemLog(`Realtime voice error: ${friendly}`);
@@ -3333,7 +3335,11 @@ function attachLiveKitHandlers(room, lk) {
   room.on(lk.RoomEvent.Disconnected, (reason) => {
     logRealtimeClientEvent('disconnected', { reason: reason || 'unknown' });
     if (livekitRoom === room) {
-      cleanupRealtimeVoice({ resumeClassic: true, status: 'OFFLINE' });
+      setRealtimeError(`Smooth Voice disconnected (${reason || 'unknown'}). The classic listener stays off - press Start Smooth Voice to reconnect.`);
+      addSystemLog(`Smooth voice disconnected: ${reason || 'unknown'}`);
+      // Smooth Voice keeps the microphone across a disconnect. Only an
+      // explicit switch to classic voice releases it.
+      cleanupRealtimeVoice({ resumeClassic: false, status: 'OFFLINE' });
     }
   });
 }
@@ -3359,6 +3365,8 @@ function cleanupRealtimeVoice({ resumeClassic = false, status = 'OFFLINE' } = {}
   if (resumeClassic) {
     resumeClassicAfterRealtime();
     addSystemLog('Classic listener resumed');
+  } else if (status !== 'ERROR') {
+    addSystemLog('Smooth Voice still owns the microphone; classic listener stays off');
   }
 }
 

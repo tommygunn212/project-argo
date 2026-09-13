@@ -15,19 +15,24 @@ from core.livekit_config import get_livekit_realtime_config
 import livekit_realtime_agent as agent_mod
 
 
-def test_noise_cancellation_is_on_by_default():
-    assert get_livekit_realtime_config().noise_cancellation is True
+def test_noise_cancellation_is_off_by_default():
+    """BVC is a LiveKit Cloud filter and this server is self-hosted. It was
+    on by default for one afternoon and was a credible suspect when Smooth
+    Voice connected and then heard nothing."""
+    assert get_livekit_realtime_config().noise_cancellation is False
 
 
-def test_filter_is_built_when_enabled():
+def test_no_filter_is_built_when_disabled():
+    assert agent_mod._build_noise_filter(get_livekit_realtime_config()) is None
+
+
+def test_the_filter_still_builds_when_explicitly_enabled():
+    """Off by default, not removed - this runs against Cloud one day."""
     cfg = get_livekit_realtime_config()
-    assert agent_mod._build_noise_filter(cfg) is not None
+    on = type(cfg)(**{**cfg.__dict__, "noise_cancellation": True})
+    assert agent_mod._build_noise_filter(on) is not None
 
 
-def test_config_can_turn_it_off():
-    cfg = get_livekit_realtime_config()
-    off = type(cfg)(**{**cfg.__dict__, "noise_cancellation": False})
-    assert agent_mod._build_noise_filter(off) is None
 
 
 def test_a_broken_plugin_degrades_to_raw_audio(monkeypatch):
@@ -38,7 +43,9 @@ def test_a_broken_plugin_degrades_to_raw_audio(monkeypatch):
         raise RuntimeError("pretend the native library is missing")
 
     monkeypatch.setattr(noise_cancellation, "BVC", boom)
-    assert agent_mod._build_noise_filter(get_livekit_realtime_config()) is None
+    cfg = get_livekit_realtime_config()
+    on = type(cfg)(**{**cfg.__dict__, "noise_cancellation": True})
+    assert agent_mod._build_noise_filter(on) is None
 
 
 def test_room_input_options_accept_the_filter():
