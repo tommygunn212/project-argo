@@ -2034,6 +2034,22 @@ input[type="range"]::-moz-range-thumb {
           </div>
         </div>
 
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>CODE REPAIR</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Creates a reviewable task first. Codex uses Astra high only after you approve the exact task.</div>
+          <textarea id="codeRepairRequest" rows="3" placeholder="Example: Voice mode starts but no sound comes from the selected device."></textarea>
+          <div style="margin-top:8px"><button class="btn btn-primary" onclick="requestCodeRepair()">Create Code Repair Plan</button></div>
+        </div>
+
+        <div class="card" id="codeRepairCard" style="display:none">
+          <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>CODE REPAIR PROPOSAL</div>
+          <div id="codeRepairContent"></div>
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <button class="btn btn-primary" id="codeRepairApprove">✓ Run Astra Repair</button>
+            <button class="btn btn-danger" id="codeRepairDeny">✗ Deny</button>
+          </div>
+        </div>
+
         <!-- System Log -->
         <div class="card">
           <div class="card-title"><span class="dot"></span>SYSTEM LOG</div>
@@ -2106,6 +2122,7 @@ const MAX_CHAT_MSGS = 100;
 let waveformData = new Float32Array(200).fill(0);
 let waveformIdx = 0;
 let pendingRecoveryId = null;
+let pendingCodeRepairId = null;
 let livekitRoom = null;
 let livekitMicTrack = null;
 let livekitModulePromise = null;
@@ -2405,6 +2422,8 @@ function handleMessage(msg) {
     case 'diagnostics_result': handleDiagnostics(payload); break;
     case 'recovery_proposal': handleRecoveryProposal(payload); break;
     case 'recovery_result': handleRecoveryResult(payload); break;
+    case 'code_repair_proposal': handleCodeRepairProposal(payload); break;
+    case 'code_repair_result': handleCodeRepairResult(payload); break;
     case 'config': handleConfig(payload); break;
     case 'db_status': handleDBStatus(payload); break;
     case 'illegal_transition': handleIllegalTransition(payload); break;
@@ -2735,6 +2754,25 @@ function sendDiagnostics() {
 
 function refreshHA() {
   sendText('what smart home devices do I have');
+}
+
+function requestCodeRepair() {
+  const request = $('codeRepairRequest').value.trim();
+  if (!request) { addSystemLog('Describe the code problem first'); return; }
+  send('code_repair_request', { request });
+}
+
+function handleCodeRepairProposal(data) {
+  if (!data) return;
+  pendingCodeRepairId = data.action_id;
+  $('codeRepairCard').style.display = 'block';
+  $('codeRepairContent').innerHTML = `<div style="font-size:13px;color:var(--text-primary)">${data.message || 'Code repair proposed'}</div><div style="margin-top:7px;font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">${data.task_path || ''}</div>`;
+}
+
+function handleCodeRepairResult(data) {
+  if (!data) return;
+  if (data.status !== 'error') $('codeRepairCard').style.display = 'none';
+  addSystemLog(`Code repair: ${data.status || 'unknown'}${data.message ? ` — ${data.message}` : ''}`);
 }
 
 // ═══════ REALTIME VOICE (LIVEKIT + OPENAI REALTIME) ═══════
@@ -3712,6 +3750,18 @@ function colorSliderValue(id, val, el) {
 window.addEventListener('resize', () => {
   resizeCanvas();
   resizeAvatarCanvases();
+});
+$('codeRepairApprove').addEventListener('click', () => {
+  if (pendingCodeRepairId) {
+    send('code_repair_response', { action_id: pendingCodeRepairId, approved: true });
+    $('codeRepairCard').style.display = 'none';
+  }
+});
+$('codeRepairDeny').addEventListener('click', () => {
+  if (pendingCodeRepairId) {
+    send('code_repair_response', { action_id: pendingCodeRepairId, approved: false });
+    $('codeRepairCard').style.display = 'none';
+  }
 });
 window.addEventListener('beforeunload', () => {
   if (livekitRoom) {

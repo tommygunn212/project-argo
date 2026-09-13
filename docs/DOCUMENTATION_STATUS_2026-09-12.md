@@ -23,3 +23,7 @@ On 2026-09-12, the focused regression command completed with 141 Python tests pa
 ## Open validation
 
 Before calling voice work fully closed, perform and record a real microphone turn, physical-device interruption, output-underrun investigation, and separate latency measurements for endpointing, network/SDK, device write, and audible onset.
+
+## Repair and code handoff boundary
+
+ARGO recognizes plain-language self-repair requests, runs its supported health checks, and can perform only a displayed low-risk runtime repair after approval. It rechecks afterward. For a code-level issue, the System panel writes an auditable request under `runtime/code_requests/`; a separate approval is required before local Codex dispatch. The dispatcher uses Astra with high reasoning, works only in the ARGO workspace, and instructs Codex not to commit, push, delete unrelated files, or modify external systems. A completed agent process still needs review of its diff and reported tests; process-status polling and review UI remain planned.

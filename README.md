@@ -15,6 +15,7 @@
 - **Deterministic system facts** — system health/specs never call the LLM.
 - **Natural language flexibility** — supports colloquial phrasing for core commands.
 - **Self-diagnostics** — ARGO can check its own health and propose fixes.
+- **Approval-gated repair loop** — plain-language repair requests trigger diagnostics; ARGO proposes one bounded runtime repair, rechecks after approval, and can hand a scoped code repair to local Codex/Astra only after a second visible approval.
 - **Security aware** — binds are configurable; local dev can serve the dashboard to the LAN for phone/iPad testing.
 - **Memory backend choice** — SQLite by default, optional PostgreSQL backend for durable long-term memory experiments.
 

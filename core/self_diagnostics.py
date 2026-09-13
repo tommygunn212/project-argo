@@ -621,6 +621,15 @@ class AssistedRecovery:
             self.action_log.append(log_entry)
             logger.error(f"Attempted to execute forbidden action: {action_id}")
             return {"status": "error", "message": "Action not in allowed list"}
+
+        # Approval must match a diagnostic proposal that the user was shown.
+        # An allowed action alone is never a sufficient authorization.
+        if action_id not in self.pending_proposals:
+            log_entry["result"] = "rejected"
+            log_entry["message"] = "No pending proposal"
+            self.action_log.append(log_entry)
+            logger.warning("Rejected recovery approval without proposal: %s", action_id)
+            return {"status": "error", "message": "No pending recovery proposal"}
         
         # Execute the approved action
         try:

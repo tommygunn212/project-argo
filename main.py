@@ -52,6 +52,7 @@ from core.startup_checks import check_ollama
 from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
+from core.code_repair import CodeRepairManager
 from core.instrumentation import log_event
 from core.sound_cues import get_sound_cue_player
 from system_profile import get_system_profile, get_gpu_profile
@@ -82,6 +83,7 @@ main_loop_thread = None
 # Self-diagnostics and assisted recovery (Phase 1 & 2)
 diagnostics_ref = None
 recovery_ref = None
+code_repair_ref = None
 
 # ============================================================================
 # 5) LOGGING
@@ -437,6 +439,10 @@ async def websocket_handler(websocket):
                 await _handle_diagnostics(websocket)
             if msg_type == "recovery_response" and payload:
                 await _handle_recovery_response(payload)
+            if msg_type == "code_repair_request" and payload:
+                _handle_code_repair_request(payload)
+            if msg_type == "code_repair_response" and payload:
+                _handle_code_repair_response(payload)
             if msg_type == "control" and payload:
                 _handle_control(payload)
             if msg_type == "override" and payload:
@@ -764,7 +770,7 @@ async def _handle_recovery_response(payload: dict):
     Payload:
       {"action_id": "restart_ollama", "approved": true}
     """
-    global recovery_ref
+    global recovery_ref, diagnostics_ref
     
     if not recovery_ref:
         logger.warning("[RECOVERY] No recovery manager initialized")
@@ -781,6 +787,17 @@ async def _handle_recovery_response(payload: dict):
     
     # Execute only if approved
     result = await recovery_ref.execute_if_approved(action_id, approved)
+
+    # Success is verified by a fresh health check, never inferred from the
+    # action's return value alone.
+    if approved and result.get("status") in ("success", "warning") and diagnostics_ref:
+        try:
+            diagnostics_ref.check_all()
+            result["verification"] = diagnostics_ref.get_summary()
+            broadcast_msg("diagnostics_result", result["verification"])
+        except Exception as exc:
+            result["verification_error"] = str(exc)
+            logger.exception("[RECOVERY] Post-repair diagnostics failed")
     
     # Broadcast result
     broadcast_msg("recovery_result", {
@@ -792,14 +809,40 @@ async def _handle_recovery_response(payload: dict):
 
 def _init_recovery_system():
     """Initialize assisted recovery system with pipeline reference."""
-    global recovery_ref, diagnostics_ref
+    global recovery_ref, diagnostics_ref, code_repair_ref
     
     diagnostics_ref = SystemDiagnostics()
     recovery_ref = AssistedRecovery(
         pipeline=pipeline_ref,
         broadcast_fn=broadcast_msg
     )
+    if pipeline_ref is not None:
+        pipeline_ref.recovery_manager = recovery_ref
+    code_repair_ref = CodeRepairManager(broadcast_fn=broadcast_msg)
     logger.info("[RECOVERY] Assisted recovery system initialized")
+
+
+def _handle_code_repair_request(payload: dict):
+    """Create, but never dispatch, an auditable Codex repair task."""
+    if not code_repair_ref:
+        return
+    try:
+        request = str(payload.get("request") or "")
+        proposal = code_repair_ref.propose(request)
+        log_event(f"CODE_REPAIR_PROPOSED {proposal['action_id']}", stage="recovery")
+    except ValueError as exc:
+        broadcast_msg("code_repair_result", {"status": "error", "message": str(exc)})
+
+
+def _handle_code_repair_response(payload: dict):
+    """Dispatch Codex only for the exact task the user approved."""
+    if not code_repair_ref:
+        return
+    result = code_repair_ref.dispatch_if_approved(
+        str(payload.get("action_id") or ""), bool(payload.get("approved", False))
+    )
+    log_event(f"CODE_REPAIR_{result.get('status', 'unknown').upper()}", stage="recovery")
+    broadcast_msg("code_repair_result", result)
 
 
 def _start_main_loop_thread():

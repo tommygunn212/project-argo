@@ -40,7 +40,8 @@ Implemented first step:
 
 Remaining steps:
 
-- Add a second dispatch mode later for Codex app/CLI once the callable Codex surface is confirmed.
+- Local Codex CLI is now confirmed. The `/v2` System panel creates a task record and, after explicit approval, dispatches `gpt-6-astra` with high reasoning in the ARGO workspace. The generated prompt forbids commit, push, unrelated deletion, and external-system changes.
+- Add process-status polling and a visual diff/review panel before treating a completed coding-agent run as an applied repair.
 - Add Claude only after a local CLI or API path is installed and authenticated.
 
 ## 3. Speaker Recognition

@@ -8,6 +8,14 @@ Short list of deferred or optional work items. The v1.9.1 voice reliability batc
 - [ ] Measure endpointing, network/SDK events, first device write, and audible onset separately; do not infer end-to-end latency from a TTS-only run.
 - [ ] Resolve audio ownership for transition sound cues and evaluate endpointing/AEC changes with fresh reproducible tests.
 
+## Repair automation — implemented boundary
+
+- [x] Recognize plain-language self-repair requests such as "something isn't working" and "diagnose and fix."
+- [x] Require a visible, pending diagnostic proposal before an approved runtime repair can execute.
+- [x] Re-run diagnostics after a successful runtime repair and show the observed result.
+- [x] Create an auditable code-repair task and require an additional UI approval before local Codex dispatch.
+- [ ] Add process-status polling and a diff/review panel for completed Astra repair tasks.
+
 ## Current product follow-through
 - [ ] Add `/v2` controls for provider enablement, model selection, fallback order, and an explicit opt-in multi-model compare mode.
 - [ ] Connect ARGO's UI/voice flow to the auditable coding-request record, then add agent dispatch only after a callable agent surface is verified.

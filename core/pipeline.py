@@ -4504,7 +4504,11 @@ class ArgoPipeline:
                     # Propose recovery if available
                     for comp_name, comp_health in diag.last_check.items():
                         if comp_health.status.value == "error" and comp_health.recovery_action:
-                            recovery = AssistedRecovery(pipeline=self, broadcast_fn=self.broadcast)
+                            # The server installs one shared manager so the
+                            # proposal here is the same proposal the UI approves.
+                            recovery = getattr(self, "recovery_manager", None)
+                            if recovery is None:
+                                recovery = AssistedRecovery(pipeline=self, broadcast_fn=self.broadcast)
                             proposal = recovery.propose(
                                 comp_health.recovery_action,
                                 comp_health.message
