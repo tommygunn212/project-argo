@@ -73,6 +73,10 @@ def list_running_apps() -> list[str]:
 
 
 def is_app_running(app_key: str) -> bool:
+    # Process names are compared case-insensitively: Windows 11 reports
+    # "Notepad.exe" while the registry says "notepad.exe". An exact compare
+    # made Notepad look permanently closed, so every open launched another
+    # copy, focus always failed, and close said it was not open.
     meta = APP_REGISTRY.get(app_key)
     if not meta:
         return False
@@ -80,7 +84,7 @@ def is_app_running(app_key: str) -> bool:
     if not target:
         return False
     for proc in psutil.process_iter(attrs=["name"]):
-        if proc.info.get("name") == target:
+        if (proc.info.get("name") or "").lower() == target.lower():
             return True
     return False
 
@@ -141,7 +145,7 @@ def close_app_deterministic(app_key: str) -> tuple[bool, str, int | None, str]:
         return False, "I can't close that application.", None, "blocked"
     matches = []
     for proc in psutil.process_iter(attrs=["name", "pid"]):
-        if proc.info.get("name") == target:
+        if (proc.info.get("name") or "").lower() == target.lower():
             matches.append(proc)
     if not matches:
         LOGGER.info("[APP_CLOSE] result=already_closed app=%s pid=<none>", app_key)
