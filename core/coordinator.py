@@ -220,8 +220,15 @@ class Coordinator:
     SILENCE_DURATION = 2.2  # Seconds of silence to stop recording
     MINIMUM_RECORD_DURATION = 0.9  # Minimum record duration
     SILENCE_TIMEOUT_SECONDS = 2.2  # Seconds of silence to stop recording
-    SILENCE_THRESHOLD = 250  # Audio level below this = silence (RMS absolute)
+    # Normalized RMS (0-1), matching the `rms` actually computed in the record
+    # loop. This was 250 - an absolute int16 level - compared against a
+    # normalized value, so "rms < SILENCE_THRESHOLD" was true on every chunk
+    # and the silence timer ran continuously from the first sample of speech.
+    # Recording therefore stopped ~2.2s in regardless of whether Tommy was
+    # still talking. Only used when Silero is unavailable.
+    SILENCE_THRESHOLD = 0.006
     RMS_SPEECH_THRESHOLD = 0.0005  # RMS normalized level (0-1) to START silence timer — LOWERED to 0.0005 for weak Brio signal
+    VAD_SPEECH_PROBABILITY = 0.5  # Silero speech probability that counts as speech
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
     PRE_ROLL_BUFFER_MS_MAX = 1200  # Max milliseconds to keep in rolling buffer — 1.2 second look-back
     
@@ -1982,6 +1989,35 @@ class Coordinator:
         self._stop_input_audio("stop_requested")
         self.stop_requested = True
     
+    def _speech_gate(self):
+        """The Silero gate, loaded once, or None if it will not load.
+
+        The ONNX session costs a few hundred milliseconds to build, so it is
+        created on first use and kept. A failure is cached as None so we do
+        not retry on every single recording.
+        """
+        gate = getattr(self, "_silero_gate", None)
+        if gate is not None:
+            return gate
+        if getattr(self, "_silero_gate_failed", False):
+            return None
+        try:
+            from core.vad_silero import SileroGate
+
+            gate = SileroGate(
+                sample_rate=self.AUDIO_SAMPLE_RATE,
+                threshold=self.VAD_SPEECH_PROBABILITY,
+            )
+        except Exception:
+            self.logger.exception("[Record] Silero gate could not be created; using energy detection")
+            self._silero_gate_failed = True
+            return None
+        if not gate.available:
+            self._silero_gate_failed = True
+            return None
+        self._silero_gate = gate
+        return gate
+
     def _record_with_silence_detection(self, initial_frames: Optional[list] = None) -> np.ndarray:
         """
         Record audio with dynamic silence detection and pre-roll buffer.
@@ -2061,6 +2097,10 @@ class Coordinator:
             # INSTRUMENTATION: Log mic open
             log_event("MIC OPEN")
             
+            vad = self._speech_gate()
+            if vad is not None:
+                vad.reset()
+
             rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
             chunk_count = 0  # For RMS logging every 20 chunks
             
@@ -2083,6 +2123,17 @@ class Coordinator:
                 rms = np.sqrt(np.mean(chunk.astype(float) ** 2)) / 32768.0  # Normalize int16 range
                 rms_samples.append(rms)
                 chunk_count += 1
+
+                # Is this speech? Silero reads the waveform, so a fan, a tone
+                # or a keystroke does not hold the turn open the way a bare
+                # energy threshold does. None means it could not judge, and
+                # only then do we fall back to comparing loudness.
+                chunk_is_speech = vad.is_speech(chunk) if vad is not None else None
+                if chunk_is_speech is None:
+                    chunk_is_speech = rms > self.RMS_SPEECH_THRESHOLD
+                    chunk_is_silence = rms < self.SILENCE_THRESHOLD
+                else:
+                    chunk_is_silence = not chunk_is_speech
                 
                 # Log RMS every 20 chunks (~2 seconds) to see if mic is capturing
                 if chunk_count % 20 == 0:
@@ -2095,7 +2146,7 @@ class Coordinator:
                     break
                 
                 # Detect speech (RMS > threshold) — only start silence timer after speech detected
-                if not speech_detected and rms > self.RMS_SPEECH_THRESHOLD:
+                if not speech_detected and chunk_is_speech:
                     speech_detected = True
                     speech_detected_at = elapsed_time
                     if self.record_debug:
@@ -2104,7 +2155,7 @@ class Coordinator:
                 
                 # Track silence only after speech has been detected
                 if speech_detected:
-                    if rms < self.SILENCE_THRESHOLD:
+                    if chunk_is_silence:
                         if silence_started_at is None:
                             silence_started_at = elapsed_time
                         consecutive_silence_samples += chunk.shape[0]
