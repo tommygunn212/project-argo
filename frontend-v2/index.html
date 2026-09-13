@@ -558,6 +558,21 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   transform-origin: 50% 58%;
   will-change: transform, filter;
 }
+.avatar-local-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  z-index: 1;
+  opacity: 0;
+  background: var(--bg-input);
+  transform-origin: 50% 49%;
+}
+.avatar-stage.has-local-media:not(.has-video) .avatar-local-media {
+  opacity: 1;
+}
 .avatar-stage:not(.has-video) .avatar-generated + .avatar-fallback {
   opacity: 0;
 }
@@ -579,10 +594,22 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 .avatar-stage.local-animated:not(.has-video) .avatar-canvas {
   opacity: 1;
 }
+.avatar-stage.has-local-media:not(.local-animated):not(.has-video) .avatar-canvas {
+  opacity: 0;
+}
+.avatar-stage.has-local-media.local-animated:not(.has-video) .avatar-local-media {
+  opacity: 0;
+}
 .avatar-stage.local-animated:not(.has-video) .avatar-fallback {
   opacity: 0;
 }
+.avatar-stage.has-local-media:not(.has-video) .avatar-fallback {
+  opacity: 0;
+}
 .avatar-stage.has-video .avatar-fallback {
+  opacity: 0;
+}
+.avatar-stage.has-video .avatar-local-media {
   opacity: 0;
 }
 .avatar-stage.has-video .avatar-generated {
@@ -590,6 +617,16 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 }
 .avatar-stage.has-video .avatar-canvas {
   opacity: 0;
+}
+/* A selected replacement owns the stage even while loading. Never flash the
+   original portrait underneath it or fade that portrait over the new media. */
+.avatar-stage.local-media-selected .avatar-fallback {
+  visibility: hidden;
+  opacity: 0;
+  transition: none;
+}
+.avatar-stage.local-media-selected:not(.has-local-media) .avatar-canvas {
+  visibility: hidden;
 }
 .avatar-video {
   position: absolute;
@@ -627,6 +664,9 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   color: var(--text-dim);
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+.avatar-hud span:first-child {
+  display: none;
 }
 .avatar-signal {
   display: flex;
@@ -1516,7 +1556,7 @@ input[type="range"]::-moz-range-thumb {
             </div>
             <div>
               <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">Personality</label>
-              <select id="personalitySelect" style="width:100%" onchange="sendOverride('personality_mode', this.value); saveDropdownSettings()">
+              <select id="personalitySelect" style="width:100%" onchange="handlePersonalityChange(this)">
                 <option value="tommy_gunn">Tommy Gunn — Sharp, witty</option>
                 <option value="jarvis">Jarvis — Calm, formal</option>
                 <option value="tommy_mix">Tommy Mix — Sharp + chaos</option>
@@ -2105,13 +2145,10 @@ input[type="range"]::-moz-range-thumb {
   </div>
 </div>
 
-<script>
-(function loadBundledLiveKitClient() {
-  const base = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
-  document.write(`<script src="${base}/v2-assets/livekit-client.umd.js"><\/script>`);
-  document.write(`<script src="${base}/v2-assets/cortana-avatar.js"><\/script>`);
-})();
-</script>
+<!-- Keep these classic scripts ordered. document.write() here caused some
+     browsers to fetch the LiveKit bundle without exposing its UMD global. -->
+<script src="/v2-assets/livekit-client.umd.js"></script>
+<script src="/v2-assets/cortana-avatar.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic
@@ -2136,7 +2173,12 @@ let livekitStarting = false;
 let realtimeAvatarMeter = null;
 let avatarAudioContext = null;
 let realtimeAvatarVideoEls = [];
+let localAvatarMediaEls = [];
+let localAvatarMediaUrl = '';
+let avatarMotionPreference = null;
 let avatarAudioLevel = 0;
+let desktopAvatarAudioLevel = 0;
+let desktopAvatarAudioTime = 0;
 const REALTIME_TAB_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const REALTIME_LOCK_KEY = 'argo.realtime.activeTab';
 const REALTIME_LOCK_TTL_MS = 15000;
@@ -2423,6 +2465,10 @@ function handleMessage(msg) {
     case 'metric': handleLatencyMetric(payload); break;
     case 'barge_in': handleBargeIn(payload); break;
     case 'audio_owner': handleAudioOwner(payload); break;
+    case 'tts_audio_level':
+      desktopAvatarAudioLevel = Math.max(0, Math.min(1, Number(payload?.rms) || 0));
+      desktopAvatarAudioTime = performance.now();
+      break;
     case 'runtime_overrides': handleOverrides(payload); break;
     case 'diagnostics_result': handleDiagnostics(payload); break;
     case 'recovery_proposal': handleRecoveryProposal(payload); break;
@@ -2442,6 +2488,7 @@ function handleMessage(msg) {
 // ── Status ──
 function handleStatus(state) {
   currentState = state;
+  if (state !== 'SPEAKING') desktopAvatarAudioLevel = 0;
   stateBadge.setAttribute('data-state', state);
   stateBadge.textContent = state;
   setAvatarState(state);
@@ -2616,7 +2663,8 @@ function handleOverrides(data) {
   if (data.tts_enabled !== undefined) $('toggleTTS').checked = data.tts_enabled;
   if (data.barge_in_enabled !== undefined) $('toggleBargeIn').checked = data.barge_in_enabled;
   if (data.music_enabled !== undefined) $('toggleMusic').checked = data.music_enabled;
-  if (data.personality_mode) $('personalitySelect').value = data.personality_mode;
+  // Personality intentionally not synced from runtime_overrides: that dict is
+  // in-memory and resets on restart. /api/livekit-status is the source of truth.
   syncBehaviorSliders(data);
 }
 
@@ -2747,7 +2795,9 @@ function restoreDropdownSettings() {
     if (s.stt) { $('sttSelect').value = s.stt; handleSTTChange(); }
     if (s.tts) { $('ttsSelect').value = s.tts; handleTTSChange(); }
     // TTS model comes from backend engine_config — don't override from localStorage
-    if (s.personality) { $('personalitySelect').value = s.personality; sendOverride('personality_mode', s.personality); }
+    // Personality is owned by the server's persisted selection, not this
+    // browser's localStorage. refreshRealtimeStatus() applies it. Pushing a
+    // stale local value here would silently overwrite a choice made elsewhere.
     updatePipelineDisplay();
     addSystemLog('Settings restored from last session');
   } catch(e) {}
@@ -2859,6 +2909,50 @@ function setRealtimeError(message) {
   el.textContent = message;
 }
 
+// The realtime worker reads the personality persisted by the server, not this
+// tab's localStorage. On load the server value is the source of truth, so the
+// dropdown is reconciled to it after a refresh or on a different browser.
+// Last personality confirmed by the server. Used to revert the dropdown
+// when a change cannot actually be saved.
+let serverPersonality = null;
+
+function handlePersonalityChange(select) {
+  const wanted = select.value;
+  const connected = (typeof ws !== 'undefined') && ws && ws.readyState === WebSocket.OPEN;
+  if (!connected) {
+    // Do not silently accept a change the backend never received.
+    select.value = serverPersonality || select.value;
+    addSystemLog(`Not saved — ARGO is offline. Personality stays ${select.value}.`);
+    setRealtimeError('Personality change was not saved: no connection to ARGO.');
+    return;
+  }
+  sendOverride('personality_mode', wanted);
+  serverPersonality = wanted;
+  saveDropdownSettings();
+  updatePipelineDisplay();
+  addSystemLog(`Personality set to ${wanted} — applies to the next Smooth Voice session`);
+}
+
+
+function applyServerPersonality(personality) {
+  const name = String(personality || '').trim();
+  if (!name) return;
+  const select = $('personalitySelect');
+  if (!select) return;
+  const known = Array.prototype.some.call(select.options, o => o.value === name);
+  if (!known) {
+    addSystemLog(`Server personality '${name}' is not in this dropdown`);
+    return;
+  }
+  serverPersonality = name;
+  if (select.value === name) return;
+  select.value = name;
+  saveDropdownSettings();
+  updatePipelineDisplay();
+  addSystemLog(`Personality restored from server: ${name}`);
+}
+
+
 async function refreshRealtimeStatus() {
   try {
     const res = await fetch(argoUrl('/api/livekit-status'), { cache: 'no-store' });
@@ -2875,7 +2969,9 @@ async function refreshRealtimeStatus() {
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
+    configureLocalAvatarMedia(livekitMeta.avatar);
     updateAvatarProviderDisplay(livekitMeta.avatar);
+    applyServerPersonality(data.personality);
     if (!livekitConnected) {
       setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
     }
@@ -2925,10 +3021,91 @@ function setAvatarHudLabel(text) {
   });
 }
 
+function clearLocalAvatarMedia() {
+  localAvatarMediaEls.forEach(el => {
+    if (el.tagName === 'VIDEO') {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    }
+    try { el.remove(); } catch(e) {}
+  });
+  localAvatarMediaEls = [];
+  localAvatarMediaUrl = '';
+  avatarStages.forEach(stage => stage.classList.remove('has-local-media'));
+  portraitRenderers.forEach(renderer => renderer.setImageSource(argoUrl('/v2-assets/cortana_portrait_smirky.png')));
+}
+
+function attachLocalAvatarRenderer(stage, el) {
+  const renderer = portraitRenderers.find(item => item.canvas.closest('.avatar-stage') === stage);
+  if (renderer && el.dataset.expressionProfile === 'halo' && el.tagName === 'VIDEO') {
+    renderer.setMediaSource(el, 'halo');
+  }
+}
+
+function configureLocalAvatarMedia(status) {
+  const media = status?.local_media || {};
+  avatarMotionPreference = typeof media.motion_enabled === 'boolean' ? media.motion_enabled : null;
+  const url = media.ready && media.url ? argoUrl(media.url) : '';
+  avatarStages.forEach(stage => stage.classList.toggle('local-media-selected', Boolean(url)));
+  if (!url) {
+    if (localAvatarMediaEls.length) clearLocalAvatarMedia();
+    return;
+  }
+  if (url === localAvatarMediaUrl && localAvatarMediaEls.length) return;
+  clearLocalAvatarMedia();
+  localAvatarMediaUrl = url;
+  avatarStages.forEach(stage => {
+    stage.classList.remove('local-animated');
+    const isVideo = media.media_type === 'video' || String(media.content_type || '').startsWith('video/');
+    const el = document.createElement(isVideo ? 'video' : 'img');
+    el.className = 'avatar-local-media';
+    el.dataset.localAvatarMedia = 'true';
+    el.dataset.expressionProfile = media.expression_profile || '';
+    if (isVideo) {
+      el.autoplay = true;
+      el.loop = true;
+      el.muted = true;
+      el.playsInline = true;
+      el.addEventListener('loadeddata', () => {
+        stage.classList.add('has-local-media');
+        attachLocalAvatarRenderer(stage, el);
+        updateAvatarProviderDisplay(livekitMeta.avatar);
+      }, { once: true });
+      el.src = url;
+      try { el.play().catch(() => {}); } catch(e) {}
+    } else {
+      el.alt = 'Local animated Cortana avatar';
+      el.onload = () => {
+        stage.classList.add('has-local-media');
+        updateAvatarProviderDisplay(livekitMeta.avatar);
+      };
+      el.src = url;
+    }
+    el.onerror = () => {
+      stage.classList.remove('has-local-media');
+      updateAvatarProviderDisplay(livekitMeta.avatar);
+    };
+    stage.insertBefore(el, stage.firstChild);
+    localAvatarMediaEls.push(el);
+  });
+}
+
 function updateAvatarProviderDisplay(status) {
   const el = $('infoAvatar');
   if (!el) return;
   if (realtimeAvatarVideoEls.length) return;
+  const hasLocalMedia = avatarStages.some(stage => stage.classList.contains('has-local-media'));
+  if (hasLocalMedia) {
+    const animated = avatarStages.some(stage => stage.classList.contains('local-animated'));
+    const synced = animated && realtimeAvatarMeter?.audioContext.state === 'running';
+    const label = synced ? 'CORTANA · VOICE SYNC' : animated ? 'CORTANA · LOCAL' : 'CORTANA · LOCAL LOOP';
+    el.textContent = label;
+    el.style.color = 'var(--accent3)';
+    el.title = synced ? 'Local face animation follows ARGO voice audio.' : 'Local animated avatar media.';
+    setAvatarHudLabel(label);
+    return;
+  }
   const animated = avatarStages.some(stage => stage.classList.contains('local-animated'));
   const synced = animated && realtimeAvatarMeter?.audioContext.state === 'running';
   const label = synced ? 'CORTANA · VOICE SYNC' : animated ? 'CORTANA · LOCAL' : 'CORTANA PORTRAIT';
@@ -3060,6 +3237,7 @@ async function startRealtimeVoice() {
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
+    configureLocalAvatarMedia(livekitMeta.avatar);
     updateAvatarProviderDisplay(livekitMeta.avatar);
 
     room = new lk.Room({
@@ -3450,10 +3628,15 @@ function drawAvatarLoop(now) {
   if (document.hidden || now-lastAvatarFrame < 32) return;
   const dt = lastAvatarFrame ? (now-lastAvatarFrame)/1000 : 0.033;
   lastAvatarFrame = now;
-  const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : 0,dt) : 0;
+  const desktopLevel = currentState === 'SPEAKING' && now-desktopAvatarAudioTime < 250 ? desktopAvatarAudioLevel : 0;
+  const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : desktopLevel,dt) : 0;
   setAvatarState(avatarVisualState());
   portraitRenderers.forEach(renderer => {
-    if (!renderer.canvas.closest('.has-video')) renderer.draw(now,mouth,reducedAvatarMotion.matches);
+    const stage = renderer.canvas.closest('.avatar-stage');
+    const localMedia = stage?.querySelector('.avatar-local-media');
+    if (!stage?.classList.contains('has-video') && (!localMedia || renderer.image === localMedia)) {
+      renderer.draw(now,mouth,avatarMotionPreference === null ? reducedAvatarMotion.matches : !avatarMotionPreference);
+    }
   });
   updateAvatarProviderDisplay(livekitMeta.avatar);
   if (!livekitConnected) avatarAudioLevel = 0;
@@ -3469,6 +3652,9 @@ function initAvatar() {
     try {
       const renderer = new window.CortanaAvatar.Portrait(canvas,argoUrl('/v2-assets/cortana_portrait_smirky.png'));
       portraitRenderers.push(renderer);
+      const stage = canvas.closest('.avatar-stage');
+      const media = stage?.querySelector('.avatar-local-media');
+      if (media?.readyState >= 2) attachLocalAvatarRenderer(stage, media);
     } catch (error) {
       console.warn('Local avatar unavailable; keeping the static portrait',error);
     }
@@ -3797,6 +3983,199 @@ function colorSliderValue(id, val, el) {
   el.className = 'slider-value';
   if (pctOff > 0.6) el.classList.add('danger');
   else if (pctOff > 0.3) el.classList.add('warn');
+}
+
+// ═══════ IMAGE DROP / PASTE / UPLOAD ═══════
+// Sends images to the existing /api/vision/analyze-upload endpoint (tools/vision.py).
+// Images are downscaled client-side: that endpoint caps the JSON body at 10 MB and
+// decode_image_data_url() caps decoded bytes at 8 MB, and base64 inflates by ~33%.
+const IMAGE_MAX_DIM = 1600;
+const IMAGE_JPEG_QUALITY = 0.85;
+let imageBusy = false;
+let imageDragDepth = 0;
+
+function installImageDropStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #imgDropOverlay {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(3px);
+    }
+    #imgDropOverlay[hidden] { display: none !important; }
+    #imgDropOverlay .img-drop-inner {
+      border: 2px dashed var(--accent, #22d3ee); border-radius: 16px;
+      padding: 36px 48px; text-align: center; pointer-events: none;
+      background: rgba(0, 0, 0, 0.55);
+    }
+    #imgDropOverlay .img-drop-icon { font-size: 40px; color: var(--accent, #22d3ee); line-height: 1; }
+    #imgDropOverlay .img-drop-title {
+      margin-top: 12px; font-size: 17px; font-weight: 700; color: #fff;
+    }
+    #imgDropOverlay .img-drop-sub { margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.65); }
+  `;
+  document.head.appendChild(style);
+}
+
+function buildImageDropOverlay() {
+  const el = document.createElement('div');
+  el.id = 'imgDropOverlay';
+  el.hidden = true;
+  el.innerHTML =
+    '<div class="img-drop-inner">' +
+      '<div class="img-drop-icon">◎</div>' +
+      '<div class="img-drop-title">Drop image for ARGO</div>' +
+      '<div class="img-drop-sub">PNG, JPG, GIF, WebP &mdash; or paste with Ctrl+V</div>' +
+    '</div>';
+  document.body.appendChild(el);
+  return el;
+}
+
+// Decode, downscale and re-encode as JPEG so large phone photos still fit.
+function imageFileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('could not read the file'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('the browser cannot decode that image (HEIC is unsupported — convert to JPG)'));
+      img.onload = () => {
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+        if (!width || !height) { reject(new Error('the image has no dimensions')); return; }
+        const scale = Math.min(1, IMAGE_MAX_DIM / Math.max(width, height));
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        try {
+          resolve(canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY));
+        } catch (err) {
+          reject(new Error('could not encode the image'));
+        }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function sendImageToArgo(file, sourceLabel) {
+  if (!file) return;
+  if (imageBusy) { addSystemLog('Still analyzing the previous image'); return; }
+  if (!/^image\//i.test(file.type || '')) {
+    addChatMessage(`That is not an image file: ${file.name || sourceLabel || 'unknown'}`, 'system');
+    return;
+  }
+
+  imageBusy = true;
+  const label = file.name || sourceLabel || 'pasted image';
+  // Whatever is typed in the chat box becomes the question asked about the image.
+  const typed = (chatInput.value || '').trim();
+  const prompt = typed || 'Describe this image for me.';
+
+  try {
+    addChatMessage(typed ? `[image] ${label} — ${typed}` : `[image] ${label}`, 'user');
+    if (typed) chatInput.value = '';
+    addSystemLog(`Analyzing ${label}...`);
+
+    const dataUrl = await imageFileToDataUrl(file);
+    const res = await fetch(argoUrl('/api/vision/analyze-upload'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_data: dataUrl, prompt: prompt.slice(0, 1000) })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `vision request failed (HTTP ${res.status})`);
+    }
+    addChatMessage(data.answer || '(vision returned no answer)', 'argo');
+    addSystemLog(`Vision complete: ${label}`);
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    addChatMessage(`Couldn't read that image — ${msg}`, 'system');
+    addSystemLog(`Vision error: ${msg}`);
+  } finally {
+    imageBusy = false;
+  }
+}
+
+function initImageIngest() {
+  installImageDropStyles();
+  const overlay = buildImageDropOverlay();
+  const hideOverlay = () => { imageDragDepth = 0; overlay.hidden = true; };
+
+  const hasFiles = (e) =>
+    !!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1);
+
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    imageDragDepth += 1;
+    overlay.hidden = false;
+  });
+  window.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    imageDragDepth = Math.max(0, imageDragDepth - 1);
+    if (imageDragDepth === 0) hideOverlay();
+  });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    hideOverlay();
+    const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+    const image = files.filter(f => /^image\//i.test(f.type || ''))[0];
+    if (image) {
+      sendImageToArgo(image, 'dropped image');
+      if (files.length > 1) addSystemLog(`Ignored ${files.length - 1} other file(s) — images only for now`);
+    } else if (files.length) {
+      addChatMessage(`Only images are supported so far — ${files[0].name} was not sent.`, 'system');
+    }
+  });
+
+  // Paste from clipboard (Ctrl+V, including Win+Shift+S screenshots)
+  document.addEventListener('paste', (e) => {
+    const items = Array.prototype.slice.call((e.clipboardData && e.clipboardData.items) || []);
+    const imageItem = items.filter(i => i.kind === 'file' && /^image\//i.test(i.type || ''))[0];
+    if (!imageItem) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    sendImageToArgo(file, 'pasted image');
+  });
+
+  // Attach button beside the chat send button, inheriting its styling.
+  const sendBtn = $('chatSendBtn');
+  if (sendBtn && sendBtn.parentNode) {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.id = 'imgPicker';
+    picker.accept = 'image/*';
+    picker.hidden = true;
+    document.body.appendChild(picker);
+    picker.addEventListener('change', () => {
+      const file = picker.files && picker.files[0];
+      if (file) sendImageToArgo(file, 'uploaded image');
+      picker.value = '';
+    });
+
+    const attachBtn = document.createElement('button');
+    attachBtn.type = 'button';
+    attachBtn.id = 'chatAttachBtn';
+    attachBtn.className = sendBtn.className;
+    attachBtn.title = 'Attach an image (or drag one in, or paste)';
+    attachBtn.setAttribute('aria-label', 'Attach an image');
+    attachBtn.textContent = 'IMG';
+    attachBtn.addEventListener('click', () => picker.click());
+    sendBtn.parentNode.insertBefore(attachBtn, sendBtn);
+  }
 }
 
 // ═══════ INIT ═══════

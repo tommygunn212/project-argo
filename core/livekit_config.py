@@ -26,11 +26,25 @@ from core.config import get_config
 
 
 DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
+
+# The realtime worker runs in its own process, so a UI personality change cannot
+# reach it through core.config's in-memory runtime overrides. This file is the
+# cross-process handoff: main.py writes it, and each new realtime session reads
+# it at start. No restart needed — the value is resolved per session.
+VOICE_PERSONALITY_FILE = Path(__file__).resolve().parents[1] / "runtime" / "voice_personality.json"
 HEDRA_REALTIME_RETIRED = True
 HEDRA_REALTIME_NOTICE = (
     "Hedra retired its realtime avatar service. Voice uses direct LiveKit audio; "
     "the Cortana portrait remains available locally."
 )
+LOCAL_AVATAR_MEDIA_TYPES = {
+    ".gif": "image/gif",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+}
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_REALTIME_INSTRUCTIONS = (
@@ -45,6 +59,75 @@ DEFAULT_REALTIME_INSTRUCTIONS = (
     "are connected to the realtime voice room; do not claim app, computer, or "
     "home actions unless a tool integration is explicitly connected for that action."
 )
+
+
+def read_voice_personality(config: Any | None = None) -> str:
+    """Resolve the personality for the next realtime session.
+
+    Precedence: env override > UI selection persisted by main.py > config.json
+    default > "neutral". Never raises; a damaged file falls through to config.
+    """
+    env_value = (os.getenv("ARGO_REALTIME_PERSONALITY") or "").strip()
+    if env_value:
+        return env_value
+
+    try:
+        import json
+
+        raw = json.loads(VOICE_PERSONALITY_FILE.read_text(encoding="utf-8"))
+        selected = str(raw.get("personality", "")).strip()
+        if selected:
+            return selected
+    except FileNotFoundError:
+        pass
+    except Exception:
+        # A corrupt handoff file must never break voice; fall through to config.
+        pass
+
+    cfg = config or get_config()
+    return str(_env_or_config(cfg, "ARGO_PERSONALITY", "personality.default", "neutral") or "neutral")
+
+
+def write_voice_personality(personality: str) -> None:
+    """Persist the UI's personality selection for the next realtime session."""
+    import json
+    from datetime import datetime, timezone
+
+    name = str(personality or "").strip()
+    if not name:
+        return
+    VOICE_PERSONALITY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"personality": name, "updated_at": datetime.now(timezone.utc).isoformat()}
+    tmp = VOICE_PERSONALITY_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(VOICE_PERSONALITY_FILE)
+
+
+def compose_realtime_instructions(base_instructions: str, personality: str) -> str:
+    """Fold a persona's tone into the realtime instructions.
+
+    The realtime model emits audio directly, so there is no text for the persona
+    post-processors in personas/ to transform. The persona has to be carried here
+    instead — as manner, never as scripted lines.
+    """
+    try:
+        from personas import get_voice_style
+
+        style = get_voice_style(personality)
+    except Exception:
+        style = ""
+
+    if not style:
+        return base_instructions
+
+    return (
+        f"{base_instructions}\n\n"
+        f"Voice and manner: {style} "
+        "Carry this purely through word choice, rhythm and attitude. Never "
+        "announce or describe your personality, never use a signature catchphrase, "
+        "tagline or recurring stock phrase, and never let the manner crowd out the "
+        "substance. If manner and a clear useful answer ever conflict, the answer wins."
+    )
 
 
 @dataclass(frozen=True)
@@ -66,6 +149,7 @@ class LiveKitRealtimeConfig:
     false_interruption_timeout: float
     speaker_id_enabled: bool
     speaker_id_provider: str
+    personality: str = "neutral"
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -76,6 +160,13 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
     if not api_secret and api_key == "devkey":
         api_secret = DEFAULT_LOCAL_LIVEKIT_SECRET
 
+    # Resolved per call, so each new realtime session picks up the current UI
+    # selection without restarting the worker or ARGO.
+    personality = read_voice_personality(cfg)
+    base_instructions = _env_or_config(
+        cfg, "ARGO_REALTIME_INSTRUCTIONS", "livekit.instructions", DEFAULT_REALTIME_INSTRUCTIONS
+    )
+
     return LiveKitRealtimeConfig(
         enabled=_bool(_env_or_config(cfg, "ARGO_LIVEKIT_ENABLED", "livekit.enabled", True)),
         url=_env_or_config(cfg, "LIVEKIT_URL", "livekit.url", "ws://127.0.0.1:7880"),
@@ -85,9 +176,8 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         agent_name=_clean_name(_env_or_config(cfg, "LIVEKIT_AGENT_NAME", "livekit.agent_name", "")),
         model=_env_or_config(cfg, "ARGO_REALTIME_MODEL", "livekit.model", "gpt-realtime"),
         voice=_env_or_config(cfg, "ARGO_REALTIME_VOICE", "livekit.voice", "marin"),
-        instructions=_env_or_config(
-            cfg, "ARGO_REALTIME_INSTRUCTIONS", "livekit.instructions", DEFAULT_REALTIME_INSTRUCTIONS
-        ),
+        instructions=compose_realtime_instructions(base_instructions, personality),
+        personality=personality,
         greeting=_env_or_config(cfg, "ARGO_REALTIME_GREETING", "livekit.greeting", ""),
         temperature=_float(_env_or_config(cfg, "ARGO_REALTIME_TEMPERATURE", "livekit.temperature", 0.6), 0.6),
         speed=_float(_env_or_config(cfg, "ARGO_REALTIME_SPEED", "livekit.speed", 1.0), 1.0),
@@ -231,7 +321,7 @@ def ensure_livekit_agent_dispatch(
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
     cfg = get_livekit_realtime_config(config)
     speaker_status = speaker_identity_status(cfg)
-    avatar_status = hedra_avatar_status()
+    avatar_status = hedra_avatar_status(config)
     return {
         "enabled": cfg.enabled,
         "mode": "livekit_realtime",
@@ -241,6 +331,7 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         "model": cfg.model,
         "voice": cfg.voice,
         "server_reachable": _socket_reachable(cfg.url),
+        "personality": cfg.personality,
         "avatar": avatar_status,
         "speaker_identity": speaker_status,
     }
@@ -286,7 +377,45 @@ def speaker_identity_status(cfg: LiveKitRealtimeConfig | None = None) -> dict[st
     }
 
 
-def hedra_avatar_status() -> dict[str, Any]:
+def resolve_local_avatar_media(config: Any | None = None) -> tuple[Path | None, str, str, str]:
+    """Resolve an explicitly configured local avatar media file."""
+
+    cfg = config or get_config()
+    enabled = _bool(_env_or_config(cfg, "ARGO_LOCAL_AVATAR_MEDIA_ENABLED", "avatar.local_media_enabled", True))
+    raw_path = str(_env_or_config(cfg, "ARGO_LOCAL_AVATAR_MEDIA", "avatar.local_media_path", "") or "").strip()
+    if not enabled or not raw_path:
+        return None, "", raw_path, "not_configured"
+
+    media_path = Path(raw_path).expanduser()
+    if not media_path.is_absolute():
+        media_path = Path(__file__).resolve().parents[1] / media_path
+    content_type = LOCAL_AVATAR_MEDIA_TYPES.get(media_path.suffix.lower(), "")
+    if not content_type:
+        return media_path, "", raw_path, "unsupported_type"
+    if not media_path.exists() or not media_path.is_file():
+        return media_path, content_type, raw_path, "missing"
+    return media_path, content_type, raw_path, ""
+
+
+def local_avatar_media_status(config: Any | None = None) -> dict[str, Any]:
+    cfg = config or get_config()
+    media_path, content_type, raw_path, error = resolve_local_avatar_media(config)
+    ready = bool(media_path and content_type and not error)
+    motion_enabled = cfg.get("avatar.motion_enabled", None)
+    return {
+        "enabled": error != "not_configured",
+        "ready": ready,
+        "path": raw_path,
+        "url": "/v2-assets/local-avatar-media" if ready else "",
+        "content_type": content_type,
+        "media_type": "video" if content_type.startswith("video/") else "image",
+        "expression_profile": str(cfg.get("avatar.local_media_profile", "") or ""),
+        "motion_enabled": None if motion_enabled is None else _bool(motion_enabled),
+        "error": error,
+    }
+
+
+def hedra_avatar_status(config: Any | None = None) -> dict[str, Any]:
     """Return safe-to-display Hedra avatar readiness without exposing secrets."""
 
     image_path_raw = os.getenv("HEDRA_AVATAR_IMAGE", "").strip()
@@ -322,6 +451,7 @@ def hedra_avatar_status() -> dict[str, Any]:
         "api_url": os.getenv("HEDRA_API_URL", "https://api.hedra.com/public/livekit/v1/session"),
         "mode": "livekit_video_track",
         "fallback": "local_cortana_portrait",
+        "local_media": local_avatar_media_status(config),
         "error": HEDRA_REALTIME_NOTICE,
     }
 

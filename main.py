@@ -324,6 +324,29 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
         elif path.startswith('/v2-assets/'):
             asset_name = Path(path).name
+            if asset_name == 'local-avatar-media':
+                try:
+                    from core.livekit_config import resolve_local_avatar_media
+
+                    asset_path, content_type, _raw_path, error = resolve_local_avatar_media(get_config())
+                except Exception:
+                    logger.exception("[Avatar] local media resolve failed")
+                    asset_path, content_type, error = None, "", "error"
+                if error or not asset_path or not asset_path.exists():
+                    self.send_response(404)
+                    self.send_header('Cache-Control', 'no-store')
+                    self._send_cors_headers()
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header('Content-type', content_type)
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(asset_path.read_bytes())
+                return
             allowed_assets = {
                 'livekit-client.umd.js': ('vendor', 'application/javascript; charset=utf-8'),
                 'argo-hedra-default.png': ('assets', 'image/png'),
@@ -642,6 +665,17 @@ def _handle_override(payload: dict):
             pass
     if key == "tts_model" and pipeline_ref:
         pipeline_ref.set_tts_model(str(value))
+    if key == "personality_mode":
+        # Runtime overrides are in-memory and process-local; the realtime worker
+        # runs in a separate process. Persist the selection so the next Smooth
+        # Voice session picks it up without restarting ARGO or the worker.
+        try:
+            from core.livekit_config import write_voice_personality
+
+            write_voice_personality(str(value))
+            log_event(f"VOICE_PERSONALITY_PERSISTED {value}", stage="ui")
+        except Exception:
+            logger.exception("[OVERRIDE] Could not persist voice personality")
     if pipeline_ref and hasattr(pipeline_ref, "apply_runtime_tuning"):
         try:
             pipeline_ref.apply_runtime_tuning()
@@ -958,6 +992,10 @@ def main_loop():
     barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
 
     # --- AMBIENT NOISE CALIBRATION ---
+    # A single hot audio frame is often speaker echo or a click, not a person
+    # trying to interrupt. Require a short, continuous voice signal instead.
+    barge_in_started_at = None
+
     def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
         """Read ambient audio for `duration_sec`, compute noise floor, return adaptive VAD threshold."""
         nonlocal vad_threshold, barge_in_threshold
@@ -1093,7 +1131,21 @@ def main_loop():
         # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
         barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
         effective_barge_threshold = active_barge_in_threshold * 3.5 if pipeline.is_speaking else active_barge_in_threshold
-        if pipeline.is_speaking and volume >= effective_barge_threshold and RUNTIME_OVERRIDES.get("barge_in_enabled", True) and not barge_in_suppressed:
+        barge_candidate = (
+            pipeline.is_speaking
+            and volume >= effective_barge_threshold
+            and RUNTIME_OVERRIDES.get("barge_in_enabled", True)
+            and not barge_in_suppressed
+        )
+        if barge_candidate:
+            if barge_in_started_at is None:
+                barge_in_started_at = time.time()
+            # Preserve natural barge-in, but reject a one-frame echo/click.
+            if time.time() - barge_in_started_at < 0.18:
+                continue
+        else:
+            barge_in_started_at = None
+        if barge_candidate:
             allowed = pipeline.current_state == "SPEAKING"
             logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={effective_barge_threshold:.2f}) !!!")
             log_event(
@@ -1109,6 +1161,7 @@ def main_loop():
                 "allowed": bool(allowed),
             })
             _interrupt_current_response("BARGE_IN", target_state="LISTENING")
+            barge_in_started_at = None
             
             # Reset state to listen to new command
             silence_counter = 0
