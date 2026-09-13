@@ -940,9 +940,29 @@ def _start_main_loop_thread():
     main_loop_thread.start()
     return True
 
+class _QuietFailedHandshake(logging.Filter):
+    """Drop the traceback for connections that never sent a request.
+
+    A port check opens 8001 and closes it. websockets logs that as ERROR
+    with a chained traceback, which buries real errors. The event is still
+    recorded, as one line at debug level.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.getMessage() != "opening handshake failed":
+            return True
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is not None and type(exc).__name__ == "InvalidMessage":
+            record.exc_info = None
+            record.msg = "ignored a connection that closed before sending a request"
+            record.levelno, record.levelname = logging.DEBUG, "DEBUG"
+        return True
+
+
 async def start_server():
     global ui_loop
     ui_loop = asyncio.get_running_loop()
+    logging.getLogger("websockets.server").addFilter(_QuietFailedHandshake())
     logger.info("UI Server running on ws://%s:%s/ws", WS_HOST, WS_PORT)
     while True:
         try:
