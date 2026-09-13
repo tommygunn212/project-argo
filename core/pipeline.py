@@ -2058,18 +2058,28 @@ class ArgoPipeline:
             # IMPLICIT WRITES: Direct personal statements like "My name is Tommy"
             # Store immediately with natural acknowledgment (no confirmation needed)
             if write.get("implicit"):
+                stored = False
                 try:
                     self._memory_store.add_memory(mem_type, key, value, source="implicit", namespace=namespace)
                     self._store_mem0_fact(mem_type.lower(), key, "is", value, "implicit", interaction_id)
                     self.logger.info(f"[MEMORY] memory_write_implicit key={key} value={value}")
-                    # Natural acknowledgment based on key type
-                    if key == "user.name":
-                        response = f"Got it, {value}."
-                    else:
-                        response = f"Noted."
+                    stored = True
                 except Exception as e:
                     self.logger.warning(f"[MEMORY] Implicit write failed: {e}")
-                    response = "I couldn't save that."
+
+                # Telling ARGO your name is addressed TO it, so it answers.
+                # Mentioning that you like jazz is conversation: remember it,
+                # then talk about it. Answering "Noted." and closing the turn
+                # is how a memory feature eats a conversation. Returning False
+                # hands the turn back to the normal reply path, fact saved.
+                if key != "user.name":
+                    self.logger.info(
+                        "[MEMORY] implicit_fact_captured_conversation_continues key=%s stored=%s",
+                        key, stored,
+                    )
+                    return False
+
+                response = f"Got it, {value}." if stored else "I couldn't save that."
                 self.broadcast("log", f"Argo: {response}")
                 if not self.stop_signal.is_set() and not replay_mode:
                     tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
