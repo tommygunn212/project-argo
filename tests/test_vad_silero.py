@@ -53,6 +53,15 @@ def test_silence_threshold_is_on_the_same_scale_as_the_rms_it_compares():
     )
 
 
+def test_silence_floor_clears_this_room_s_measured_noise():
+    """Startup calibration on bigdog reports mean=0.009, p95=0.024 ambient.
+    A floor under that never sees silence, so recording runs to the 15s cap -
+    the exact mirror of the bug this replaced."""
+    from core.coordinator import Coordinator as C
+
+    assert C.SILENCE_THRESHOLD > 0.024
+
+
 def test_loud_speech_level_audio_is_not_called_silence():
     """With the old value of 250, this assertion could never fail - which is
     exactly why the bug survived."""

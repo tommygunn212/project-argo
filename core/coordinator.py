@@ -226,7 +226,10 @@ class Coordinator:
     # and the silence timer ran continuously from the first sample of speech.
     # Recording therefore stopped ~2.2s in regardless of whether Tommy was
     # still talking. Only used when Silero is unavailable.
-    SILENCE_THRESHOLD = 0.006
+    # 0.03 sits above this room's measured ambient noise: startup calibration
+    # reports mean=0.009, p95=0.024. A floor below that would mean silence is
+    # never detected and every recording runs to the 15s cap.
+    SILENCE_THRESHOLD = 0.03
     RMS_SPEECH_THRESHOLD = 0.0005  # RMS normalized level (0-1) to START silence timer — LOWERED to 0.0005 for weak Brio signal
     VAD_SPEECH_PROBABILITY = 0.5  # Silero speech probability that counts as speech
     PRE_ROLL_BUFFER_MS_MIN = 1000  # Min milliseconds of pre-speech audio to capture — 1 second pre-wake context
