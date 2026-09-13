@@ -273,6 +273,102 @@ def music_play(query: str = "", kind: str = "keyword") -> dict:
         return _fail("music_play", exc)
 
 
+_DECADE_WORDS = {
+    "twenties": 1920, "thirties": 1930, "forties": 1940, "fifties": 1950,
+    "sixties": 1960, "seventies": 1970, "eighties": 1980, "nineties": 1990,
+    "noughties": 2000, "two thousands": 2000, "tens": 2010, "twenty tens": 2010,
+}
+
+
+def parse_era(era: str) -> Optional[tuple]:
+    """Turn a spoken era into a (year_start, year_end) range.
+
+    Handles "80s", "1980s", "the eighties", "1975", "1975 to 1980". Bare
+    two-digit decades below 30 are read as 2000s, so "20s" is 2020 not 1920 -
+    ask for "the roaring twenties" era by year if you mean the other one.
+    """
+    import re
+
+    text = (era or "").strip().lower().replace("'", "").replace("the ", "")
+    if not text:
+        return None
+
+    span = re.search(r"(\d{4})\s*(?:to|-|until|through)\s*(\d{4})", text)
+    if span:
+        a, b = int(span.group(1)), int(span.group(2))
+        return (min(a, b), max(a, b))
+
+    for word, start in _DECADE_WORDS.items():
+        if word in text:
+            return (start, start + 9)
+
+    decade = re.search(r"(\d{2,4})\s*s\b", text)
+    if decade:
+        raw = decade.group(1)
+        year = int(raw)
+        if len(raw) == 2:
+            year = 2000 + year if year < 30 else 1900 + year
+        year = (year // 10) * 10
+        return (year, year + 9)
+
+    single = re.search(r"\b(\d{4})\b", text)
+    if single:
+        y = int(single.group(1))
+        return (y, y)
+
+    return None
+
+
+def music_play_era(era: str, genre: str = "", artist: str = "") -> dict:
+    """Play music from a period, optionally narrowed by genre or artist.
+
+    The track database already stores a year and query_tracks accepts
+    year_start/year_end; nothing exposed it, so era was not something that
+    could be asked for.
+    """
+    try:
+        rng = parse_era(era)
+        if not rng:
+            return {"ok": False, "error": "unparsed_era",
+                    "message": f"I couldn't work out what period {era!r} means."}
+        year_start, year_end = rng
+
+        from core.music_player import MusicDatabase, get_music_player
+
+        tracks = MusicDatabase().query_tracks(
+            year_start=year_start,
+            year_end=year_end,
+            genre=genre or None,
+            artist=artist or None,
+            limit=200,
+        ) or []
+        if not tracks:
+            return {"ok": False, "error": "no_matches", "era": era,
+                    "years": [year_start, year_end],
+                    "message": f"I have nothing from {year_start} to {year_end}"
+                               + (f" by {artist}" if artist else "")
+                               + (f" in {genre}" if genre else "") + "."}
+
+        import random
+
+        pick = random.choice(tracks)
+        player = get_music_player()
+        path = pick.get("path") or pick.get("file_path") or pick.get("track_path")
+        # query_tracks returns the track name under "song", not "title".
+        title = pick.get("song") or pick.get("title") or pick.get("name") or "that"
+        started = player.play(path, title, track_data=pick) if path else False
+        return {
+            "ok": bool(started),
+            "era": era,
+            "years": [year_start, year_end],
+            "matches": len(tracks),
+            "now_playing": {"title": title, "artist": pick.get("artist"), "year": pick.get("year")},
+            "playing": player.is_playing(),
+        }
+    except Exception as exc:
+        return _fail("music_play_era", exc)
+
+
 def music_stop() -> dict:
     try:
         from core.music_player import get_music_player
@@ -309,15 +405,58 @@ def music_status() -> dict:
 # ---------------------------------------------------------------------------
 
 def app_open(name: str) -> dict:
-    """Launch an app by the name Tommy said."""
+    """Launch an app by the name Tommy said.
+
+    ARGO's curated registry knows five apps, so anything else used to fail
+    silently. Fall through to what is actually installed - taskbar pins first,
+    then the registry's App Paths, the Start Menu, and PATH.
+    """
     try:
         from core.app_control import open_app, resolve_app_name
 
-        key = resolve_app_name(name) or name
-        ok, message = open_app(key)
-        return {"ok": bool(ok), "app": key, "requested": name, "message": message}
+        key = resolve_app_name(name)
+        if key:
+            ok, message = open_app(key)
+            return {"ok": bool(ok), "app": key, "requested": name,
+                    "source": "argo_registry", "message": message}
+
+        from core.app_resolver import resolve
+
+        hit = resolve(name)
+        if not hit:
+            return {
+                "ok": False,
+                "error": "not_installed",
+                "requested": name,
+                "message": f"I couldn't find anything installed called {name}.",
+            }
+
+        os.startfile(hit["target"])  # handles .lnk shortcuts and .exe alike
+        return {
+            "ok": True,
+            "app": hit["name"],
+            "requested": name,
+            "source": hit["source"],
+            "message": f"Opening {hit['name']}.",
+        }
     except Exception as exc:
         return _fail("app_open", exc)
+
+
+def apps_launchable() -> dict:
+    """Everything ARGO could open, and what is pinned to the taskbar."""
+    try:
+        from core.app_resolver import installed_names, _taskbar_index
+
+        names = installed_names()
+        return {
+            "ok": True,
+            "count": len(names),
+            "pinned": sorted(p.stem for p in _taskbar_index().values()),
+            "all": names,
+        }
+    except Exception as exc:
+        return _fail("apps_launchable", exc)
 
 
 def app_close(name: str) -> dict:

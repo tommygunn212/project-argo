@@ -155,6 +155,24 @@ class ArgoRealtimeAgent(Agent):
         return await self._run(T.music_play, query, kind)
 
     @function_tool()
+    async def play_music_from_era(self, era: str, genre: str = "", artist: str = "") -> str:
+        """Play music from a period: "the 80s", "1975", "1990s", "1975 to 1980".
+
+        Optionally narrow by genre or artist.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.music_play_era, era, genre, artist)
+
+    @function_tool()
+    async def list_launchable_apps(self) -> str:
+        """What applications ARGO can open, including what is pinned to the taskbar.
+
+        Use when asked what you can launch, or when an app name was not found.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.apps_launchable)
+
+    @function_tool()
     async def stop_music(self) -> str:
         """Stop music playback."""
         from core import realtime_tools as T
