@@ -38,6 +38,8 @@ This document tracks all current and planned features for ARGO, the neural netwo
 - Frontend text input (bypass STT, type commands directly)
 - Self-diagnostics: ARGO checks its own components (Ollama, Piper, Whisper, audio)
 - Assisted recovery: Proposes fixes and executes only with user approval
+- Shared classic/Smooth Voice repair conversation with unique expiring approvals, actual action results, and selected-component rechecks
+- Isolated Astra high code-repair jobs with retained progress, diff and test output, and explicit reviewed-patch application (see `docs/SELF_REPAIR.md`)
 - Security hardened: localhost-only binding, no secrets in source, SQL injection prevention
 - Pinned dependencies for reproducible installs
 

@@ -12,6 +12,8 @@ import logging
 import os
 import subprocess
 import time
+import threading
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -61,10 +63,14 @@ class RecoveryProposal:
     command_preview: Optional[str]  # What will run (for transparency)
     reversible: bool
     risk: RecoveryRisk
+    proposal_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    expires_at: float = field(default_factory=lambda: time.time() + 300)
     
     def to_dict(self) -> dict:
         return {
             "action_id": self.action_id,
+            "proposal_id": self.proposal_id,
+            "expires_at": self.expires_at,
             "problem": self.problem,
             "proposal": self.proposal,
             "command_preview": self.command_preview,
@@ -541,7 +547,7 @@ class AssistedRecovery:
             "reversible": True,
         },
         "reset_state": {
-            "description": "Reset to IDLE state",
+            "description": "Stop speech and return to LISTENING",
             "risk": RecoveryRisk.LOW,
             "reversible": True,
         },
@@ -552,6 +558,8 @@ class AssistedRecovery:
         self.broadcast = broadcast_fn or (lambda *args: None)
         self.pending_proposals: dict[str, RecoveryProposal] = {}
         self.action_log: list[dict] = []
+        self._lock = threading.Lock()
+        self.retry_callback = None
     
     def propose(self, action_id: str, problem: str) -> Optional[RecoveryProposal]:
         """
@@ -573,7 +581,9 @@ class AssistedRecovery:
             risk=action_info["risk"],
         )
         
-        self.pending_proposals[action_id] = proposal
+        with self._lock:
+            self.pending_proposals.clear()
+            self.pending_proposals[proposal.proposal_id] = proposal
         
         # Broadcast to UI for permission prompt
         self.broadcast("recovery_proposal", proposal.to_dict())
@@ -586,12 +596,12 @@ class AssistedRecovery:
         previews = {
             "start_ollama": "subprocess: ollama serve",
             "restart_ollama": "taskkill ollama + ollama serve",
-            "restart_stt": "pipeline.stt_engine = None; reinit",
-            "restart_tts": "output_sink.cleanup(); reinit",
-            "reinit_audio": "sounddevice.default.reset()",
-            "retry_last": "re-execute last pipeline step",
-            "clear_audio_buffer": "audio_buffer.clear()",
-            "reset_state": "state_machine.force_transition(IDLE)",
+            "restart_stt": "Rebuild the selected STTEngineManager",
+            "restart_tts": "Rebuild the selected OpenAI TTS client",
+            "reinit_audio": "Restart the active AudioManager with its selected devices",
+            "retry_last": "Regenerate the last failed conversational response only",
+            "clear_audio_buffer": "AudioManager.clear_buffers()",
+            "reset_state": "Stop TTS and request LISTENING",
         }
         return previews.get(action_id, "internal operation")
     
@@ -600,6 +610,15 @@ class AssistedRecovery:
         Execute action ONLY if user approved.
         Returns result for UI feedback.
         """
+        # Consume the unique proposal before executing: concurrent or repeated
+        # approvals cannot execute the same action twice.
+        with self._lock:
+            proposal = self.pending_proposals.pop(action_id, None)
+        if proposal is None or proposal.expires_at < time.time():
+            return {"status": "error", "message": "No current pending recovery proposal"}
+        if type(approved) is not bool:
+            return {"status": "error", "message": "Approval must be a boolean"}
+        action_id = proposal.action_id
         # Log the decision regardless
         log_entry = {
             "action_id": action_id,
@@ -622,31 +641,22 @@ class AssistedRecovery:
             logger.error(f"Attempted to execute forbidden action: {action_id}")
             return {"status": "error", "message": "Action not in allowed list"}
 
-        # Approval must match a diagnostic proposal that the user was shown.
-        # An allowed action alone is never a sufficient authorization.
-        if action_id not in self.pending_proposals:
-            log_entry["result"] = "rejected"
-            log_entry["message"] = "No pending proposal"
-            self.action_log.append(log_entry)
-            logger.warning("Rejected recovery approval without proposal: %s", action_id)
-            return {"status": "error", "message": "No pending recovery proposal"}
-        
         # Execute the approved action
         try:
             result = await self._execute_action(action_id)
-            log_entry["result"] = "success"
+            log_entry["result"] = result.get("status", "error")
             log_entry["message"] = result.get("message", "Completed")
             self.action_log.append(log_entry)
             self.pending_proposals.pop(action_id, None)
             
-            # Broadcast success
-            self.broadcast("recovery_result", {
+            # Action evidence is separate from the service's post-check result.
+            self.broadcast("recovery_action_result", {
                 "action_id": action_id,
-                "status": "success",
+                "status": result.get("status", "error"),
                 "message": result.get("message"),
             })
             
-            logger.info(f"Recovery executed successfully: {action_id}")
+            logger.info("Recovery action %s returned %s", action_id, result.get("status", "error"))
             return result
             
         except Exception as e:
@@ -688,7 +698,13 @@ class AssistedRecovery:
             return await self._clear_audio_buffer()
         
         elif action_id == "retry_last":
-            return {"status": "success", "message": "Retry triggered"}
+            if self.retry_callback is None:
+                return {"status": "error", "message": "No failed conversational response available to retry"}
+            callback, self.retry_callback = self.retry_callback, None
+            answer = await asyncio.to_thread(callback)
+            if not answer:
+                return {"status": "error", "message": "Retry returned no response"}
+            return {"status": "success", "message": "Retried the failed response.", "answer": str(answer)}
         
         else:
             return {"status": "error", "message": f"Unknown action: {action_id}"}
@@ -717,7 +733,10 @@ class AssistedRecovery:
             
             # Verify
             try:
-                requests.get("http://localhost:11434/api/tags", timeout=5)
+                response = requests.get("http://localhost:11434/api/tags", timeout=5)
+                response.raise_for_status()
+                if not isinstance(response.json().get("models"), list):
+                    raise ValueError("Invalid Ollama health response")
                 return {"status": "success", "message": "Ollama started successfully"}
             except Exception:
                 return {"status": "warning", "message": "Ollama started but not yet responding"}
@@ -752,15 +771,13 @@ class AssistedRecovery:
             return {"status": "error", "message": "No pipeline reference"}
         
         try:
-            # Release current
-            if hasattr(self.pipeline, 'stt_engine'):
-                self.pipeline.stt_engine = None
-            
-            await asyncio.sleep(0.5)
-            
-            # Reinitialize
-            if hasattr(self.pipeline, '_init_stt_engine'):
-                self.pipeline._init_stt_engine()
+            from core.stt_engine_manager import STTEngineManager
+            old = self.pipeline.stt_engine_manager
+            if old is None:
+                return {"status": "error", "message": "No selected STT engine to restart"}
+            replacement = await asyncio.to_thread(STTEngineManager,
+                engine=old.engine, model_size=old.model_size, device=old.device)
+            self.pipeline.stt_engine_manager = replacement
             
             return {"status": "success", "message": "Speech recognition restarted"}
         except Exception as e:
@@ -772,16 +789,15 @@ class AssistedRecovery:
             return {"status": "error", "message": "No pipeline reference"}
         
         try:
-            # Cleanup current
-            if hasattr(self.pipeline, 'output_sink'):
-                if hasattr(self.pipeline.output_sink, 'cleanup'):
-                    await self.pipeline.output_sink.cleanup()
-            
-            await asyncio.sleep(0.5)
-            
-            # Reinitialize
-            if hasattr(self.pipeline, '_init_tts'):
-                await self.pipeline._init_tts()
+            if self.pipeline._tts_engine != "openai":
+                return {"status": "error", "message": "Restart is supported for the selected OpenAI TTS path only"}
+            from core.openai_tts import OpenAIRealtimeTTS
+            replacement = OpenAIRealtimeTTS(voice=self.pipeline.current_voice_key,
+                model=self.pipeline._tts_model,
+                output_device=self.pipeline.audio._output_device_index)
+            replacement._instructions = self.pipeline._TTS_INSTRUCTIONS
+            self.pipeline.stop_tts()
+            self.pipeline._openai_tts = replacement
             
             return {"status": "success", "message": "Voice synthesis restarted"}
         except Exception as e:
@@ -790,11 +806,10 @@ class AssistedRecovery:
     async def _reinit_audio(self) -> dict:
         """Reinitialize audio devices"""
         try:
-            import sounddevice as sd
-            sd.default.reset()
-            
-            # Query devices to refresh
-            sd.query_devices()
+            if self.pipeline is None:
+                return {"status": "error", "message": "No active audio manager"}
+            self.pipeline.audio.stop()
+            self.pipeline.audio.start()
             
             return {"status": "success", "message": "Audio devices reinitialized"}
         except Exception as e:
@@ -806,14 +821,10 @@ class AssistedRecovery:
             return {"status": "error", "message": "No pipeline reference"}
         
         try:
-            if hasattr(self.pipeline, 'state_machine'):
-                self.pipeline.state_machine.force_state("IDLE")
-            elif hasattr(self.pipeline, 'current_state'):
-                self.pipeline.current_state = "IDLE"
-            
-            self.broadcast("status", "IDLE")
-            
-            return {"status": "success", "message": "State reset to IDLE"}
+            self.pipeline.stop_tts()
+            if not self.pipeline.transition_state("LISTENING", source="recovery"):
+                return {"status": "error", "message": "State machine rejected return to LISTENING"}
+            return {"status": "success", "message": "Requested return to LISTENING; check the state display"}
         except Exception as e:
             return {"status": "error", "message": f"Failed to reset state: {e}"}
     
@@ -823,8 +834,7 @@ class AssistedRecovery:
             return {"status": "error", "message": "No pipeline reference"}
         
         try:
-            if hasattr(self.pipeline, 'audio_buffer'):
-                self.pipeline.audio_buffer.clear()
+            self.pipeline.audio.clear_buffers()
             
             return {"status": "success", "message": "Audio buffer cleared"}
         except Exception as e:

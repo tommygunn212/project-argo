@@ -21,6 +21,8 @@ STT/LLM/TTS pipeline for command/control fallback.
 - Durable memory backend: SQLite by default, optional PostgreSQL for v1.8.0 long-term memory experiments
 - Local voice-driven Cortana animation in `/v2`; legacy Hedra Realtime is disabled unless explicitly tested
 - Speechmatics speaker-identity readiness is exposed as an opt-in status path
+- `core.repair_service` shares diagnosis and runtime repair reporting across classic voice, UI, and the authenticated localhost LiveKit tool bridge.
+- `core.code_repair` prepares independent Git clones, records agent/test outcomes, and applies only a reviewed patch matching an unchanged clean base. See `docs/SELF_REPAIR.md`.
 
 ### Smooth Voice Architecture (v1.9.1)
 

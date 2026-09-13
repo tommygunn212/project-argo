@@ -16,6 +16,7 @@
 - **Natural language flexibility** — supports colloquial phrasing for core commands.
 - **Self-diagnostics** — ARGO can check its own health and propose fixes.
 - **Approval-gated repair loop** — plain-language repair requests trigger diagnostics; ARGO proposes one bounded runtime repair, rechecks after approval, and can hand a scoped code repair to local Codex/Astra only after a second visible approval.
+- **Repair review** — Astra prepares an isolated checkout; System shows its diff and independently captured test output before you apply the reviewed patch. See [Self Repair](docs/SELF_REPAIR.md).
 - **Security aware** — binds are configurable; local dev can serve the dashboard to the LAN for phone/iPad testing.
 - **Memory backend choice** — SQLite by default, optional PostgreSQL backend for durable long-term memory experiments.
 

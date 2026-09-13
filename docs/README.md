@@ -20,6 +20,7 @@ Complete navigation for ARGO system documentation. The current implementation ch
 8. **[Voice Audit Fix Status](VOICE_AUDIT_FIX_STATUS_2026-09-12.md)** — current repair scope, verification, and limits
 9. **[Next Upgrades](ARGO_NEXT_UPGRADES.md)** — implemented first passes and intentionally deferred product work
 10. **[Documentation Status](DOCUMENTATION_STATUS_2026-09-12.md)** — which documents are current references versus historical records
+11. **[Self Repair](SELF_REPAIR.md)** — spoken runtime repairs, isolated Astra jobs, test evidence, and reviewed patch application
 
 ### For Developers Modifying Code
 

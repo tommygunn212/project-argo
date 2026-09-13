@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
+import json
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io, function_tool
 from livekit.plugins import openai
 
 try:
@@ -42,9 +45,32 @@ logger = logging.getLogger("ARGO.LiveKit")
 class ArgoRealtimeAgent(Agent):
     def __init__(self, cfg: LiveKitRealtimeConfig) -> None:
         super().__init__(
-            instructions=cfg.instructions,
+            instructions=cfg.instructions + (
+                " When the user reports ARGO is broken or requests self repair, call repair_argo with their exact words. "
+                "Read the actual returned findings. Ask them to say 'approve repair' or 'cancel repair' "
+                "only when a runtime proposal exists; pass that exact phrase to the tool when they do. "
+                "Never invent a successful repair. Code repairs require dashboard approval and review."),
             allow_interruptions=True,
         )
+
+    @function_tool()
+    async def repair_argo(self, text: str) -> str:
+        """Run ARGO's diagnostic/repair conversation using the user's verbatim request.
+
+        Pass explicit 'approve repair', 'cancel repair', 'repair status', or
+        'prepare code repair' only when the user actually says those words.
+        """
+        def call():
+            token = (ROOT / "runtime" / "repair_bridge.token").read_text(encoding="utf-8")
+            port = int(os.getenv("ARGO_HTTP_PORT", "8000"))
+            request = urllib.request.Request(f"http://127.0.0.1:{port}/api/repair-voice",
+                data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json", "X-Argo-Repair": token})
+            with urllib.request.urlopen(request, timeout=90) as response:
+                return response.read().decode()
+        try:
+            return await asyncio.to_thread(call)
+        except Exception as exc:
+            return json.dumps({"status": "unavailable", "message": f"ARGO repair service could not be reached: {type(exc).__name__}. Open System in the dashboard."})
 
 
 def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:

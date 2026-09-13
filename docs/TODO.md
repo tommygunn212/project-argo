@@ -10,15 +10,20 @@ Short list of deferred or optional work items. The v1.9.1 voice reliability batc
 
 ## Repair automation — implemented boundary
 
-- [x] Recognize plain-language self-repair requests such as "something isn't working" and "diagnose and fix."
+- [x] Recognize ARGO-specific repair requests such as "your voice isn't working" and "diagnose and fix."
 - [x] Require a visible, pending diagnostic proposal before an approved runtime repair can execute.
 - [x] Re-run diagnostics after a successful runtime repair and show the observed result.
 - [x] Create an auditable code-repair task and require an additional UI approval before local Codex dispatch.
-- [ ] Add process-status polling and a diff/review panel for completed Astra repair tasks.
+- [x] Add process-status polling and a diff/review panel for completed Astra repair tasks.
+- [x] Prepare changes in an independent checkout and apply only the reviewed, tested patch to an unchanged clean base.
+- [x] Share runtime diagnosis, explicit spoken approval, and post-repair reporting between classic and Smooth Voice.
+- [x] Replace the placeholder retry with a saved conversational-generation callback.
+- [x] Verify failure, timeout, restart recovery, changed-patch rejection, and isolated apply using real temporary repositories/processes.
+- [ ] Exercise a real microphone symptom and an approved live Astra repair; automated tests use deterministic agent processes.
 
 ## Current product follow-through
 - [ ] Add `/v2` controls for provider enablement, model selection, fallback order, and an explicit opt-in multi-model compare mode.
-- [ ] Connect ARGO's UI/voice flow to the auditable coding-request record, then add agent dispatch only after a callable agent surface is verified.
+- [x] Connect ARGO's UI/voice flow to the auditable coding-request record and the local Codex dispatcher. See [Self Repair](SELF_REPAIR.md).
 - [ ] Add optional manual live-camera frames for Phone Vision without continuous private camera streaming.
 - [ ] Enroll and validate Speaker-ID profiles before using speaker identity as a convenience signal; retain confirmation for sensitive actions.
 

@@ -120,13 +120,9 @@ SELF_DIAGNOSTICS_PHRASES = [
     "anything wrong",
     "is something wrong",
     "are you having problems",
-    "something is not working",
-    "something isn't working",
-    "something broken",
     "fix yourself",
     "fix your voice",
     "repair yourself",
-    "diagnose and fix",
     "figure out what's wrong and fix it",
     "figure out what is wrong and fix it",
     "what's your status",
@@ -496,7 +492,10 @@ def detect_system_health(text: str) -> bool:
 def detect_self_diagnostics(text: str) -> bool:
     """Detect ARGO self-check / diagnostics requests (Phase 1)."""
     t = text.lower()
-    return any(p in t for p in SELF_DIAGNOSTICS_PHRASES)
+    # Scope new symptom-based requests to ARGO, not someone else's broken app.
+    symptom = re.search(r"\b(your (?:thing|voice|audio|microphone|code|system)|you|yourself|argo)\b", t)
+    broken = re.search(r"\b(not working|isn't working|is not working|broken|fix|repair|no sound)\b", t)
+    return bool(symptom and broken) or t.strip() in ("diagnose and fix", "diagnose and fix it") or any(p in t for p in SELF_DIAGNOSTICS_PHRASES)
 
 
 def detect_hardware_info(text: str) -> bool:

@@ -2049,6 +2049,11 @@ input[type="range"]::-moz-range-thumb {
             <button class="btn btn-danger" id="codeRepairDeny">✗ Deny</button>
           </div>
         </div>
+        <div class="card">
+          <div class="card-title">REPAIR PROGRESS & REVIEW</div>
+          <button class="btn btn-sm" onclick="send('code_repair_status', {})">Refresh repair jobs</button>
+          <div id="codeRepairJobs" style="white-space:pre-wrap;overflow-wrap:anywhere"></div>
+        </div>
 
         <!-- System Log -->
         <div class="card">
@@ -2424,6 +2429,7 @@ function handleMessage(msg) {
     case 'recovery_result': handleRecoveryResult(payload); break;
     case 'code_repair_proposal': handleCodeRepairProposal(payload); break;
     case 'code_repair_result': handleCodeRepairResult(payload); break;
+    case 'code_repair_jobs': renderCodeRepairJobs(payload); break;
     case 'config': handleConfig(payload); break;
     case 'db_status': handleDBStatus(payload); break;
     case 'illegal_transition': handleIllegalTransition(payload); break;
@@ -2646,29 +2652,33 @@ function handleDiagnostics(data) {
   if (data.ok_count) html += `<div class="diag-row"><span class="diag-icon diag-ok">✓</span> ${data.ok_count} checks passed</div>`;
   if (data.warnings?.length) {
     data.warnings.forEach(w => {
-      html += `<div class="diag-row"><span class="diag-icon diag-warn">⚠</span> ${w}</div>`;
+      html += `<div class="diag-row"><span class="diag-icon diag-warn">⚠</span> ${repairEscape(w.message || w)}</div>`;
     });
   }
   if (data.errors?.length) {
     data.errors.forEach(e => {
-      html += `<div class="diag-row"><span class="diag-icon diag-err">✗</span> ${e}</div>`;
+      html += `<div class="diag-row"><span class="diag-icon diag-err">✗</span> ${repairEscape(e.message || e)}</div>`;
     });
   }
-  if (data.summary) html += `<div style="margin-top:8px;font-size:13px;color:var(--text-secondary)">${data.summary}</div>`;
+  if (data.summary) html += `<div style="margin-top:8px;font-size:13px;color:var(--text-secondary)">${repairEscape(data.summary)}</div>`;
   el.innerHTML = html || '<div style="color:var(--accent3)">All systems operational</div>';
 }
 
 // ── Recovery ──
 function handleRecoveryProposal(data) {
   if (!data) return;
-  pendingRecoveryId = data.action_id;
+  pendingRecoveryId = data.proposal_id;
   $('recoveryCard').style.display = 'block';
-  $('recoveryContent').innerHTML = `<div style="font-size:13px;color:var(--text-primary)">${data.message || 'Recovery action proposed'}</div>`;
+  $('recoveryContent').textContent = `${data.problem || ''}\nProposed: ${data.proposal || ''}\n${data.command_preview || ''}`;
+  switchPage('pageSystem');
 }
 
 function handleRecoveryResult(data) {
-  $('recoveryCard').style.display = 'none';
-  addSystemLog(`Recovery: ${data?.status || 'unknown'}`);
+  if (data?.status !== 'proposed') {
+    $('recoveryCard').style.display = 'none';
+    pendingRecoveryId = null;
+  }
+  addSystemLog(`Recovery: ${data?.status || 'unknown'} — ${data?.message || ''}`);
 }
 
 // ── Config ──
@@ -2766,14 +2776,57 @@ function handleCodeRepairProposal(data) {
   if (!data) return;
   pendingCodeRepairId = data.action_id;
   $('codeRepairCard').style.display = 'block';
-  $('codeRepairContent').innerHTML = `<div style="font-size:13px;color:var(--text-primary)">${data.message || 'Code repair proposed'}</div><div style="margin-top:7px;font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">${data.task_path || ''}</div>`;
+  $('codeRepairContent').textContent = `${data.request}\n\n${data.message}\n${data.task_path}`;
+  switchPage('pageSystem');
 }
 
 function handleCodeRepairResult(data) {
   if (!data) return;
   if (data.status !== 'error') $('codeRepairCard').style.display = 'none';
   addSystemLog(`Code repair: ${data.status || 'unknown'}${data.message ? ` — ${data.message}` : ''}`);
+  send('code_repair_status', {});
 }
+
+function repairEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderCodeRepairJobs(jobs) {
+  const container = $('codeRepairJobs');
+  container.replaceChildren();
+  (jobs || []).slice().reverse().forEach(job => {
+    const item = document.createElement('section');
+    const title = document.createElement('p');
+    title.textContent = `${job.status}: ${job.request}\n${job.message}\nAgent exit: ${job.exit_code ?? 'pending'} · Tests: ${job.test_exit ?? 'not run'}`;
+    item.append(title);
+    for (const [label, content] of [['Changed files', (job.changed_files || []).join('\n')], ['Diff', job.diff], ['Test output', job.test_log], ['Agent report', job.report]]) {
+      if (!content) continue;
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = label;
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'white-space:pre-wrap;max-height:420px;overflow:auto';
+      pre.textContent = content;
+      details.append(summary, pre);
+      item.append(details);
+    }
+    if (job.diff_truncated) {
+      const note = document.createElement('p');
+      note.textContent = `Preview truncated. Full patch: ${job.patch_path}`;
+      item.append(note);
+    }
+    if (job.status === 'review_ready') {
+      const apply = document.createElement('button');
+      apply.className = 'btn btn-primary';
+      apply.textContent = 'Apply reviewed patch';
+      apply.onclick = () => { apply.disabled = true; send('code_repair_apply', {action_id: job.action_id, patch_sha256: job.patch_sha256, approved: true}); };
+      item.append(apply);
+    }
+    container.append(item);
+  });
+}
+
+setInterval(() => { if (document.visibilityState === 'visible') send('code_repair_status', {}); }, 5000);
 
 // ═══════ REALTIME VOICE (LIVEKIT + OPENAI REALTIME) ═══════
 function setRealtimeStatus(status, tone = 'dim') {
@@ -3561,14 +3614,14 @@ function drawWaveform() {
 // ═══════ RECOVERY BUTTONS ═══════
 $('recoveryApprove').addEventListener('click', () => {
   if (pendingRecoveryId) {
-    send('recovery_response', { action_id: pendingRecoveryId, approved: true });
+    send('recovery_response', { proposal_id: pendingRecoveryId, approved: true });
     $('recoveryCard').style.display = 'none';
     addSystemLog('Recovery approved');
   }
 });
 $('recoveryDeny').addEventListener('click', () => {
   if (pendingRecoveryId) {
-    send('recovery_response', { action_id: pendingRecoveryId, approved: false });
+    send('recovery_response', { proposal_id: pendingRecoveryId, approved: false });
     $('recoveryCard').style.display = 'none';
     addSystemLog('Recovery denied');
   }

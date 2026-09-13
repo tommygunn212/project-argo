@@ -53,6 +53,7 @@ from core.database import music_db_exists, get_db_status
 from core.config import MUSIC_DB_PATH
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
+from core.repair_service import RepairService, ActiveDiagnostics
 from core.instrumentation import log_event
 from core.sound_cues import get_sound_cue_player
 from system_profile import get_system_profile, get_gpu_profile
@@ -84,6 +85,8 @@ main_loop_thread = None
 diagnostics_ref = None
 recovery_ref = None
 code_repair_ref = None
+repair_service_ref = None
+repair_bridge_token = None
 
 # ============================================================================
 # 5) LOGGING
@@ -234,6 +237,24 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("[HTTP] client log failed")
                 self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/api/repair-voice":
+            # Local sidecar only; browser origins and unauthenticated calls
+            # cannot invoke runtime repairs through this endpoint.
+            import secrets
+            if (self.client_address[0] not in ("127.0.0.1", "::1")
+                    or self.headers.get("Origin") or not repair_bridge_token
+                    or not secrets.compare_digest(self.headers.get("X-Argo-Repair", ""), repair_bridge_token)):
+                self._send_json({"error": "Forbidden"}, status=403)
+                return
+            try:
+                body = self._read_json_body(max_bytes=16000)
+                text = str(body.get("text", "")) if isinstance(body, dict) else ""
+                result = repair_service_ref.handle_text(text) if repair_service_ref else None
+                self._send_json(result or {"status": "error", "message": "Use an ARGO repair request or repair status."})
+            except Exception as exc:
+                self._send_json({"status": "error", "message": str(exc)}, status=500)
             return
 
         if path == "/api/vision/analyze-upload":
@@ -439,10 +460,16 @@ async def websocket_handler(websocket):
                 await _handle_diagnostics(websocket)
             if msg_type == "recovery_response" and payload:
                 await _handle_recovery_response(payload)
-            if msg_type == "code_repair_request" and payload:
-                _handle_code_repair_request(payload)
+            if msg_type == "code_repair_request" and isinstance(payload, dict):
+                await asyncio.to_thread(_handle_code_repair_request, payload)
             if msg_type == "code_repair_response" and payload:
-                _handle_code_repair_response(payload)
+                await asyncio.to_thread(_handle_code_repair_response, payload)
+            if msg_type == "code_repair_status" and code_repair_ref:
+                await websocket.send(json.dumps({"type": "code_repair_jobs", "payload": code_repair_ref.snapshot()}))
+            if msg_type == "code_repair_apply" and isinstance(payload, dict) and code_repair_ref:
+                result = await asyncio.to_thread(code_repair_ref.apply_if_approved,
+                    payload.get("action_id"), payload.get("patch_sha256"), payload.get("approved"))
+                broadcast_msg("code_repair_result", result)
             if msg_type == "control" and payload:
                 _handle_control(payload)
             if msg_type == "override" and payload:
@@ -728,6 +755,10 @@ async def _handle_diagnostics(websocket):
     Phase 1: Detect and explain problems.
     """
     global diagnostics_ref
+    if repair_service_ref:
+        result = await asyncio.to_thread(repair_service_ref.handle_text, "Run diagnostics")
+        broadcast_msg("recovery_result", result)
+        return
     
     try:
         if diagnostics_ref is None:
@@ -768,48 +799,20 @@ async def _handle_recovery_response(payload: dict):
     Phase 2: Execute recovery ONLY if user approved.
     
     Payload:
-      {"action_id": "restart_ollama", "approved": true}
+      {"proposal_id": "unique-id-from-proposal", "approved": true}
     """
-    global recovery_ref, diagnostics_ref
-    
-    if not recovery_ref:
-        logger.warning("[RECOVERY] No recovery manager initialized")
+    if not isinstance(payload, dict) or not repair_service_ref:
         return
-    
-    action_id = payload.get("action_id")
-    approved = payload.get("approved", False)
-    
-    if not action_id:
-        logger.warning("[RECOVERY] No action_id in response")
-        return
-    
-    log_event(f"RECOVERY_RESPONSE: {action_id} = {'APPROVED' if approved else 'DECLINED'}", stage="recovery")
-    
-    # Execute only if approved
-    result = await recovery_ref.execute_if_approved(action_id, approved)
-
-    # Success is verified by a fresh health check, never inferred from the
-    # action's return value alone.
-    if approved and result.get("status") in ("success", "warning") and diagnostics_ref:
-        try:
-            diagnostics_ref.check_all()
-            result["verification"] = diagnostics_ref.get_summary()
-            broadcast_msg("diagnostics_result", result["verification"])
-        except Exception as exc:
-            result["verification_error"] = str(exc)
-            logger.exception("[RECOVERY] Post-repair diagnostics failed")
-    
-    # Broadcast result
-    broadcast_msg("recovery_result", {
-        "action_id": action_id,
-        "approved": approved,
-        "result": result
-    })
+    result = await asyncio.to_thread(repair_service_ref.respond,
+        payload.get("proposal_id", ""), payload.get("approved"))
+    if pipeline_ref and LISTENING_ENABLED and result.get("message"):
+        # The server loop stays responsive while classic TTS speaks the result.
+        await asyncio.to_thread(pipeline_ref.speak, result["message"])
 
 
 def _init_recovery_system():
     """Initialize assisted recovery system with pipeline reference."""
-    global recovery_ref, diagnostics_ref, code_repair_ref
+    global recovery_ref, diagnostics_ref, code_repair_ref, repair_service_ref, repair_bridge_token
     
     diagnostics_ref = SystemDiagnostics()
     recovery_ref = AssistedRecovery(
@@ -819,6 +822,15 @@ def _init_recovery_system():
     if pipeline_ref is not None:
         pipeline_ref.recovery_manager = recovery_ref
     code_repair_ref = CodeRepairManager(broadcast_fn=broadcast_msg)
+    repair_service_ref = RepairService(recovery_ref, code_repair_ref, broadcast_msg,
+        diagnostics_factory=lambda: ActiveDiagnostics(pipeline_ref))
+    if pipeline_ref is not None:
+        pipeline_ref.repair_service = repair_service_ref
+    import secrets
+    repair_bridge_token = secrets.token_urlsafe(32)
+    token_path = Path(repo_root) / "runtime" / "repair_bridge.token"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(repair_bridge_token, encoding="utf-8")
     logger.info("[RECOVERY] Assisted recovery system initialized")
 
 
@@ -830,7 +842,7 @@ def _handle_code_repair_request(payload: dict):
         request = str(payload.get("request") or "")
         proposal = code_repair_ref.propose(request)
         log_event(f"CODE_REPAIR_PROPOSED {proposal['action_id']}", stage="recovery")
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         broadcast_msg("code_repair_result", {"status": "error", "message": str(exc)})
 
 
@@ -839,7 +851,7 @@ def _handle_code_repair_response(payload: dict):
     if not code_repair_ref:
         return
     result = code_repair_ref.dispatch_if_approved(
-        str(payload.get("action_id") or ""), bool(payload.get("approved", False))
+        str(payload.get("action_id") or ""), payload.get("approved", False)
     )
     log_event(f"CODE_REPAIR_{result.get('status', 'unknown').upper()}", stage="recovery")
     broadcast_msg("code_repair_result", result)

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Complete assisted repair workflow
+
+- Share plain-language diagnostics and explicit spoken approval across classic and LiveKit voice, using selected-component checks and accurate post-repair results.
+- Replace placeholder conversational retry and silent/no-op recovery calls; reject stale, duplicate, and non-boolean approvals.
+- Run Astra high in independent Git checkouts; retain process results, timeout/failure states, diff, agent report, and focused test output.
+- Add System-panel progress and review with explicit hash-checked patch application to an unchanged clean base. No automatic commit, push, or restart.
+- Add integration coverage using real temporary Git repositories, child processes, localhost HTTP, and actual UI rendering functions. Physical voice and live paid-model validation are separate.
+
 ## v1.9.1 — Voice Reliability, Provider Routing, and Phone Vision (2026-09-12)
 
 ### Added

@@ -28,11 +28,11 @@ Recommended safe architecture:
 4. ARGO stores the result path, diff summary, and test output back in `runtime/code_requests/`.
 5. ARGO never silently edits arbitrary repos without a visible task record.
 
-Current local status:
+Current local status (verified 2026-09-12):
 
 - VS Code CLI is installed: `code.cmd`.
-- Claude CLI is not currently on PATH.
-- Codex is installed through the Windows app package, but direct PowerShell launch returned access denied in this session.
+- Codex CLI is callable and reports signed-in ChatGPT authentication.
+- The current dispatcher uses Codex; Claude dispatch is not implemented.
 
 Implemented first step:
 
@@ -40,8 +40,8 @@ Implemented first step:
 
 Remaining steps:
 
-- Local Codex CLI is now confirmed. The `/v2` System panel creates a task record and, after explicit approval, dispatches `gpt-6-astra` with high reasoning in the ARGO workspace. The generated prompt forbids commit, push, unrelated deletion, and external-system changes.
-- Add process-status polling and a visual diff/review panel before treating a completed coding-agent run as an applied repair.
+- Local Codex CLI is confirmed. The `/v2` System panel records a task and dispatches `gpt-6-astra` with high reasoning in an independent checkout after approval. The running checkout remains untouched until the reviewed patch is explicitly applied.
+- Process tracking, failure/timeout handling, persisted results, focused test execution, and a diff/review panel are implemented. See [Self Repair](SELF_REPAIR.md) for exact behavior and verification limits.
 - Add Claude only after a local CLI or API path is installed and authenticated.
 
 ## 3. Speaker Recognition

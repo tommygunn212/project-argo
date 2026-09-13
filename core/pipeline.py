@@ -5327,6 +5327,13 @@ class ArgoPipeline:
         but never suppresses conversational responses in personal mode.
         """
         user_text = (user_text or "").strip()
+        repair_service = getattr(self, "repair_service", None)
+        if repair_service is not None and not replay_mode:
+            repair_result = repair_service.handle_text(user_text)
+            if repair_result is not None:
+                self._deliver_canonical_response(repair_result["message"], interaction_id,
+                    replay_mode, overrides, enforce_confidence=False, force_tts=True)
+                return
         personal_question_bypass_logged = False
         try:
             stt_conf = max(0.0, min(1.0, float(confidence_hint)))
@@ -6581,10 +6588,20 @@ class ArgoPipeline:
         
         if not ai_text.strip():
             self.logger.warning("[LLM] Empty response")
+            recovery = getattr(self, "recovery_manager", None)
+            if recovery is not None and not replay_mode:
+                # Retry only conversational generation, never re-dispatch an
+                # intent which may send mail, change devices, or write files.
+                recovery.retry_callback = lambda: self._generate_and_speak_streamed(
+                    user_text, interaction_id=interaction_id, rag_context=rag_context,
+                    memory_context=memory_context, use_convo_buffer=False,
+                    replay_mode=False, overrides=overrides)
             self.broadcast("log", "Argo: [No response]")
             self._recover_failed_turn(interaction_id)
             return
         # NOTE: broadcast already sent inside _generate_and_speak_streamed (before TTS wait)
+        if getattr(self, "recovery_manager", None):
+            self.recovery_manager.retry_callback = None
         self._conversation_buffer.add("Assistant", ai_text)
         self._append_convo_ledger("argo", ai_text)
 
