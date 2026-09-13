@@ -4,6 +4,9 @@ ARGO's realtime voice path can display a LiveKit remote video avatar in the
 dashboard and voice panels. The local voice-driven Cortana canvas avatar is the
 active fallback.
 
+ARGO can also display a configured local animated avatar media file, such as a
+short GIF loop, above the canvas fallback and below real LiveKit avatar video.
+
 ## Current Status
 
 LiveKit's current Hedra plugin documentation says Hedra sunset the old Realtime
@@ -63,6 +66,26 @@ portrait image at session start. Do not enable this path without a real
 When any remote LiveKit video track is subscribed, ARGO attaches it to both
 avatar panels and labels the panel `LIVE AVATAR`. When the track leaves, ARGO
 returns to the built-in local Cortana canvas fallback.
+
+If `avatar.local_media_path` or `ARGO_LOCAL_AVATAR_MEDIA` points to an existing
+GIF/image/video file, the UI uses `/v2-assets/local-avatar-media`. Uncalibrated
+media plays as a local loop. Set `avatar.local_media_profile` to `halo` for the
+498 x 348 Cortana Halo clip, converted to silent MP4. Its decoded video frames
+feed the WebGL renderer with landmarks calibrated for that face. Idle blinking,
+gaze and breathing run locally; mouth deformation follows the subscribed ARGO
+audio track's RMS meter in Smooth Voice. Silence does not generate speech motion.
+Desktop OpenAI TTS also sends `tts_audio_level` RMS events from existing playback
+writes. The UI expires these after 250 ms and resets them outside SPEAKING. This
+meter does not acquire an audio device or publish microphone audio. Other desktop
+TTS engines currently retain idle expressions without audio-driven mouth motion.
+This is local 2D deformation over source footage, not phoneme-based or generated
+photorealistic video. A GIF is displayed directly because canvas texture uploads
+do not reliably advance animated image frames. Unsupported profiles and WebGL
+failure retain the selected local media rather than covering it with another face.
+`avatar.motion_enabled: true` explicitly enables idle expression motion even if
+the browser reports reduced motion. `false` disables idle expressions; `null`
+(the default) follows the browser preference. The muted source video has no
+audio track and never participates in audio ownership.
 
 ## Replacement Direction
 

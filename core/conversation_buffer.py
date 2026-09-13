@@ -102,7 +102,7 @@ class ConversationBuffer:
         self._turns.append(ConversationTurn(role=role, content=content, timestamp=ts))
         logger.info(f"[SESSION] Context appended (turn {self._session_turn_count}/{self.SESSION_TURN_LIMIT})")
 
-    def as_context_block(self, max_exchanges: int = 3) -> str:
+    def as_context_block(self, max_exchanges: int = 12) -> str:
         """Get context for LLM prompt. Returns empty if disabled.
         
         Args:
@@ -122,7 +122,7 @@ class ConversationBuffer:
             lines.append(f"{turn.role}: {turn.content}")
         return "\n".join(lines)
 
-    def as_messages(self, max_exchanges: int = 3) -> List[dict]:
+    def as_messages(self, max_exchanges: int = 12) -> List[dict]:
         """Return conversation history as OpenAI-format message dicts.
 
         Maps buffer roles to OpenAI roles:

@@ -292,6 +292,12 @@ _DEFAULT_CONFIG = {
         "enabled": False,
         "provider": "speechmatics",
     },
+    "avatar": {
+        "local_media_enabled": True,
+        "local_media_path": "",
+        "local_media_profile": "",
+        "motion_enabled": None,
+    },
     "llm": {
         "backend": "ollama",
         "model": "qwen:latest",

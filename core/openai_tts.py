@@ -58,6 +58,7 @@ class OpenAIRealtimeTTS:
         speed: float = 1.02,
         output_device=None,
         timeout_seconds: float = 15.0,
+        on_audio_level=None,
     ):
         self.voice = voice if voice in self.VOICES else "nova"
         self.model = model  # tts-1, tts-1-hd, or gpt-4o-mini-tts
@@ -74,6 +75,7 @@ class OpenAIRealtimeTTS:
         self._device_sample_rate = 24000  # OpenAI outputs 24kHz by default
         self._interrupt_suppress_until = 0.0  # timestamp until which barge-in is suppressed
         self._instructions = None  # gpt-4o-mini-tts speech style instructions
+        self._on_audio_level = on_audio_level
         self._init_client()
         self._init_audio_device()
 
@@ -125,8 +127,17 @@ class OpenAIRealtimeTTS:
     def _speech_kwargs(self, text):
         kwargs = dict(model=self.model, voice=self.voice, input=text,
                       response_format="pcm", speed=self.speed)
-        if self._instructions and "gpt-4o" in self.model:
-            kwargs["instructions"] = self._instructions
+        if "gpt-4o" in self.model:
+            instructions = (self._instructions or "").strip()
+            if any("\u3400" <= char <= "\u9fff" for char in text):
+                chinese_instruction = (
+                    "When the input contains Chinese characters, pronounce every Chinese phrase "
+                    "clearly in Mandarin Chinese. Do not skip, spell out, transliterate, or replace "
+                    "the Chinese characters."
+                )
+                instructions = " ".join(part for part in (instructions, chinese_instruction) if part)
+            if instructions:
+                kwargs["instructions"] = instructions
         return kwargs
 
     def _response_chunks(self, text, generation):
@@ -226,6 +237,9 @@ class OpenAIRealtimeTTS:
                     if self.is_cancelled(generation):
                         return
                     underflow = stream.write(samples[offset:offset + block].reshape(-1, 1))
+                    if not self.is_cancelled(generation):
+                        level = float(np.sqrt(np.mean(samples[offset:offset + block] ** 2)))
+                        self._emit_audio_level(level)
                     if underflow:
                         logger.warning("[OPENAI_TTS] Output underflow")
 
@@ -266,6 +280,16 @@ class OpenAIRealtimeTTS:
                         except Exception:
                             logger.debug("[OPENAI_TTS] Stream cleanup failed", exc_info=True)
                 self._mark_playing(False, generation)
+                self._emit_audio_level(0.0)
+
+    def _emit_audio_level(self, level: float) -> None:
+        # UI metering observes existing playback; it cannot own or stop audio.
+        callback = getattr(self, "_on_audio_level", None)
+        if callback is not None:
+            try:
+                callback(level)
+            except Exception:
+                logger.debug("[OPENAI_TTS] Avatar meter unavailable", exc_info=True)
 
     def stop(self) -> None:
         """Invalidate speech and abort only the TTS-owned output stream."""
@@ -279,6 +303,7 @@ class OpenAIRealtimeTTS:
                     stream.abort()
                 except Exception:
                     logger.debug("[OPENAI_TTS] Stream already stopped", exc_info=True)
+        self._emit_audio_level(0.0)
         logger.info("[OPENAI_TTS] Stop signal sent")
 
     @property

@@ -1,4 +1,4 @@
-/* Local audio-driven portrait. No recording, network inference, or canned speech loop. */
+/* Local audio-driven expressions with optional silent video as source art. */
 (function (root) {
   'use strict';
   const clamp = (n, a = 0, b = 1) => Math.min(b, Math.max(a, Number(n) || 0));
@@ -37,6 +37,9 @@
     uniform sampler2D portrait;
     uniform vec2 imageSize, screenSize;
     uniform vec2 gaze;
+    uniform vec3 mouthLandmark;
+    uniform vec4 eyeLandmarks;
+    uniform float frameZoom;
     uniform float mouth, jaw, blink, time, motion, breath;
     void main() {
       float scale = max(screenSize.x/imageSize.x, screenSize.y/imageSize.y);
@@ -45,53 +48,42 @@
       float alive = motion*(0.62+0.38*mouth);
       float angle = alive*(sin(time*0.47)*0.0045 + sin(time*0.19+1.4)*0.0035 + mouth*sin(time*2.2)*0.0025);
       mat2 rotate = mat2(cos(angle),-sin(angle),sin(angle),cos(angle));
-      uv = rotate*(uv-pivot)/(1.014 + breath*0.004 + mouth*0.002)+pivot;
+      uv = rotate*(uv-pivot)/(frameZoom + breath*0.004 + mouth*0.002)+pivot;
       uv.y += alive*(sin(time*0.72)*0.0022 + breath*0.0025);
       uv.x += alive*sin(time*0.31+0.7)*0.0018;
-      vec2 original = uv;
-
-      // Landmark coordinates belong to the bundled 1536 x 1024 Cortana portrait.
-      float mx = (uv.x-0.512)/0.052;
-      float seam = 0.543 - 0.0065*mx*mx - 0.0022*mx + sin(time*7.1+mx*2.4)*mouth*0.0014;
-      float width = smoothstep(1.12,0.06,abs(mx));
+      float mx = (uv.x-mouthLandmark.x)/mouthLandmark.z;
+      float seam = mouthLandmark.y - 0.0065*mx*mx - 0.0022*mx + sin(time*7.1+mx*2.4)*mouth*0.0014;
+      float width = 1.0-smoothstep(0.06,1.12,abs(mx));
       float speech = pow(mouth,0.72);
       float asymmetric = 1.0 + 0.10*sin(time*9.0) + 0.06*sin(time*13.0+mx);
-      float opening = speech*0.017*width*asymmetric;
       float dy = uv.y-seam;
       float mouthRegion = exp(-pow(abs(dy)/0.115,2.0))*width;
-      float chinRegion = exp(-pow(abs(uv.y-0.62)/0.12,2.0))*smoothstep(1.25,0.0,abs(mx));
-      uv.y -= max(0.0,dy)*speech*0.22*mouthRegion;
-      uv.y += jaw*0.010*chinRegion;
-      uv.x += mx*speech*0.0022*mouthRegion;
+      // Stretch the source lips and mouth interior, retaining their own texture.
+      uv.y = seam + dy/(1.0+speech*0.90*mouthRegion*asymmetric);
+      uv.y -= jaw*0.004*mouthRegion;
+      uv.x += mx*speech*0.005*mouthRegion;
 
       // Compress and nudge the original eye texture; retain the portrait's own shading.
       for (int i=0;i<2;i++) {
-        vec2 eye = i==0 ? vec2(0.447,0.344) : vec2(0.577,0.344);
+        vec2 eye = i==0 ? eyeLandmarks.xy : eyeLandmarks.zw;
         vec2 d = uv-eye;
         float eyeOval = exp(-pow(abs(d.x)/0.047,4.0)*1.5) * exp(-pow(abs(d.y)/0.039,4.0)*1.7);
         uv -= gaze*eyeOval;
         d = uv-eye;
-        float weight = exp(-pow(abs(d.x)/0.041,4.0)*1.8);
-        float region = 1.0-smoothstep(0.024,0.050,abs(d.y));
-        float compressed = 1.0-blink*weight*region*0.92;
-        uv.y = eye.y+d.y/max(0.08,compressed);
+        float weight = 1.0-smoothstep(0.028,0.065,abs(d.x));
+        float halfEye = 0.020;
+        float extent = 0.058;
+        float lid = halfEye*(1.0-blink*weight*0.94);
+        float ay = abs(d.y);
+        // A monotonic remap closes the eye without folding/repeating its texture.
+        if (ay < extent) {
+          float sourceY = ay < lid ? ay*halfEye/lid
+            : halfEye+(ay-lid)*(extent-halfEye)/(extent-lid);
+          uv.y = eye.y+sign(d.y)*sourceY;
+        }
       }
       vec4 color = texture2D(portrait,uv);
-      if (mouth>0.010 && abs(mx)<1.08) {
-        float upper = seam-opening*0.28;
-        float lower = seam+opening*0.86;
-        float edge = 0.0012;
-        float inside = smoothstep(upper-edge,upper+edge,original.y)
-                     * (1.0-smoothstep(lower-edge,lower+edge,original.y));
-        inside *= smoothstep(0.0,0.002,opening);
-        inside *= smoothstep(1.08,0.72,abs(mx));
-        float depth = clamp((original.y-upper)/max(opening,0.0001),0.0,1.0);
-        vec3 cavity = mix(vec3(0.030,0.044,0.090),vec3(0.11,0.12,0.22),depth);
-        float teeth = (1.0-smoothstep(0.12,0.24,depth))*smoothstep(0.28,0.72,mouth);
-        cavity = mix(cavity,vec3(0.56,0.64,0.78),teeth*0.38);
-        color.rgb = mix(color.rgb,cavity,inside*0.92);
-      }
-      float faceLight = smoothstep(0.84,0.16,length((screenUV-vec2(0.51,0.43))*vec2(1.0,1.25)));
+      float faceLight = 1.0-smoothstep(0.16,0.84,length((screenUV-vec2(0.51,0.43))*vec2(1.0,1.25)));
       float holo = sin(screenUV.y*96.0 + time*2.0)*0.004 + sin((screenUV.x+screenUV.y)*38.0-time*1.4)*0.003;
       color.rgb += vec3(0.025,0.055,0.09)*(breath+mouth*0.55+holo)*faceLight*motion;
       color.rgb *= 1.0 + mouth*0.035*faceLight;
@@ -103,14 +95,39 @@
       this.canvas = canvas;
       this.ready = false;
       this.lost = false;
-      this.image = new Image();
-      this.image.onload = () => this.init();
+      this.profile = 'portrait';
+      this.texture = null;
       canvas.addEventListener('webglcontextlost', event => {
         event.preventDefault(); this.lost = true; this.ready = false;
         canvas.closest('.avatar-stage')?.classList.remove('local-animated');
       });
-      canvas.addEventListener('webglcontextrestored', () => this.init());
-      this.image.src = imageUrl;
+      canvas.addEventListener('webglcontextrestored', () => {
+        this.texture = null;
+        this.program = null;
+        this.init();
+      });
+      this.setImageSource(imageUrl);
+    }
+    setImageSource(imageUrl) {
+      if (!imageUrl || this.imageUrl === imageUrl) return;
+      this.imageUrl = imageUrl;
+      this.profile = 'portrait';
+      this.ready = false;
+      this.canvas.closest('.avatar-stage')?.classList.remove('local-animated');
+      const image = new Image();
+      this.image = image;
+      image.onload = () => {
+        if (this.image === image) this.init();
+      };
+      image.src = imageUrl;
+    }
+    setMediaSource(media, profile) {
+      if (this.image === media) return;
+      this.imageUrl = '';
+      this.image = media;
+      this.profile = profile;
+      this.ready = false;
+      this.init();
     }
     init() {
       const gl = this.canvas.getContext('webgl', { alpha: false, antialias: false, depth: false });
@@ -122,6 +139,8 @@
           if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
           return shader;
         };
+        if (this.program) gl.deleteProgram(this.program);
+        if (this.buffer) gl.deleteBuffer(this.buffer);
         const program = gl.createProgram();
         gl.attachShader(program,compile(gl.VERTEX_SHADER,vertex));
         gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragment));
@@ -129,11 +148,13 @@
         if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
         gl.useProgram(program);
         const buffer = gl.createBuffer();
+        this.buffer = buffer;
         gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
         gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
         const position = gl.getAttribLocation(program,'position');
         gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
-        const texture = gl.createTexture();
+        const texture = this.texture || gl.createTexture();
+        this.texture = texture;
         gl.bindTexture(gl.TEXTURE_2D,texture);
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
@@ -141,10 +162,13 @@
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,this.image);
         this.gl=gl; this.program=program;
-        this.uniforms = Object.fromEntries(['imageSize','screenSize','gaze','mouth','jaw','blink','time','motion','breath']
+        this.uniforms = Object.fromEntries(['imageSize','screenSize','gaze','mouthLandmark','eyeLandmarks','frameZoom','mouth','jaw','blink','time','motion','breath']
           .map(name=>[name,gl.getUniformLocation(program,name)]));
         this.ready=true; this.lost=false;
-        this.canvas.closest('.avatar-stage')?.classList.add('local-animated');
+        const stage = this.canvas.closest('.avatar-stage');
+        if (!stage?.querySelector('.avatar-local-media') || this.image.tagName === 'VIDEO') {
+          stage?.classList.add('local-animated');
+        }
       } catch(error) {
         console.warn('Local portrait renderer unavailable',error);
       }
@@ -156,6 +180,10 @@
       const w=Math.round(this.canvas.clientWidth*dpr),h=Math.round(this.canvas.clientHeight*dpr);
       if(this.canvas.width!==w || this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
       gl.viewport(0,0,w,h); gl.useProgram(this.program);
+      if (this.image.tagName === 'VIDEO' && this.image.readyState >= 2 && this.texture) {
+        gl.bindTexture(gl.TEXTURE_2D,this.texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,this.image);
+      }
       const t=now/1000, phase=t%4.7;
       const m = clamp(mouth);
       const blinkA = Math.max(0,1-Math.abs(phase-4.3)/0.095);
@@ -165,7 +193,11 @@
       const gazeX = reducedMotion ? 0 : Math.sin(t*0.29)*0.004 + Math.sin(t*0.11+1.7)*0.003;
       const gazeY = reducedMotion ? 0 : Math.sin(t*0.23+0.8)*0.0025 - m*0.0015;
       const breath = reducedMotion ? 0 : (0.5 + 0.5*Math.sin(t*0.82));
-      gl.uniform2f(u.imageSize,this.image.naturalWidth,this.image.naturalHeight);
+      gl.uniform2f(u.imageSize,this.image.videoWidth || this.image.naturalWidth,this.image.videoHeight || this.image.naturalHeight);
+      const halo = this.profile === 'halo';
+      gl.uniform1f(u.frameZoom,halo?1.10:1.014);
+      gl.uniform3f(u.mouthLandmark,halo?0.488:0.512,halo?0.609:0.543,halo?0.076:0.052);
+      gl.uniform4f(u.eyeLandmarks,halo?0.377:0.447,halo?0.270:0.344,halo?0.596:0.577,halo?0.267:0.344);
       gl.uniform2f(u.screenSize,w,h);
       gl.uniform2f(u.gaze,gazeX,gazeY);
       gl.uniform1f(u.mouth,m);gl.uniform1f(u.jaw,jaw);gl.uniform1f(u.blink,blink);

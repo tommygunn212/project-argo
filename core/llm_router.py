@@ -260,13 +260,23 @@ class LLMRouter:
         messages = [{"role": "system", "content": system_message}]
         messages.extend(convo_messages)
         messages.append({"role": "user", "content": prompt})
-        stream = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
-        )
+        request = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        # GPT-5.2 accepts temperature only with reasoning disabled, and GPT-5
+        # uses max_completion_tokens rather than the legacy max_tokens parameter.
+        # Older models keep their existing request shape.
+        if model.lower().startswith("gpt-5"):
+            request["max_completion_tokens"] = max_tokens
+            if model.lower().startswith("gpt-5.2"):
+                request["reasoning_effort"] = "none"
+                request["temperature"] = temperature
+        else:
+            request["temperature"] = temperature
+            request["max_tokens"] = max_tokens
+        stream = client.chat.completions.create(**request)
         try:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None

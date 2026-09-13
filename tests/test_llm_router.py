@@ -112,6 +112,21 @@ def test_openai_stream_yields_text_parts():
     assert openai.calls[0]["messages"][0] == {"role": "system", "content": "System"}
 
 
+def test_gpt55_uses_modern_chat_completion_parameters():
+    openai = FakeOpenAIClient(["Useful answer"])
+    router = LLMRouter(
+        {"llm": {"backend": "openai", "model": "gpt-5.5"}},
+        FakeVoiceClients({"openai": openai}),
+    )
+
+    assert "".join(router.stream_text(prompt="Hi", system_message="System")) == "Useful answer"
+    request = openai.calls[0]
+    assert request["model"] == "gpt-5.5"
+    assert request["max_completion_tokens"] == 500
+    assert "max_tokens" not in request
+    assert "temperature" not in request
+
+
 def test_fallback_moves_to_ollama_when_openai_fails_before_tokens():
     openai = FakeOpenAIClient(exc=RuntimeError("cloud down"))
     ollama = FakeOllamaClient(["local", " answer"])

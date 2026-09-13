@@ -231,12 +231,12 @@ class ArgoPipeline:
             self.logger.info("[MEM0] enabled")
         self._ephemeral_memory = {}
         self._brain = get_brain()
-        convo_size = 8
+        convo_size = 24
         try:
             if self._config is not None:
-                convo_size = int(self._config.get("conversation.buffer_size", 8))
+                convo_size = int(self._config.get("conversation.buffer_size", 24))
         except Exception:
-            convo_size = 8
+            convo_size = 24
         session_memory_enabled = self.runtime_overrides.get("session_memory_enabled", True)
         self._conversation_buffer = ConversationBuffer(max_turns=convo_size, enabled=session_memory_enabled)
         ledger_size = 10
@@ -650,6 +650,7 @@ class ArgoPipeline:
                 self._openai_tts = OpenAIRealtimeTTS(
                     voice=voice, model=tts_model,
                     output_device=getattr(self.audio, "_output_device_index", None),
+                    on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
                 )
                 self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 self.current_voice_key = voice
@@ -2189,6 +2190,10 @@ class ArgoPipeline:
             return ""
         if not is_module_enabled("rag"):
             return ""
+        if not self._should_use_rag_context(user_text):
+            self.logger.info("[RAG] skipped for conversational turn")
+            self._record_timeline("RAG_SKIPPED_CONVERSATIONAL", stage="rag", interaction_id=interaction_id)
+            return ""
         safe_query = " ".join(re.findall(r"[a-z0-9]+", (user_text or "").lower()))
         safe_query = re.sub(r"\s+", " ", safe_query).strip()
         token_count = len(safe_query.split()) if safe_query else 0
@@ -2210,6 +2215,35 @@ class ArgoPipeline:
             parts.append(f"Source {idx}: {chunk.path}:{chunk.start_line}-{chunk.end_line}\n{chunk.text}")
         self._record_timeline(f"RAG_QUERY_HITS {len(parts)}", stage="rag", interaction_id=interaction_id)
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _should_use_rag_context(user_text: str) -> bool:
+        """Keep project retrieval out of normal, free-form conversation."""
+        text = (user_text or "").lower()
+        technical_terms = (
+            "argo", "home assistant", "jellyfin", "server", "config", "log", "error",
+            "code", "repo", "repository", "file", "database", "api", "livekit", "tts",
+            "stt", "whisper", "piper", "plugin", "deploy", "test", "debug",
+        )
+        return any(term in text for term in technical_terms)
+
+    @staticmethod
+    def _is_low_confidence_stt_prompt_echo(user_text: str, confidence: float) -> bool:
+        """Reject prompt-token hallucinations produced from quiet or echoed audio."""
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence >= 0.60:
+            return False
+        tokens = re.findall(r"[a-z]+", (user_text or "").lower())
+        if len(tokens) < 2:
+            return False
+        prompt_tokens = {
+            "argo", "tommy", "home", "assistant", "jellyfin", "piper", "whisper",
+            "barge", "in", "wake", "word",
+        }
+        return set(tokens).issubset(prompt_tokens)
 
 
     def transcribe(self, audio_data, interaction_id: str = ""):
@@ -2575,23 +2609,21 @@ class ArgoPipeline:
         if mode == "tommy_gunn":
             examples = self._load_examples("tommy_gunn")
             return (
-                "You are ARGO, Tommy Gunn's personal AI. Think Iron Man's AI crossed with a punk-rock chef "
-                "who quotes movies and makes you laugh without trying too hard.\n"
+                "You are ARGO, Tommy Gunn's personal AI: a warm, candid, capable conversational partner.\n"
                 "\n"
                 "PERSONALITY:\n"
-                "- Warm, clever, bold. Badass mentor energy — you've seen things, learned from them, and dish out truth with style.\n"
-                "- Confident, sharp, funny. Never stiff or robotic. Keep it real, casual, a little rebellious.\n"
-                "- If his idea sucks, say so. Zero ass-kissing. But say it like a friend, not a critic.\n"
-                "- Spark ideas, riff off what he says, make smart connections. Tie in pop culture, life, whatever fits.\n"
-                "- If you can make him smile mid-convo, you're doing it right.\n"
-                "- Add clever comments, unexpected insights, fun side notes. Talk with purpose, not perfection.\n"
-                "- If something gets deep or weird, roll with it. Offer angles he didn't expect.\n"
-                "- Think one step ahead. Hype him up when it's earned.\n"
+                "- Warm, clever, candid, and natural. Be useful before being entertaining.\n"
+                "- Answer the actual question before adding color or a follow-up. Never replace an answer with generic encouragement.\n"
+                "- If an idea has a flaw, explain it plainly and constructively.\n"
+                "- Do not force jokes, pop-culture references, hype, or a question at the end. Use them only when they fit naturally.\n"
                 "\n"
                 "SPEECH RULES:\n"
                 "- Never start with 'Ok, let me tell you' or any variation — just talk.\n"
                 "- Give real answers with substance when it matters, but default to compact voice-first replies unless the user asks for depth.\n"
                 "- Stay on the topic the user brought up. Don't pivot to unrelated subjects mid-response.\n"
+                "- Conversation history is supplied when available. Treat short follow-ups, corrections, and pronouns as referring to that history.\n"
+                "- Do not ask a generic question such as 'what's the issue?' when the user has already asked something specific.\n"
+                "- Do not bring up Home Assistant, Jellyfin, or other project topics unless the user is discussing them now or they are directly relevant to the immediately preceding exchange.\n"
                 "- Respond in spoken language, not written essay style. This is voice output.\n"
                 "- Use commas and periods to create natural pauses. Short sentences sound more human.\n"
                 "- Do not give a plan, outline, or list unless the user explicitly asks for one.\n"
@@ -2648,10 +2680,10 @@ class ArgoPipeline:
     def _get_spoken_response_controls(self) -> dict:
         """Return runtime-tunable controls for voice responses."""
         defaults = {
-            "temperature": 0.35,
-            "max_tokens": 140,
-            "max_sentences": 3,
-            "verbosity": 1,
+            "temperature": 0.55,
+            "max_tokens": 360,
+            "max_sentences": 6,
+            "verbosity": 3,
         }
 
         try:
@@ -2685,12 +2717,22 @@ class ArgoPipeline:
             "verbosity": verbosity,
         }
 
+    @staticmethod
+    def _chinese_lesson_variant(user_text: str) -> str | None:
+        """Return the requested Chinese lesson variant, if this is one."""
+        text = (user_text or "").lower()
+        if "cantonese" in text:
+            return "cantonese"
+        if any(term in text for term in ("chinese", "mandarin")):
+            return "mandarin"
+        return None
+
     def _build_spoken_style_block(self, user_text: str, controls: dict) -> str:
         """Turn runtime voice controls into a prompt block for spoken replies."""
         verbosity_guidance = {
             1: "Be terse. One or two short sentences is ideal.",
             2: "Be concise. Keep it tight and conversational.",
-            3: "Be balanced. A few short sentences is the sweet spot.",
+            3: "Be balanced. Give the useful answer and the key reason or detail.",
             4: "You can add a little color, but stay compact and spoken.",
             5: "You can elaborate if it helps, but keep it spoken and direct.",
         }
@@ -2704,11 +2746,11 @@ class ArgoPipeline:
         lines = [
             "VOICE OUTPUT RULES:",
             "- Start with the direct answer immediately.",
-            "- Think quick back-and-forth, not monologue.",
+            "- Think natural back-and-forth, but answer fully enough to be useful.",
             "- Keep the reply natural and spoken, not like an essay.",
             f"- Default to no more than {controls['max_sentences']} short sentences unless the user explicitly asks for more detail.",
             f"- {verbosity_guidance.get(controls['verbosity'], verbosity_guidance[2])}",
-            "- Leave room for the user's next turn instead of trying to finish the whole topic at once.",
+            "- Do not add a follow-up question unless it genuinely helps the user continue or the request is unclear.",
         ]
         if not asks_for_structure:
             lines.append("- Do not give a plan, outline, numbered steps, or a menu of options unless the user explicitly asks for one.")
@@ -2731,6 +2773,19 @@ class ArgoPipeline:
             blocks.append(
                 "Previous conversation:\n"
                 f"{convo_context}\n"
+            )
+        chinese_variant = self._chinese_lesson_variant(user_text)
+        if chinese_variant == "cantonese":
+            blocks.append(
+                "CANTONESE LESSON CONTRACT: Preserve the Chinese characters exactly. "
+                "For each phrase, give Chinese characters first, then Jyutping with tone numbers, "
+                "then a concise English meaning. Never replace Chinese characters with unaccented romanization."
+            )
+        elif chinese_variant == "mandarin":
+            blocks.append(
+                "MANDARIN CHINESE LESSON CONTRACT: Preserve the Chinese characters exactly. "
+                "For each phrase, give Chinese characters first, then pinyin with tone marks, "
+                "then a concise English meaning. Never replace Chinese characters with unaccented romanization."
             )
         blocks.append(f"User: {user_text}")
         return "\n---\n".join(blocks)
@@ -4688,6 +4743,7 @@ class ArgoPipeline:
         serious_mode = self._is_serious(user_text)
         convo_messages = self._conversation_buffer.as_messages() if use_convo_buffer else []
         response_controls = self._get_spoken_response_controls()
+        chinese_lesson = self._chinese_lesson_variant(user_text)
         # Build user prompt WITHOUT convo context (that goes into messages array)
         prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context="")
         prompt = "\n---\n".join([self._build_spoken_style_block(user_text, response_controls), prompt])
@@ -4749,9 +4805,14 @@ class ArgoPipeline:
                                 self._openai_tts = OpenAIRealtimeTTS(
                                     voice=voice, model=tts_model,
                                     output_device=getattr(self.audio, "_output_device_index", None),
+                                    on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
                                 )
                                 self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                             if tts_generation is None:
+                                if chinese_lesson:
+                                    # Let the opening native-language phrase clear the speakers
+                                    # before echo/barge-in detection resumes.
+                                    self._openai_tts.suppress_interrupt(3.0)
                                 tts_generation = self._openai_tts.begin_response()
                             elif self._openai_tts.is_cancelled(tts_generation):
                                 break
@@ -4867,7 +4928,6 @@ class ArgoPipeline:
                     if not complete:
                         break
                     if complete and tts_thread.is_alive():
-                        complete = re.sub(r"[^\x00-\x7F]+", "", complete)
                         tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
                         if tts_text:
                             sentence_q.put(tts_text)
@@ -4882,7 +4942,6 @@ class ArgoPipeline:
             # Flush any remaining text in the buffer
             remainder = sentence_buffer.strip()
             if remainder and tts_thread.is_alive() and not response_truncated:
-                remainder = re.sub(r"[^\x00-\x7F]+", "", remainder)
                 tts_text = self._sanitize_tts_text(remainder, enforce_confidence=False)
                 if tts_text:
                     sentence_q.put(tts_text)
@@ -4900,7 +4959,7 @@ class ArgoPipeline:
 
         # ── Broadcast text to chat NOW (before waiting for TTS) ──
         full_response = self._strip_prompt_artifacts(full_response)
-        _display = re.sub(r"[^\x00-\x7F]+", "", full_response or "")
+        _display = full_response or ""
         _display = self._strip_disallowed_phrases(_display)
         _persona = self._resolve_personality_mode()
         _display = apply_persona(_display, ResponseType.ANSWER, _persona)
@@ -4966,6 +5025,7 @@ class ArgoPipeline:
                     self._openai_tts = OpenAIRealtimeTTS(
                         voice=voice, model=tts_model,
                         output_device=getattr(self.audio, "_output_device_index", None),
+                        on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
                     )
                     self._openai_tts._instructions = self._TTS_INSTRUCTIONS
                 if self._pending_barge_in_suppression:
@@ -5271,6 +5331,15 @@ class ArgoPipeline:
                 return
             user_text = normalize_system_text(user_text)
             user_text = self._normalize_music_command_text(user_text)
+            if self._is_low_confidence_stt_prompt_echo(user_text, confidence_hint):
+                self.logger.warning(
+                    "[STT] Ignoring low-confidence prompt echo: %r (confidence=%.2f)",
+                    user_text, confidence_hint,
+                )
+                self._record_timeline("STT_PROMPT_ECHO_IGNORED", stage="stt", interaction_id=interaction_id)
+                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+                return
             self.broadcast("log", f"User: {user_text}")
             self._conversation_buffer.add("User", user_text)
             self._broadcast_turn_info()
@@ -6579,7 +6648,7 @@ class ArgoPipeline:
             replay_mode=replay_mode,
             overrides=overrides,
         )
-        ai_text = re.sub(r"[^\x00-\x7F]+", "", ai_text or "")
+        ai_text = ai_text or ""
         ai_text = self._strip_disallowed_phrases(ai_text)
         
         # Apply persona formatting for logging (TTS already played per-sentence)

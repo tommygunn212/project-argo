@@ -4,6 +4,7 @@ from core.livekit_config import (
     get_livekit_realtime_config,
     hedra_avatar_status,
     livekit_status,
+    local_avatar_media_status,
     mobile_access_status,
     speaker_identity_status,
 )
@@ -138,3 +139,53 @@ def test_retired_hedra_is_not_ready_even_with_key_plugin_and_image(monkeypatch, 
     assert payload["service_retired"] is True
     assert "retired" in payload["error"]
     assert "test-secret" not in str(payload)
+
+
+def test_local_avatar_media_status_reports_ready_file(monkeypatch, tmp_path):
+    media = tmp_path / "avatar.gif"
+    media.write_bytes(b"GIF89a")
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA", raising=False)
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA_ENABLED", raising=False)
+
+    payload = local_avatar_media_status(
+        FakeConfig({"avatar": {"local_media_enabled": True, "local_media_path": str(media)}})
+    )
+
+    assert payload["enabled"] is True
+    assert payload["ready"] is True
+    assert payload["url"] == "/v2-assets/local-avatar-media"
+    assert payload["content_type"] == "image/gif"
+    assert payload["media_type"] == "image"
+
+
+def test_local_avatar_media_status_does_not_claim_missing_file(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.gif"
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA", raising=False)
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA_ENABLED", raising=False)
+
+    payload = local_avatar_media_status(
+        FakeConfig({"avatar": {"local_media_enabled": True, "local_media_path": str(missing)}})
+    )
+
+    assert payload["enabled"] is True
+    assert payload["ready"] is False
+    assert payload["url"] == ""
+    assert payload["error"] == "missing"
+
+
+def test_local_video_expressions_expose_calibration_and_motion_override(monkeypatch, tmp_path):
+    media = tmp_path / "avatar.mp4"
+    media.write_bytes(b"test-video")
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA", raising=False)
+    monkeypatch.delenv("ARGO_LOCAL_AVATAR_MEDIA_ENABLED", raising=False)
+    for enabled in (None, True, False):
+        payload = local_avatar_media_status(FakeConfig({"avatar": {
+            "local_media_path": str(media),
+            "local_media_profile": "halo",
+            "motion_enabled": enabled,
+        }}))
+        assert payload["ready"] is True
+        assert payload["content_type"] == "video/mp4"
+        assert payload["media_type"] == "video"
+        assert payload["expression_profile"] == "halo"
+        assert payload["motion_enabled"] is enabled

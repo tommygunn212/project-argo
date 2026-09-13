@@ -31,4 +31,10 @@ test('all command center inline scripts compile', () => {
     new vm.Script(match[1]);
   }
   assert.ok(!html.includes('<video class="avatar-generated"'));
+  assert.ok(html.includes('configureLocalAvatarMedia'));
+  assert.ok(html.includes('has-local-media'));
+  assert.ok(html.includes('.avatar-hud span:first-child'));
+  assert.ok(html.includes('<script src="/v2-assets/livekit-client.umd.js"></script>'));
+  assert.ok(!html.includes('loadBundledLiveKitClient'));
+  assert.ok(!html.includes('document.write(`<script src="${base}/v2-assets/livekit-client.umd.js">'));
 });
