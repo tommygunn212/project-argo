@@ -5363,7 +5363,76 @@ class ArgoPipeline:
             try:
                 self._recover_failed_turn(interaction_id)
             finally:
+                try:
+                    self.processing_lock.release()
+                except RuntimeError:
+                    # hard_reset() already broke the lock to free a wedged turn.
+                    self.logger.info("[PIPELINE] Lock already released by a hard reset")
+
+    def hard_reset(self, reason: str = "HARD_STOP") -> dict:
+        """Break a wedged turn and return ARGO to a usable state.
+
+        Safe to call from any thread at any time, including while another thread
+        is blocked in a network call or an audio write. Every step is attempted
+        independently so one failure cannot prevent the rest.
+
+        The important part is processing_lock: a turn that never finishes keeps
+        holding it, and run_interaction then silently drops every later input as
+        "System busy". Stopping the server did not clear that, so ARGO looked
+        permanently deaf until it was killed.
+        """
+        actions, failures = [], []
+
+        def attempt(label, fn):
+            try:
+                fn()
+                actions.append(label)
+            except Exception as exc:
+                failures.append(f"{label}: {type(exc).__name__}")
+
+        attempt("stop_signal", self.stop_signal.set)
+        attempt("tts_stopped", self.stop_tts)
+
+        def _quiet_music():
+            from core.music_player import get_music_player
+
+            get_music_player().stop()
+
+        attempt("music_stopped", _quiet_music)
+        attempt("audio_released", lambda: self.audio.force_release_audio(reason))
+        attempt("playback_stopped", self.audio.stop_playback)
+        attempt("buffers_cleared", self.audio.clear_buffers)
+
+        def _clear_flags():
+            self.is_speaking = False
+            self.tts_finished_at = time.time()
+
+        attempt("flags_cleared", _clear_flags)
+
+        # Break the lock last, once nothing else can still be using the device.
+        # run_interaction's finally tolerates an already-released lock.
+        lock_broken = False
+        if self.processing_lock.locked():
+            try:
                 self.processing_lock.release()
+                lock_broken = True
+                actions.append("processing_lock_broken")
+            except RuntimeError:
+                failures.append("processing_lock: not held by this thread")
+
+        attempt("state_idle", lambda: self.force_state("IDLE", source=reason))
+
+        self.logger.warning(
+            "[HARD_RESET] reason=%s actions=%s failures=%s", reason, actions, failures
+        )
+        log_event(f"HARD_RESET reason={reason} lock_broken={lock_broken}", stage="control")
+        return {
+            "ok": True,
+            "reason": reason,
+            "actions": actions,
+            "failures": failures,
+            "processing_lock_broken": lock_broken,
+        }
 
     def _recover_failed_turn(self, interaction_id):
         """Restore a failed/empty turn without overriding pause or a newer turn."""

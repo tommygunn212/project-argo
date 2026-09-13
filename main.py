@@ -214,6 +214,22 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
             return
 
+        if path == "/api/hard-stop":
+            # Deliberately plain HTTP and local-only: if the websocket is wedged
+            # this is the only way left to free ARGO without killing the process.
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send_json({"error": "Forbidden"}, status=403)
+                return
+            try:
+                result = _hard_reset_pipeline("HTTP_HARD_STOP")
+                globals()["LISTENING_ENABLED"] = False
+                broadcast_msg("status", "IDLE")
+                self._send_json(result)
+            except Exception as exc:
+                logger.exception("[HTTP] hard stop failed")
+                self._send_json({"error": str(exc)}, status=500)
+            return
+
         if path == "/api/client-log":
             try:
                 body = self._read_json_body()
@@ -550,6 +566,20 @@ def _interrupt_current_response(reason: str, target_state: str = "LISTENING", cl
             pass
 
 
+def _hard_reset_pipeline(reason: str) -> dict:
+    """Break a wedged turn. Never raises; always reports what it managed."""
+    if not (pipeline_ref and hasattr(pipeline_ref, "hard_reset")):
+        return {"ok": False, "error": "pipeline not running"}
+    try:
+        result = pipeline_ref.hard_reset(reason)
+        if result.get("processing_lock_broken"):
+            broadcast_msg("log", "Broke a stuck turn that was blocking new input")
+        return result
+    except Exception as exc:
+        logger.exception("[CONTROL] hard reset failed")
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _handle_control(command):
     global LISTENING_ENABLED, SERVER_ENABLED
     cmd = None
@@ -592,11 +622,21 @@ def _handle_control(command):
         SERVER_ENABLED = False
         LISTENING_ENABLED = False
         _interrupt_current_response("SERVER_STOP", target_state="IDLE")
+        # A wedged turn keeps holding pipeline.processing_lock, and every later
+        # input is then dropped as "System busy". Interrupting does not clear
+        # that, which is why stopping the server used to leave ARGO stalled.
+        _hard_reset_pipeline("SERVER_STOP")
         if audio_ref:
             try:
                 audio_ref.stop()
             except Exception:
                 pass
+        broadcast_msg("status", "IDLE")
+    elif cmd == "HARD_STOP":
+        log_event("UI_CMD_HARD_STOP", stage="ui")
+        result = _hard_reset_pipeline("HARD_STOP")
+        LISTENING_ENABLED = False
+        broadcast_msg("log", f"Hard stop: {result.get('actions')}")
         broadcast_msg("status", "IDLE")
     elif cmd == "SERVER_START":
         log_event("UI_CMD_START_SERVER", stage="ui")
