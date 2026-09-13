@@ -220,7 +220,7 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         ),
         noise_cancellation=_bool(
             _env_or_config(
-                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", True
+                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", False
             )
         ),
         idle_processes=max(

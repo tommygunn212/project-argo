@@ -272,9 +272,59 @@ class ArgoRealtimeAgent(Agent):
         return await self._run(T.email_status)
 
 
+def _clear_stale_agents(cfg: LiveKitRealtimeConfig) -> None:
+    """Remove agent participants left behind by a previous worker process.
+
+    LiveKit rooms outlive the worker. A killed worker leaves its agent
+    participant in the room, publishing a track nothing is behind; the next
+    browser then joins a room that already has an agent, and this worker
+    never receives the job. Tommy sees "connected" and gets silence.
+
+    Only agent participants are removed, and only before this worker takes
+    any job - a human in the room is left alone. Best effort: a failure here
+    must never stop the worker starting.
+    """
+    import asyncio as _asyncio
+
+    async def _clear() -> None:
+        from livekit import api
+
+        http_url = cfg.url.replace("ws://", "http://").replace("wss://", "https://")
+        lk = api.LiveKitAPI(http_url, cfg.api_key, cfg.api_secret)
+        try:
+            rooms = await lk.room.list_rooms(api.ListRoomsRequest())
+            for room in rooms.rooms:
+                participants = await lk.room.list_participants(
+                    api.ListParticipantsRequest(room=room.name)
+                )
+                for participant in participants.participants:
+                    # kind 4 is AGENT in the LiveKit participant model.
+                    if participant.kind != 4:
+                        continue
+                    logger.warning(
+                        "[LiveKit] removing stale agent %s from room %s "
+                        "(left by a previous worker)",
+                        participant.identity, room.name,
+                    )
+                    await lk.room.remove_participant(
+                        api.RoomParticipantIdentity(
+                            room=room.name, identity=participant.identity
+                        )
+                    )
+        finally:
+            await lk.aclose()
+
+    try:
+        _asyncio.run(_clear())
+    except Exception:
+        logger.warning("[LiveKit] could not check for stale agents", exc_info=True)
+
+
 def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
     cfg = cfg or get_livekit_realtime_config()
     _apply_livekit_env(cfg)
+    _ensure_logging()
+    _clear_stale_agents(cfg)
 
     server = AgentServer(
         job_executor_type=JobExecutorType.THREAD,
@@ -292,7 +342,22 @@ def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
     return server
 
 
+def _ensure_logging() -> None:
+    """Make ARGO's own log lines survive LiveKit's logging setup.
+
+    cli.run_app configures logging after this module is imported. Loggers that
+    already exist at that point can be disabled, which is why not one
+    "[LiveKit] starting ARGO realtime session" line appeared in the worker log
+    while sessions were demonstrably running - leaving the realtime path
+    unobservable exactly when it needed diagnosing.
+    """
+    logger.disabled = False
+    logger.propagate = True
+    logger.setLevel(logging.INFO)
+
+
 async def _run_realtime_session(ctx: JobContext) -> None:
+    _ensure_logging()
     cfg = get_livekit_realtime_config()
     logger.info(
         "[LiveKit] starting ARGO realtime session room=%s model=%s voice=%s personality=%s",
@@ -341,11 +406,64 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         ),
     )
 
+    _log_session_activity(session)
+
     if cfg.greeting:
         session.generate_reply(instructions=cfg.greeting, allow_interruptions=True)
 
     # Keep the optional avatar session strongly referenced for the room lifetime.
     _ = hedra_avatar
+
+
+def _log_session_activity(session: AgentSession) -> None:
+    """Say, in the log, whether ARGO heard anything and whether it answered.
+
+    Without this a silent session and a deaf session look identical: one
+    "starting ARGO realtime session" line and nothing after it. Every handler
+    swallows its own errors - diagnostics must never be what breaks voice.
+    """
+
+    def _safe(name, handler):
+        def wrapped(event):
+            try:
+                handler(event)
+            except Exception:
+                logger.debug("[Session] %s handler failed", name, exc_info=True)
+        return wrapped
+
+    def on_user_input(event):
+        transcript = getattr(getattr(event, "transcript", None), "text", None)
+        if transcript is None:
+            transcript = getattr(event, "transcript", "")
+        logger.info("[Session] heard: %r", transcript)
+
+    def on_user_state(event):
+        logger.info("[Session] user %s -> %s",
+                    getattr(event, "old_state", "?"), getattr(event, "new_state", "?"))
+
+    def on_agent_state(event):
+        logger.info("[Session] agent %s -> %s",
+                    getattr(event, "old_state", "?"), getattr(event, "new_state", "?"))
+
+    def on_conversation_item(event):
+        item = getattr(event, "item", None)
+        logger.info("[Session] %s said: %r",
+                    getattr(item, "role", "?"), (getattr(item, "text_content", "") or "")[:200])
+
+    def on_error(event):
+        logger.error("[Session] error: %s", getattr(event, "error", event))
+
+    for name, handler in (
+        ("user_input_transcribed", on_user_input),
+        ("user_state_changed", on_user_state),
+        ("agent_state_changed", on_agent_state),
+        ("conversation_item_added", on_conversation_item),
+        ("error", on_error),
+    ):
+        try:
+            session.on(name, _safe(name, handler))
+        except Exception:
+            logger.debug("[Session] could not subscribe to %s", name, exc_info=True)
 
 
 def _build_noise_filter(cfg: LiveKitRealtimeConfig):
