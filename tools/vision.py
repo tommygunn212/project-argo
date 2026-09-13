@@ -103,12 +103,14 @@ def analyze_image(
     max_tokens: int = 512,
 ) -> str:
     """Send a screenshot (PNG bytes) to GPT-4o vision and return the description."""
+    # Input first: zero bytes is invalid whether or not a key is configured,
+    # and reporting a missing key for it sends you looking in the wrong place.
+    if not png_bytes:
+        return "No image data to analyze."
+
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         return "OpenAI API key not configured. Cannot analyze images."
-
-    if not png_bytes:
-        return "No image data to analyze."
 
     try:
         from openai import OpenAI
