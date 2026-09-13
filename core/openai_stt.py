@@ -82,6 +82,15 @@ class OpenAIWhisperSTT:
         """
         start = time.perf_counter()
 
+        # A biasing prompt is echoed back verbatim as the transcript when the audio
+        # is quiet or is the assistant's own speech, which the pipeline then answers
+        # as if the user had said it. The caller's configured profile decides: an
+        # explicitly supplied empty/None initial_prompt means send no prompt at all.
+        if "initial_prompt" in kwargs:
+            prompt = kwargs.get("initial_prompt") or ""
+        else:
+            prompt = self.prompt or ""
+
         wav_bytes = self._audio_to_wav_bytes(audio_data)
 
         # Create a file-like object with a name attribute (required by the API)
@@ -99,8 +108,8 @@ class OpenAIWhisperSTT:
             if self.model in self.GPT4O_MODELS:
                 # gpt-4o-transcribe models support json or text, and prompt
                 api_params["response_format"] = "json"
-                if self.prompt:
-                    api_params["prompt"] = self.prompt
+                if prompt:
+                    api_params["prompt"] = prompt
             else:
                 # whisper-1 supports verbose_json with timestamps
                 api_params["response_format"] = "verbose_json"

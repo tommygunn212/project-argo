@@ -190,7 +190,11 @@ class STTEngineManager:
             self.model = OpenAIWhisperSTT(
                 model=model_name,
                 language="en",
-                prompt="ARGO, Tommy, Home Assistant, Jellyfin",
+                # No hardcoded biasing prompt: the transcriber echoes it back as the
+                # transcript on quiet or echoed audio. config.json's
+                # speech_to_text.prompt_profile is the only source, and the pipeline
+                # passes it per call as initial_prompt.
+                prompt="",
             )
             self.logger.info(
                 f"[STT_ENGINE] OpenAI Cloud STT loaded successfully "
