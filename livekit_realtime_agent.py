@@ -226,6 +226,51 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.volume_status)
 
+    # --- writing ---------------------------------------------------------
+
+    @function_tool()
+    async def write_in_app(self, name: str, text: str) -> str:
+        """Type text into an open app window. Only Notepad and Word accept text.
+
+        Opens the app first if it is not running. For any other app this
+        returns not_writable - say so rather than claiming it was written.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.app_write, name, text)
+
+    @function_tool()
+    async def list_writable_apps(self) -> str:
+        """Which apps can be typed into, as opposed to merely opened."""
+        from core import realtime_tools as T
+        return await self._run(T.writable_apps)
+
+    @function_tool()
+    async def save_draft(self, kind: str, title: str, body: str, recipient: str = "") -> str:
+        """Save a draft to disk. kind is email, document, blog or note.
+
+        This only writes a file. It never sends anything.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.draft_write, kind, title, body, recipient)
+
+    @function_tool()
+    async def list_drafts(self, category: str = "", limit: int = 10) -> str:
+        """List saved drafts, newest first."""
+        from core import realtime_tools as T
+        return await self._run(T.drafts_list, category, limit)
+
+    @function_tool()
+    async def read_draft(self, name: str) -> str:
+        """Read back a saved draft by name."""
+        from core import realtime_tools as T
+        return await self._run(T.draft_read, name)
+
+    @function_tool()
+    async def check_email_sending(self) -> str:
+        """Whether email sending is set up. ARGO cannot send email by voice."""
+        from core import realtime_tools as T
+        return await self._run(T.email_status)
+
 
 def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
     cfg = cfg or get_livekit_realtime_config()

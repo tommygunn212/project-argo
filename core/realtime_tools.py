@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger("ARGO.RealtimeTools")
 
@@ -520,3 +522,219 @@ def volume_status() -> dict:
         return {"ok": True, "volume_percent": level, "muted": muted}
     except Exception as exc:
         return _fail("volume_status", exc)
+
+
+# ---------------------------------------------------------------------------
+# Writing: into a live app window, and into saved drafts
+# ---------------------------------------------------------------------------
+
+def writable_apps() -> dict:
+    """Which apps ARGO can actually type into, as opposed to merely open."""
+    try:
+        from core.app_control import WRITABLE_APPS
+
+        return {"ok": True, "apps": sorted(WRITABLE_APPS)}
+    except Exception as exc:
+        return _fail("writable_apps", exc)
+
+
+_UIA_READ_PS = """
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty, '__CLASS__')
+$wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+foreach ($w in $wins) {
+    $docCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Document)
+    $doc = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $docCond)
+    if ($doc -ne $null) {
+        $tp = $doc.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+        Write-Output $tp.DocumentRange.GetText(-1)
+    }
+}
+"""
+
+# Window class names, for reading a window's text back out via UI Automation.
+_UIA_CLASS = {"notepad": "Notepad", "word": "OpusApp"}
+
+
+def read_app_text(app_key: str) -> Optional[str]:
+    """Read what is actually in an app's window, or None if it can't be read.
+
+    None means "could not check", which is not the same as "empty" - callers
+    must not treat it as proof either way.
+    """
+    klass = _UIA_CLASS.get(app_key)
+    if not klass:
+        return None
+    script = _UIA_READ_PS.replace("__CLASS__", klass)
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception:
+        logger.debug("[Tools] read_app_text failed for %s", app_key, exc_info=True)
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout or ""
+
+
+def app_write(name: str, text: str) -> dict:
+    """Type text into a running app window (Notepad or Word).
+
+    Opens the app first if it is not already running. Anything outside
+    WRITABLE_APPS is refused by name rather than silently dropped, so ARGO
+    says "I can't type into Orca Slicer" instead of claiming it wrote.
+    """
+    try:
+        from core.app_control import WRITABLE_APPS, resolve_app_name, write_text_to_app
+
+        payload = (text or "").strip()
+        if not payload:
+            return {"ok": False, "error": "empty_text", "requested": name,
+                    "message": "There was nothing to write."}
+
+        key = resolve_app_name(name)
+        if key not in WRITABLE_APPS:
+            return {
+                "ok": False,
+                "error": "not_writable",
+                "requested": name,
+                "writable": sorted(WRITABLE_APPS),
+                "message": (
+                    f"I can open {name}, but I can only type into "
+                    f"{' or '.join(sorted(WRITABLE_APPS))} right now."
+                ),
+            }
+
+        ok, message = write_text_to_app(key, payload)
+        if not ok:
+            return {"ok": False, "error": "write_failed", "app": key,
+                    "requested": name, "message": message}
+
+        # write_text_to_app reports on whether it sent the paste, not on
+        # whether anything arrived - a fuzzy AppActivate can match the wrong
+        # window and the keystroke goes nowhere. Read the window back.
+        time.sleep(0.4)
+        seen = read_app_text(key)
+        if seen is None:
+            return {"ok": True, "verified": False, "app": key, "requested": name,
+                    "characters": len(payload),
+                    "message": f"{message} I couldn't check the window to confirm it."}
+        if payload not in seen:
+            return {
+                "ok": False,
+                "error": "not_verified",
+                "app": key,
+                "requested": name,
+                "characters": len(payload),
+                "message": (
+                    f"I sent it to {key}, but the text isn't in the window - "
+                    "it may have gone somewhere else."
+                ),
+            }
+        return {"ok": True, "verified": True, "app": key, "requested": name,
+                "characters": len(payload), "message": message}
+    except Exception as exc:
+        return _fail("app_write", exc)
+
+
+DRAFT_KINDS = ("email", "document", "blog", "note")
+
+
+def draft_write(kind: str, title: str, body: str, recipient: str = "") -> dict:
+    """Save a draft (email, document, blog or note) to ARGO's drafts folder.
+
+    This writes a file. It does not send anything - see email_status().
+    """
+    try:
+        from tools import writing
+
+        wanted = (kind or "").strip().lower()
+        if wanted not in DRAFT_KINDS:
+            return {"ok": False, "error": "unknown_kind", "requested": kind,
+                    "kinds": list(DRAFT_KINDS)}
+        if not (body or "").strip():
+            return {"ok": False, "error": "empty_body", "kind": wanted,
+                    "message": "There was nothing to write into the draft."}
+
+        if wanted == "email":
+            draft = writing.draft_email(recipient or "", title or "", body)
+        elif wanted == "document":
+            draft = writing.draft_document(title or "Untitled", body, recipient=recipient or "")
+        elif wanted == "blog":
+            draft = writing.draft_blog(title or "Untitled", body)
+        else:
+            draft = writing.save_note(body, title=title or None)
+
+        return {"ok": True, "kind": wanted, "title": title,
+                "recipient": recipient or None,
+                "name": getattr(draft, "name", None),
+                "path": str(getattr(draft, "path", "")) or None,
+                "message": f"Saved the {wanted} draft."}
+    except Exception as exc:
+        return _fail("draft_write", exc)
+
+
+def drafts_list(category: str = "", limit: int = 10) -> dict:
+    try:
+        from tools import writing
+
+        rows = writing.list_drafts(category=category or None, limit=max(1, int(limit))) or []
+        return {
+            "ok": True,
+            "count": len(rows),
+            "category": category or "all",
+            "drafts": [{"name": d.name, "category": d.category, "path": str(d.path)} for d in rows],
+        }
+    except Exception as exc:
+        return _fail("drafts_list", exc)
+
+
+def draft_read(name: str) -> dict:
+    """Read back a saved draft by name, so ARGO can recite it."""
+    try:
+        from tools import writing
+
+        def key(value: str) -> str:
+            # Draft filenames are slugged ("readback_probe"); people say
+            # "readback probe". Compare with the punctuation stripped out.
+            return "".join(ch for ch in (value or "").lower() if ch.isalnum())
+
+        wanted = key(name)
+        if not wanted:
+            return {"ok": False, "error": "no_name"}
+        for draft in writing.list_drafts(limit=200) or []:
+            if wanted in key(draft.name):
+                text = draft.content
+                return {"ok": True, "name": draft.name, "category": draft.category,
+                        "path": str(draft.path), "characters": len(text), "content": text}
+        return {"ok": False, "error": "not_found", "requested": name}
+    except Exception as exc:
+        return _fail("draft_read", exc)
+
+
+def email_status() -> dict:
+    """Whether sending is configured. Sending itself is not wired to voice."""
+    try:
+        from tools.email_sender import is_email_configured
+
+        configured = bool(is_email_configured())
+        return {
+            "ok": True,
+            "configured": configured,
+            "can_send_by_voice": False,
+            "message": (
+                "Email sending is configured, but I'm not wired to send by voice yet."
+                if configured else
+                "Email sending isn't set up - there are no mail credentials configured."
+            ),
+        }
+    except Exception as exc:
+        return _fail("email_status", exc)
