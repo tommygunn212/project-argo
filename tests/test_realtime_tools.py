@@ -1,69 +1,125 @@
-"""The realtime agent must be able to inspect the PC and its own install.
+"""The realtime agent must be able to act on the machine and its own install.
 
-The classic pipeline answers these through _respond_with_* handlers. The
-realtime worker never imports the pipeline, so without these tools the model
-has nothing to call and correctly refuses - which reads to the user as ARGO
-losing an ability it used to have.
+The classic pipeline answers these through _respond_with_* handlers; the
+realtime worker never imports the pipeline, so every capability has to be
+re-exposed as a tool. These tests pin the tool surface and the containment
+boundary, and exercise the read-only tools against the real machine.
 """
 
-import asyncio
 import json
 
 import pytest
 
 import livekit_realtime_agent as agent_mod
+from core import realtime_tools as T
 
 
 EXPECTED_TOOLS = [
-    "get_pc_specs", "get_drive_space", "get_system_status",
-    "find_files", "list_argo_files", "repair_argo",
+    "repair_argo",
+    "get_pc_specs", "get_drive_space", "get_system_status", "run_self_diagnostics",
+    "list_argo_files", "list_folder", "read_text_file", "find_files",
+    "play_music", "stop_music", "next_track", "get_music_status",
+    "open_app", "close_app", "focus_app", "list_running_apps",
+    "set_volume", "get_volume",
 ]
 
 
-def _call(name, **kw):
-    """Invoke the underlying function behind livekit's @function_tool wrapper."""
-    tool = getattr(agent_mod.ArgoRealtimeAgent, name)
-    fn = getattr(tool, "__wrapped__", None) or getattr(tool, "fn", None) or tool
-    return asyncio.run(fn(None, **kw))
-
-
 @pytest.mark.parametrize("name", EXPECTED_TOOLS)
-def test_tool_is_registered(name):
-    assert hasattr(agent_mod.ArgoRealtimeAgent, name)
+def test_tool_is_exposed_to_the_model(name):
+    assert hasattr(agent_mod.ArgoRealtimeAgent, name), f"{name} is not callable by voice"
 
+
+# --- machine ---------------------------------------------------------------
 
 def test_pc_specs_returns_real_hardware():
-    d = json.loads(_call("get_pc_specs"))
-    assert d.get("cpu"), "no CPU reported"
-    assert d.get("motherboard") or d.get("motherboard_maker"), "no motherboard reported"
-    assert d.get("memory_total_gb"), "no RAM reported"
-    assert d.get("graphics"), "no graphics card reported"
+    d = T.pc_specs()
+    assert d["ok"]
+    assert d["cpu"] and d["memory_total_gb"] and d["graphics"]
+    assert d["motherboard"] or d["motherboard_maker"]
 
 
-def test_drive_space_reports_drives():
-    d = json.loads(_call("get_drive_space"))
-    assert d, "no drives reported"
-    first = next(iter(d.values()))
+def test_drive_space_reports_real_drives():
+    d = T.drive_space()
+    assert d["ok"] and d["drives"]
+    first = next(iter(d["drives"].values()))
     assert "free_gb" in first and "total_gb" in first
 
 
-def test_system_status_has_memory():
-    d = json.loads(_call("get_system_status"))
-    assert d.get("memory_total_gb") is not None
+def test_system_status_reports_memory():
+    d = T.system_status()
+    assert d["ok"] and d["memory_used_percent"] is not None
 
 
-def test_list_argo_files_sees_own_install():
-    d = json.loads(_call("list_argo_files", subfolder=""))
+def test_diagnostics_runs():
+    assert T.diagnostics()["ok"]
+
+
+# --- filesystem containment ------------------------------------------------
+
+def test_lists_its_own_install():
+    d = T.list_folder("")
+    assert d["ok"]
     assert "core" in d["subfolders"]
-    assert any(f == "main.py" for f in d["files"])
+    assert "main.py" in d["files"], "own files must be visible, not truncated away"
 
 
-def test_list_argo_files_reads_a_subfolder():
-    d = json.loads(_call("list_argo_files", subfolder="core"))
-    assert "pipeline.py" in d["files"]
+def test_lists_a_subfolder():
+    d = T.list_folder("core")
+    assert d["ok"] and "pipeline.py" in d["files"]
 
 
-def test_list_argo_files_refuses_to_escape_the_install():
-    for attempt in ["..", "../..", "../Windows"]:
-        out = _call("list_argo_files", subfolder=attempt)
-        assert "did not look there" in out, f"escaped with {attempt!r}: {out[:80]}"
+@pytest.mark.parametrize("bad", ["..", "../..", r"C:\Windows", r"C:\Users", "../../Windows"])
+def test_refuses_anything_outside_the_allowlist(bad):
+    d = T.list_folder(bad)
+    assert not d["ok"] and d["error"] == "not_allowed", f"escaped via {bad!r}"
+
+
+def test_read_text_file_is_also_contained():
+    d = T.read_text_file(r"C:\Windows\win.ini")
+    assert not d["ok"] and d["error"] == "not_allowed"
+
+
+def test_read_text_file_reads_inside_the_install():
+    d = T.read_text_file("VERSION")
+    assert d["ok"] and d["content"].strip()
+
+
+def test_granted_folder_is_honoured_without_restart(tmp_path, monkeypatch):
+    """A folder granted in config must become readable on the next call."""
+    (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(T, "allowed_roots", lambda: [T.ROOT, tmp_path.resolve()])
+    d = T.list_folder(str(tmp_path))
+    assert d["ok"] and "note.txt" in d["files"]
+
+
+def test_find_files_searches_argos_own_folders():
+    """Regression: search_files defaults to document folders and found nothing."""
+    d = T.find_files("livekit")
+    assert d["ok"]
+    assert any(str(T.ROOT) in str(r) for r in d.get("results", [])) or d["count"] > 0
+
+
+# --- controls report honestly ---------------------------------------------
+
+def test_music_status_is_readable():
+    d = T.music_status()
+    assert d["ok"] and "playing" in d
+
+
+def test_apps_running_lists_processes():
+    d = T.apps_running()
+    assert d["ok"] and isinstance(d["running"], list)
+
+
+def test_volume_status_is_readable():
+    d = T.volume_status()
+    assert d["ok"] and 0 <= d["volume_percent"] <= 100
+
+
+def test_failures_are_reported_not_raised(monkeypatch):
+    """A broken dependency must surface as ok:false, never as an exception."""
+    def boom(*a, **k):
+        raise RuntimeError("device gone")
+    monkeypatch.setattr("core.system_volume.get_status", boom)
+    d = T.volume_status()
+    assert d["ok"] is False and "device gone" in d["error"]

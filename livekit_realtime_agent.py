@@ -42,16 +42,6 @@ load_dotenv(ROOT / ".env")
 logger = logging.getLogger("ARGO.LiveKit")
 
 
-def _memory_snapshot() -> tuple:
-    """(total_gb, used_percent), or (None, None) if it cannot be read."""
-    try:
-        from system_health import get_memory_info
-
-        total_gb, used_pct = get_memory_info()
-        return total_gb, used_pct
-    except Exception:
-        logger.exception("[Tools] memory info unavailable")
-        return None, None
 
 
 class ArgoRealtimeAgent(Agent):
@@ -62,12 +52,16 @@ class ArgoRealtimeAgent(Agent):
                 "Read the actual returned findings. Ask them to say 'approve repair' or 'cancel repair' "
                 "only when a runtime proposal exists; pass that exact phrase to the tool when they do. "
                 "Never invent a successful repair. Code repairs require dashboard approval and review."
-                " You can inspect this PC and your own install: call get_pc_specs for hardware "
-                "(motherboard, CPU, RAM, graphics), get_drive_space for disk space, get_system_status "
-                "for live health and temperatures, find_files to locate a file, and list_argo_files to "
-                "see your own folders. Call the tool and answer from what it returns - never guess at "
-                "hardware, free space or filenames, and never say you cannot look when one of these "
-                "tools would answer the question."),
+                " You can act on this machine, and you should. Hardware: get_pc_specs. Disk space: "
+                "get_drive_space. Live health and temperatures: get_system_status. Your own faults: "
+                "run_self_diagnostics. Files: list_argo_files, list_folder, read_text_file, find_files. "
+                "Music: play_music, stop_music, next_track, get_music_status. Applications: open_app, "
+                "close_app, focus_app, list_running_apps. Sound: set_volume, get_volume. "
+                "Call the tool and answer from what it returns. Never guess at hardware, free space, "
+                "filenames or what is playing, and never say you cannot look or cannot do something "
+                "when one of these tools would do it. If a tool returns ok false, say plainly what it "
+                "reported - if a folder was refused, tell Tommy it needs adding to "
+                "filesystem.allowed_folders in config.json."),
             allow_interruptions=True,
         )
 
@@ -90,109 +84,129 @@ class ArgoRealtimeAgent(Agent):
         except Exception as exc:
             return json.dumps({"status": "unavailable", "message": f"ARGO repair service could not be reached: {type(exc).__name__}. Open System in the dashboard."})
 
-    # ---- Machine and filesystem inspection -------------------------------
-    # The classic pipeline answers these through its _respond_with_* handlers.
-    # The realtime path never imports the pipeline, so without these tools the
-    # model has no way to see the machine and correctly refuses to guess.
-    # All read-only; each wrapped in a thread because they do blocking IO/WMI.
+    # ---- Capability tools ------------------------------------------------
+    # Bodies live in core.realtime_tools so they are unit-testable without a
+    # LiveKit session. Each returns a dict; every call is threaded because the
+    # underlying calls do blocking IO/WMI/COM.
+
+    @staticmethod
+    async def _run(fn, *args, **kwargs) -> str:
+        from core import realtime_tools
+
+        result = await asyncio.to_thread(fn, *args, **kwargs)
+        return json.dumps(result, default=str)
 
     @function_tool()
     async def get_pc_specs(self) -> str:
-        """Report this PC's hardware: motherboard, BIOS, CPU, memory and graphics card.
-
-        Use for any question about what the machine is or what is inside it.
-        """
-        def call():
-            from system_profile import get_system_profile, get_gpu_profile
-
-            p = get_system_profile() or {}
-            gpus = get_gpu_profile() or []
-            total_gb, used_pct = _memory_snapshot()
-            return json.dumps({
-                "motherboard": p.get("motherboard") or p.get("motherboard_product"),
-                "motherboard_maker": p.get("motherboard_maker"),
-                "bios_version": p.get("bios_version"),
-                "cpu": p.get("cpu"),
-                "cpu_cores": p.get("cpu_cores"),
-                "cpu_threads": p.get("cpu_threads"),
-                "cpu_max_mhz": p.get("cpu_max_mhz"),
-                "memory_total_gb": total_gb,
-                "memory_used_percent": used_pct,
-                "memory_speed_mhz": p.get("memory_speed_mhz"),
-                "memory_modules": p.get("memory_modules"),
-                "graphics": [{"name": g.get("name"), "driver": g.get("driver_version")} for g in gpus],
-                "os": p.get("os"),
-            }, default=str)
-        return await asyncio.to_thread(call)
+        """This PC's hardware: motherboard, BIOS, CPU, memory and graphics card."""
+        from core import realtime_tools as T
+        return await self._run(T.pc_specs)
 
     @function_tool()
     async def get_drive_space(self) -> str:
-        """Report free and used space for every drive on this PC."""
-        def call():
-            from system_health import get_disk_info
-
-            return json.dumps(get_disk_info() or {}, default=str)
-        return await asyncio.to_thread(call)
+        """Free and used space for every drive on this PC."""
+        from core import realtime_tools as T
+        return await self._run(T.drive_space)
 
     @function_tool()
     async def get_system_status(self) -> str:
-        """Report live machine health: memory use, temperatures and overall status."""
-        def call():
-            from system_health import get_system_health, get_temperatures
-
-            total_gb, used_pct = _memory_snapshot()
-            return json.dumps({
-                "health": get_system_health() or {},
-                "temperatures_c": get_temperatures() or {},
-                "memory_total_gb": total_gb,
-                "memory_used_percent": used_pct,
-            }, default=str)
-        return await asyncio.to_thread(call)
+        """Live machine health: memory use, temperatures, overall status."""
+        from core import realtime_tools as T
+        return await self._run(T.system_status)
 
     @function_tool()
-    async def find_files(self, query: str) -> str:
-        """Search this PC for files by name or keyword.
-
-        Pass what the user is looking for, e.g. "invoice pdf" or "livekit config".
-        """
-        def call():
-            from tools.filesystem import search_files, format_file_list_for_speech
-
-            hits = search_files(query, max_results=12) or []
-            return format_file_list_for_speech(hits, label=f"files matching {query}")
-        return await asyncio.to_thread(call)
+    async def run_self_diagnostics(self) -> str:
+        """Run ARGO's own diagnostics to find what is broken inside it."""
+        from core import realtime_tools as T
+        return await self._run(T.diagnostics)
 
     @function_tool()
     async def list_argo_files(self, subfolder: str = "") -> str:
-        """List ARGO's own files and folders. Pass a subfolder like "core" or "" for the root.
+        """List ARGO's own files and folders. Pass a subfolder like "core", or "" for the root."""
+        from core import realtime_tools as T
+        return await self._run(T.list_folder, subfolder)
 
-        Use when asked what files ARGO has, or what is in one of its folders.
+    @function_tool()
+    async def list_folder(self, path: str = "") -> str:
+        """List any folder ARGO has permission to read.
+
+        Absolute paths must be inside a folder Tommy granted in config.json.
+        If it is refused, tell him it needs adding to filesystem.allowed_folders.
         """
-        def call():
-            target = (ROOT / subfolder).resolve() if subfolder else ROOT
-            # Stay inside the ARGO install; voice input must not walk the disk.
-            if ROOT not in target.parents and target != ROOT:
-                return f"{subfolder} is outside ARGO's folder, so I did not look there."
-            if not target.is_dir():
-                return f"There is no folder called {subfolder} in ARGO."
-            dirs, files = [], []
-            for item in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-                if item.name.startswith((".", "__")):
-                    continue
-                (dirs if item.is_dir() else files).append(item.name)
-            where = subfolder or "the ARGO root"
-            # Cap the names, but say so. A silently truncated alphabetical list
-            # makes the model report that a file is absent when it is simply
-            # past the cut-off.
-            cap = 200
-            return json.dumps({
-                "folder": where,
-                "subfolders": dirs[:cap],
-                "files": files[:cap],
-                "counts": {"subfolders": len(dirs), "files": len(files)},
-                "truncated": len(dirs) > cap or len(files) > cap,
-            })
-        return await asyncio.to_thread(call)
+        from core import realtime_tools as T
+        return await self._run(T.list_folder, path)
+
+    @function_tool()
+    async def read_text_file(self, path: str) -> str:
+        """Read a text file inside a folder ARGO has permission to read."""
+        from core import realtime_tools as T
+        return await self._run(T.read_text_file, path)
+
+    @function_tool()
+    async def find_files(self, query: str) -> str:
+        """Search the folders ARGO can read for files matching a name or keyword."""
+        from core import realtime_tools as T
+        return await self._run(T.find_files, query)
+
+    @function_tool()
+    async def play_music(self, query: str = "", kind: str = "keyword") -> str:
+        """Play music. kind is song, artist, genre, keyword or random."""
+        from core import realtime_tools as T
+        return await self._run(T.music_play, query, kind)
+
+    @function_tool()
+    async def stop_music(self) -> str:
+        """Stop music playback."""
+        from core import realtime_tools as T
+        return await self._run(T.music_stop)
+
+    @function_tool()
+    async def next_track(self) -> str:
+        """Skip to the next track."""
+        from core import realtime_tools as T
+        return await self._run(T.music_next)
+
+    @function_tool()
+    async def get_music_status(self) -> str:
+        """What is playing right now, if anything."""
+        from core import realtime_tools as T
+        return await self._run(T.music_status)
+
+    @function_tool()
+    async def open_app(self, name: str) -> str:
+        """Launch an application by name, e.g. "notepad", "chrome", "spotify"."""
+        from core import realtime_tools as T
+        return await self._run(T.app_open, name)
+
+    @function_tool()
+    async def close_app(self, name: str) -> str:
+        """Close an application by name."""
+        from core import realtime_tools as T
+        return await self._run(T.app_close, name)
+
+    @function_tool()
+    async def focus_app(self, name: str) -> str:
+        """Bring an application to the front."""
+        from core import realtime_tools as T
+        return await self._run(T.app_focus, name)
+
+    @function_tool()
+    async def list_running_apps(self) -> str:
+        """What applications are running, and which one is in front."""
+        from core import realtime_tools as T
+        return await self._run(T.apps_running)
+
+    @function_tool()
+    async def set_volume(self, percent: int) -> str:
+        """Set the system volume, 0 to 100."""
+        from core import realtime_tools as T
+        return await self._run(T.volume_set, percent)
+
+    @function_tool()
+    async def get_volume(self) -> str:
+        """Current system volume and mute state."""
+        from core import realtime_tools as T
+        return await self._run(T.volume_status)
 
 
 def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
