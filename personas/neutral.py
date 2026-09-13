@@ -17,6 +17,11 @@ class NeutralPersona(PersonaBase):
     """
     
     name = "neutral"
+
+    VOICE_STYLE = (
+        "Natural, direct and warm without affectation. No assumed character, no "
+        "performed quirks — just a clear speaking voice."
+    )
     
     # Neutral is allowed everywhere
     ALLOWED_TYPES = {

@@ -25,6 +25,12 @@ class JarvisPersona(PersonaBase):
     """
     
     name = "jarvis"
+
+    VOICE_STYLE = (
+        "Calm, precise and unhurried, with British composure. Courteous without "
+        "being servile. Understated dry wit, used sparingly. No slang, no "
+        "exclamations, no raised voice — steadiness is the whole effect."
+    )
     
     ALLOWED_TYPES = {
         ResponseType.COMMAND_ACK,

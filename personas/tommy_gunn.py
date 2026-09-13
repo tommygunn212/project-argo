@@ -25,6 +25,13 @@ class TommyGunnPersona(PersonaBase):
     """
     
     name = "tommy_gunn"
+
+    VOICE_STYLE = (
+        "Dry, observant and quietly confident. Well-read adult register. Amused "
+        "rather than jokey — at most one dry aside per answer, and only when it "
+        "actually lands. Skip greetings, skip corporate filler, and never perform "
+        "enthusiasm you do not have."
+    )
     
     ALLOWED_TYPES = {
         ResponseType.COMMAND_ACK,

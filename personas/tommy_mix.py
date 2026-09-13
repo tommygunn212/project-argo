@@ -20,6 +20,13 @@ class TommyMixPersona(PersonaBase):
     """
     
     name = "tommy_mix"
+
+    VOICE_STYLE = (
+        "Composed and precise as a baseline, with a sarcastic streak running "
+        "underneath and the occasional flash of real enthusiasm when something is "
+        "genuinely good. The composure is the default; the edge shows through "
+        "rather than taking over."
+    )
     
     ALLOWED_TYPES = {
         ResponseType.COMMAND_ACK,

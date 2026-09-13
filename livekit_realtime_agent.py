@@ -94,10 +94,11 @@ def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
 async def _run_realtime_session(ctx: JobContext) -> None:
     cfg = get_livekit_realtime_config()
     logger.info(
-        "[LiveKit] starting ARGO realtime session room=%s model=%s voice=%s",
+        "[LiveKit] starting ARGO realtime session room=%s model=%s voice=%s personality=%s",
         getattr(ctx.job.room, "name", cfg.room),
         cfg.model,
         cfg.voice,
+        cfg.personality,
     )
     speaker_status = speaker_identity_status(cfg)
     logger.info(

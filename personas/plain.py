@@ -14,6 +14,11 @@ class PlainPersona(PersonaBase):
     """
     
     name = "plain"
+
+    VOICE_STYLE = (
+        "Flat and factual. No colour, no warmth, no hedging, no personality of "
+        "any kind. Answer the question and stop talking."
+    )
     
     ALLOWED_TYPES = {
         ResponseType.SYSTEM,

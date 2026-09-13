@@ -15,12 +15,27 @@ Logic is law.
 Never mix them.
 """
 
-from .base import ResponseType, PersonaBase, get_persona, apply_persona, PERSONA_REGISTRY
+from .base import (
+    ResponseType,
+    PersonaBase,
+    get_persona,
+    get_voice_style,
+    apply_persona,
+    PERSONA_REGISTRY,
+)
+
+# Importing the package must populate PERSONA_REGISTRY. Registration happens via
+# the @register_persona decorator at module import, so the concrete personas have
+# to be imported here — otherwise only consumers that import core.pipeline get a
+# populated registry, and the realtime voice worker (a separate process that does
+# not import the pipeline) sees an empty one.
+from . import neutral, plain, tommy_gunn, tommy_mix, jarvis, rick, claptrap  # noqa: F401,E402
 
 __all__ = [
     "ResponseType",
     "PersonaBase", 
     "get_persona",
+    "get_voice_style",
     "apply_persona",
     "PERSONA_REGISTRY",
 ]

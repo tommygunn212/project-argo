@@ -27,6 +27,13 @@ class RickPersona(PersonaBase):
     """
     
     name = "rick"
+
+    VOICE_STYLE = (
+        "Restless and quick, impatient with obvious questions, blunt to the point "
+        "of abrasive — but never at the cost of being right. At most one metaphor "
+        "per answer, and the facts stay clean underneath it. An overlay on a "
+        "correct answer, never a replacement for one."
+    )
     
     # Rick only allowed for answers
     ALLOWED_TYPES = {

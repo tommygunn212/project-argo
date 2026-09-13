@@ -37,6 +37,12 @@ class PersonaBase:
     """
     
     name: str = "base"
+
+    # Natural-language description of this persona's tone and mannerisms.
+    # Used by the realtime voice path, where there is no text to post-process:
+    # the persona has to be carried in the model's instructions instead.
+    # Describe manner only — never scripted lines or catchphrases.
+    VOICE_STYLE: str = ""
     
     # Allowance matrix - which response types this persona can handle
     # Override in subclasses
@@ -83,6 +89,19 @@ def register_persona(cls: Type[PersonaBase]) -> Type[PersonaBase]:
 def get_persona(name: str) -> Optional[Type[PersonaBase]]:
     """Get a persona class by name."""
     return PERSONA_REGISTRY.get(name)
+
+
+def get_voice_style(persona_name: str) -> str:
+    """Return the tone/mannerism description for a persona, or "" if unknown.
+
+    The realtime voice path has no text to transform, so the persona is carried
+    in the model's instructions. This is the single source for that text.
+    """
+    persona = get_persona(persona_name)
+    if persona is None:
+        logger.warning("[PERSONA] Unknown persona '%s' for voice style", persona_name)
+        return ""
+    return getattr(persona, "VOICE_STYLE", "") or ""
 
 
 def apply_persona(text: str, response_type: ResponseType, persona_name: str) -> str:

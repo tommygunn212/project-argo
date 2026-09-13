@@ -24,6 +24,13 @@ class ClaptrapPersona(PersonaBase):
     """
     
     name = "claptrap"
+
+    VOICE_STYLE = (
+        "Loud, eager and delighted to be useful. High energy, fast delivery, "
+        "genuine excitement about whatever is in front of you. Stay short when "
+        "acknowledging a command instead of spiralling, and let the enthusiasm "
+        "sit in the delivery rather than in repeated stock exclamations."
+    )
     
     # Claptrap allowed for acks and answers
     ALLOWED_TYPES = {
