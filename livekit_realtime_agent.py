@@ -322,6 +322,8 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     hedra_avatar = await _maybe_start_hedra_avatar(session, ctx.room)
 
+    noise_filter = _build_noise_filter(cfg)
+
     await session.start(
         agent=ArgoRealtimeAgent(cfg),
         room=ctx.room,
@@ -329,6 +331,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
             audio_enabled=True,
             text_enabled=True,
             pre_connect_audio=True,
+            noise_cancellation=noise_filter,
         ),
         room_output_options=room_io.RoomOutputOptions(
             audio_enabled=True,
@@ -341,6 +344,28 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     # Keep the optional avatar session strongly referenced for the room lifetime.
     _ = hedra_avatar
+
+
+def _build_noise_filter(cfg: LiveKitRealtimeConfig):
+    """Background voice cancellation on the inbound mic track, or None.
+
+    The classic path has no echo cancellation at all - the mic hears the
+    speaker - and the realtime path had the plugin installed but unused. A
+    missing or broken plugin must never take voice down with it, so every
+    failure here degrades to raw audio and says so in the log.
+    """
+    if not cfg.noise_cancellation:
+        logger.info("[Audio] noise cancellation disabled by config")
+        return None
+    try:
+        from livekit.plugins import noise_cancellation
+
+        filt = noise_cancellation.BVC()
+    except Exception:
+        logger.exception("[Audio] noise cancellation unavailable; continuing with raw mic audio")
+        return None
+    logger.info("[Audio] noise cancellation enabled (BVC)")
+    return filt
 
 
 def _build_realtime_model(cfg: LiveKitRealtimeConfig) -> openai.realtime.RealtimeModel:

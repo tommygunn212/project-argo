@@ -150,6 +150,7 @@ class LiveKitRealtimeConfig:
     speaker_id_enabled: bool
     speaker_id_provider: str
     personality: str = "neutral"
+    noise_cancellation: bool = True
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -208,6 +209,11 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         ),
         speaker_id_provider=_env_or_config(
             cfg, "ARGO_SPEAKER_ID_PROVIDER", "speaker_identity.provider", "speechmatics"
+        ),
+        noise_cancellation=_bool(
+            _env_or_config(
+                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", True
+            )
         ),
     )
 
