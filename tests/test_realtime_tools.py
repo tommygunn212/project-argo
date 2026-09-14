@@ -72,15 +72,31 @@ def test_lists_a_subfolder():
     assert d["ok"] and "pipeline.py" in d["files"]
 
 
-@pytest.mark.parametrize("bad", ["..", "../..", r"C:\Windows", r"C:\Users", "../../Windows"])
-def test_refuses_anything_outside_the_allowlist(bad):
-    d = T.list_folder(bad)
-    assert not d["ok"] and d["error"] == "not_allowed", f"escaped via {bad!r}"
+def test_reads_across_the_whole_machine_now():
+    """Tommy asked for access to all his drives, so the old confinement to
+    I:\\argo is gone on purpose. Searching his work drives was the point."""
+    d = T.list_folder(r"C:\Users")
+    assert d["ok"], "reading outside the install is intended now"
 
 
-def test_read_text_file_is_also_contained():
-    d = T.read_text_file(r"C:\Windows\win.ini")
+def test_a_folder_outside_every_drive_is_still_refused(monkeypatch):
+    from core import filesystem_access as FS
+
+    monkeypatch.setattr(FS, "read_roots", lambda: [T.ROOT])
+    d = T.list_folder(r"C:\Windows")
     assert not d["ok"] and d["error"] == "not_allowed"
+
+
+def test_credentials_are_refused_however_they_are_reached():
+    """The line that matters for a VOICE assistant: it must not read a key
+    aloud, wherever that key happens to live."""
+    d = T.read_text_file(str(T.ROOT / ".env"))
+    assert not d["ok"] and d["error"] == "secret_file"
+
+
+def test_windows_itself_is_never_written():
+    d = T.write_text_file(r"C:\Windows\System32\drivers\etc\hosts", "x", overwrite=True)
+    assert not d["ok"] and d["error"] == "protected_location"
 
 
 def test_read_text_file_reads_inside_the_install():
@@ -96,11 +112,13 @@ def test_granted_folder_is_honoured_without_restart(tmp_path, monkeypatch):
     assert d["ok"] and "note.txt" in d["files"]
 
 
-def test_find_files_searches_argos_own_folders():
-    """Regression: search_files defaults to document folders and found nothing."""
-    d = T.find_files("livekit")
-    assert d["ok"]
-    assert any(str(T.ROOT) in str(r) for r in d.get("results", [])) or d["count"] > 0
+def test_find_files_searches_every_drive_and_finds_folders():
+    """Two regressions: the search used to cover only document folders, and
+    it matched file names only - so "vzbot", a FOLDER, came back empty."""
+    d = T.find_files("argo", want="folder")
+    assert d["ok"] and d["count"] > 0
+    assert any(r["type"] == "folder" for r in d["results"])
+    assert len(d["searched"]) >= 1
 
 
 # --- controls report honestly ---------------------------------------------

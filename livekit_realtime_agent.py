@@ -226,6 +226,62 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.volume_status)
 
+    # --- files: reading, searching, and now writing -----------------------
+
+    @function_tool()
+    async def search_drives(self, query: str, want: str = "any") -> str:
+        """Find a file or FOLDER by name across every drive.
+
+        want is any, file or folder. Most things Tommy names - "my vzbot
+        build", "the davinci assets" - are folders, so search folders too.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.find_files, query, want)
+
+    @function_tool()
+    async def get_file_access(self) -> str:
+        """Which drives can be read and written, and what is off limits."""
+        from core import realtime_tools as T
+        return await self._run(T.file_access_report)
+
+    @function_tool()
+    async def write_file(self, path: str, content: str, overwrite: bool = False) -> str:
+        """Write a text file. Refuses to replace an existing file unless
+        overwrite is true - say so before replacing something."""
+        from core import realtime_tools as T
+        return await self._run(T.write_text_file, path, content, overwrite)
+
+    @function_tool()
+    async def append_to_file(self, path: str, content: str) -> str:
+        """Add text to the end of a file, creating it if needed."""
+        from core import realtime_tools as T
+        return await self._run(T.append_text_file, path, content)
+
+    @function_tool()
+    async def make_folder(self, path: str) -> str:
+        """Create a folder."""
+        from core import realtime_tools as T
+        return await self._run(T.create_folder, path)
+
+    @function_tool()
+    async def move_file(self, source: str, destination: str, overwrite: bool = False) -> str:
+        """Move or rename a file or folder."""
+        from core import realtime_tools as T
+        return await self._run(T.move_item, source, destination, overwrite)
+
+    @function_tool()
+    async def copy_file(self, source: str, destination: str, overwrite: bool = False) -> str:
+        """Copy a file or folder."""
+        from core import realtime_tools as T
+        return await self._run(T.copy_item, source, destination, overwrite)
+
+    @function_tool()
+    async def remove_file(self, path: str) -> str:
+        """Move a file or folder to quarantine. This does NOT delete it -
+        say so: it goes to a quarantine folder Tommy empties himself."""
+        from core import realtime_tools as T
+        return await self._run(T.remove_item, path)
+
     @function_tool()
     async def check_music_library(self) -> str:
         """Whether the music index still matches what is on disk.

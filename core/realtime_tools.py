@@ -126,34 +126,36 @@ def diagnostics() -> dict:
 # ---------------------------------------------------------------------------
 
 def allowed_roots() -> list[Path]:
-    """ARGO's install plus any folder Tommy granted in config.json.
+    """Everywhere ARGO may read. Defaults to every fixed drive on the machine.
 
-    Read fresh on every call so a granted folder takes effect without a restart.
+    This used to be the ARGO install and nothing else, which is why she kept
+    telling Tommy she could not search beyond her own folder.
     """
-    roots = [ROOT]
-    try:
-        from core.config import get_config
+    from core.filesystem_access import read_roots
 
-        raw = get_config().get("filesystem.allowed_folders", []) or []
-        if isinstance(raw, str):
-            raw = [raw]
-        for entry in raw:
-            try:
-                p = Path(str(entry)).expanduser().resolve()
-                if p.is_dir():
-                    roots.append(p)
-            except Exception:
-                logger.warning("[Tools] ignoring unusable allowed folder: %r", entry)
-    except Exception:
-        logger.exception("[Tools] could not read filesystem.allowed_folders")
-    return roots
+    return read_roots()
+
+
+def writable_roots() -> list[Path]:
+    """Everywhere ARGO may change things."""
+    from core.filesystem_access import write_roots
+
+    return write_roots()
 
 
 def _within_allowed(target: Path) -> bool:
-    for root in allowed_roots():
-        if target == root or root in target.parents:
-            return True
-    return False
+    from core.filesystem_access import check_read
+
+    return check_read(target) is None
+
+
+def _resolve(raw: str, base: Path | None = None) -> Path:
+    """Interpret a spoken path. Relative means inside the ARGO install."""
+    text = (raw or "").strip().strip('"').strip("'")
+    candidate = Path(text).expanduser() if text else (base or ROOT)
+    if not candidate.is_absolute():
+        candidate = (base or ROOT) / text
+    return candidate.resolve()
 
 
 def list_folder(path: str = "") -> dict:
@@ -168,16 +170,11 @@ def list_folder(path: str = "") -> dict:
         target = candidate if candidate.is_absolute() else (ROOT / raw)
         target = target.resolve()
 
-        if not _within_allowed(target):
-            return {
-                "ok": False,
-                "error": "not_allowed",
-                "message": (
-                    f"{target} is outside the folders I'm allowed to read. "
-                    "Add it to filesystem.allowed_folders in config.json to grant access."
-                ),
-                "allowed": [str(r) for r in allowed_roots()],
-            }
+        from core.filesystem_access import check_read
+
+        refusal = check_read(target)
+        if refusal:
+            return refusal
         if not target.is_dir():
             return {"ok": False, "error": "not_found", "message": f"There is no folder at {target}."}
 
@@ -204,9 +201,11 @@ def read_text_file(path: str, max_chars: int = 4000) -> dict:
         raw = (path or "").strip().strip('"')
         candidate = Path(raw).expanduser()
         target = (candidate if candidate.is_absolute() else (ROOT / raw)).resolve()
-        if not _within_allowed(target):
-            return {"ok": False, "error": "not_allowed",
-                    "message": f"{target} is outside the folders I'm allowed to read."}
+        from core.filesystem_access import check_read
+
+        refusal = check_read(target)
+        if refusal:
+            return refusal
         if not target.is_file():
             return {"ok": False, "error": "not_found", "message": f"There is no file at {target}."}
         if target.stat().st_size > 5_000_000:
@@ -222,20 +221,219 @@ def read_text_file(path: str, max_chars: int = 4000) -> dict:
         return _fail("read_text_file", exc)
 
 
-def find_files(query: str) -> dict:
-    """Search for files by name or keyword."""
-    try:
-        from tools.filesystem import search_files
+def find_files(query: str, want: str = "any", limit: int = 25) -> dict:
+    """Search every drive for a file or folder by name.
 
-        # search_files defaults to the user's document folders, which do not
-        # include the ARGO install — "find the livekit config" returned nothing.
-        # Search exactly what ARGO is allowed to read.
-        roots = [str(r) for r in allowed_roots()]
-        hits = search_files(query, roots=roots, max_results=12) or []
-        return {"ok": True, "query": query, "count": len(hits),
-                "searched": roots, "results": hits}
+    want is any, file or folder. Folders matter as much as files here: most
+    of what Tommy asks for by name - "my vzbot build", "the davinci assets" -
+    is a folder, and the old search matched filenames only.
+    """
+    try:
+        from core.file_search import search
+
+        return search(query, limit=limit, want=want)
     except Exception as exc:
         return _fail("find_files", exc)
+
+
+# ---------------------------------------------------------------------------
+# Writing to disk
+#
+# ARGO had no write capability at all before this. Everything here refuses
+# Windows, installed software and credential files, and nothing deletes:
+# removal moves the file to a quarantine folder Tommy can inspect.
+# ---------------------------------------------------------------------------
+
+def file_access_report() -> dict:
+    """Which drives ARGO can read and write, and what is off limits."""
+    try:
+        from core.filesystem_access import access_report
+
+        report = access_report()
+        report["ok"] = True
+        report["message"] = (
+            f"I can read {len(report['readable'])} locations and write to "
+            f"{len(report['writable'])}. Windows, installed programs and anything "
+            "that looks like a credential are off limits, and I never delete - "
+            "removal moves things to quarantine."
+        )
+        return report
+    except Exception as exc:
+        return _fail("file_access_report", exc)
+
+
+def write_text_file(path: str, content: str, overwrite: bool = False) -> dict:
+    """Write a text file. Refuses to clobber an existing file unless told to."""
+    try:
+        from core.filesystem_access import check_write
+
+        target = _resolve(path)
+        refusal = check_write(target)
+        if refusal:
+            return refusal
+
+        existed = target.exists()
+        if existed and not overwrite:
+            return {
+                "ok": False,
+                "error": "exists",
+                "path": str(target),
+                "message": (
+                    f"{target.name} already exists. Say overwrite if you want me to "
+                    "replace it."
+                ),
+            }
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Write beside the target and swap, so an interrupted write cannot
+        # leave a half-file where a good one used to be.
+        staging = target.with_name(target.name + ".argo-tmp")
+        staging.write_text(content or "", encoding="utf-8")
+        staging.replace(target)
+
+        return {"ok": True, "path": str(target), "characters": len(content or ""),
+                "replaced": existed,
+                "message": f"{'Replaced' if existed else 'Wrote'} {target.name}."}
+    except Exception as exc:
+        return _fail("write_text_file", exc)
+
+
+def append_text_file(path: str, content: str) -> dict:
+    """Add to the end of a text file, creating it if it is not there."""
+    try:
+        from core.filesystem_access import check_write
+
+        target = _resolve(path)
+        refusal = check_write(target)
+        if refusal:
+            return refusal
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(content or "")
+        return {"ok": True, "path": str(target), "added": len(content or ""),
+                "message": f"Added to {target.name}."}
+    except Exception as exc:
+        return _fail("append_text_file", exc)
+
+
+def create_folder(path: str) -> dict:
+    """Make a folder, including any parents."""
+    try:
+        from core.filesystem_access import check_write
+
+        target = _resolve(path)
+        refusal = check_write(target)
+        if refusal:
+            return refusal
+        existed = target.is_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(target), "already_existed": existed,
+                "message": f"{'That folder already exists' if existed else 'Created ' + target.name}."}
+    except Exception as exc:
+        return _fail("create_folder", exc)
+
+
+def move_item(source: str, destination: str, overwrite: bool = False) -> dict:
+    """Move or rename a file or folder. Both ends must be writable."""
+    try:
+        import shutil
+
+        from core.filesystem_access import check_read, check_write
+
+        src = _resolve(source)
+        dst = _resolve(destination)
+
+        for check, target in ((check_read, src), (check_write, src), (check_write, dst)):
+            refusal = check(target)
+            if refusal:
+                return refusal
+
+        if not src.exists():
+            return {"ok": False, "error": "not_found", "path": str(src),
+                    "message": f"There is nothing at {src}."}
+        if dst.is_dir():
+            dst = dst / src.name
+        if dst.exists() and not overwrite:
+            return {"ok": False, "error": "exists", "path": str(dst),
+                    "message": f"{dst.name} is already there. Say overwrite to replace it."}
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+        return {"ok": True, "from": str(src), "to": str(dst),
+                "message": f"Moved {src.name} to {dst.parent}."}
+    except Exception as exc:
+        return _fail("move_item", exc)
+
+
+def copy_item(source: str, destination: str, overwrite: bool = False) -> dict:
+    """Copy a file or folder."""
+    try:
+        import shutil
+
+        from core.filesystem_access import check_read, check_write
+
+        src = _resolve(source)
+        dst = _resolve(destination)
+
+        refusal = check_read(src) or check_write(dst)
+        if refusal:
+            return refusal
+        if not src.exists():
+            return {"ok": False, "error": "not_found", "path": str(src),
+                    "message": f"There is nothing at {src}."}
+        if dst.is_dir() and src.is_file():
+            dst = dst / src.name
+        if dst.exists() and not overwrite:
+            return {"ok": False, "error": "exists", "path": str(dst),
+                    "message": f"{dst.name} is already there. Say overwrite to replace it."}
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=overwrite)
+        else:
+            shutil.copy2(src, dst)
+        return {"ok": True, "from": str(src), "to": str(dst),
+                "message": f"Copied {src.name} to {dst.parent}."}
+    except Exception as exc:
+        return _fail("copy_item", exc)
+
+
+def remove_item(path: str) -> dict:
+    """Move something to quarantine. Nothing is ever really deleted here.
+
+    A voice command is a bad way to lose a file permanently, so removal is
+    reversible by design: everything lands in a dated quarantine folder that
+    Tommy empties himself.
+    """
+    try:
+        import shutil
+        from datetime import datetime
+
+        from core.filesystem_access import check_write, quarantine_dir
+
+        target = _resolve(path)
+        refusal = check_write(target)
+        if refusal:
+            return refusal
+        if not target.exists():
+            return {"ok": False, "error": "not_found", "path": str(target),
+                    "message": f"There is nothing at {target}."}
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination = quarantine_dir() / f"{stamp}_{target.name}"
+        shutil.move(str(target), str(destination))
+        return {
+            "ok": True,
+            "moved_to": str(destination),
+            "original": str(target),
+            "message": (
+                f"{target.name} is in quarantine, not deleted. It is at "
+                f"{destination} until you empty that folder."
+            ),
+        }
+    except Exception as exc:
+        return _fail("remove_item", exc)
 
 
 # ---------------------------------------------------------------------------
