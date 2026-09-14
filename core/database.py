@@ -250,6 +250,27 @@ def _atomic_initialize_db(db_path: Path) -> None:
                 pass
 
 
+def _squash(value) -> str:
+    """Lowercase, alphanumerics only. 'T. Rex' and 't rex' both become 'trex'."""
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+# Below this many characters a substring match is noise, not help.
+MIN_SUBSTRING_MATCH = 3
+
+
+def _name_clause(column: str, value: str, params: list) -> str:
+    """A condition that matches what someone SAID against what is stored."""
+    squashed = _squash(value)
+    if len(squashed) >= MIN_SUBSTRING_MATCH:
+        params.extend([squashed, squashed])
+        return f"(squash({column}) = ? OR squash({column}) LIKE '%' || ? || '%')"
+    params.append(squashed)
+    return f"squash({column}) = ?"
+
+
 class MusicDatabase:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = Path(db_path) if db_path else _DEFAULT_DB_PATH
@@ -263,6 +284,10 @@ class MusicDatabase:
                 raise RuntimeError("Music DB not present")
             self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.execute("PRAGMA foreign_keys = ON")
+            # Spoken names carry no punctuation: "t rex" has to reach
+            # "T. Rex". squash() strips everything but letters and digits so
+            # the comparison happens on what was actually said.
+            self._conn.create_function("squash", 1, _squash)
             self.validate_schema()
             self._cached_query.cache_clear()
         return self._conn
@@ -535,11 +560,9 @@ class MusicDatabase:
         params: List = []
 
         if title:
-            conditions.append("LOWER(t.title) = LOWER(?)")
-            params.append(title)
+            conditions.append(_name_clause("t.title", title, params))
         if artist:
-            conditions.append("LOWER(a.name) = LOWER(?)")
-            params.append(artist)
+            conditions.append(_name_clause("a.name", artist, params))
         if genre:
             conditions.append("LOWER(g.name) = LOWER(?)")
             params.append(genre)
@@ -554,7 +577,8 @@ class MusicDatabase:
         if where_clause:
             where_clause = "WHERE " + where_clause
 
-        exact_title_param = title or ""
+        exact_title_param = _squash(title) if title else ""
+        exact_artist_param = _squash(artist) if artist else ""
         year_match_clause = "0"
 
         sql = f"""
@@ -568,7 +592,8 @@ class MusicDatabase:
                 COALESCE(a.sovereignty_rank, 0) AS sovereignty_rank,
                 al.title AS album,
                 GROUP_CONCAT(g.name) AS genres,
-                CASE WHEN LOWER(t.title) = LOWER(?) THEN 1 ELSE 0 END AS exact_title_match,
+                CASE WHEN squash(t.title) = ? THEN 1 ELSE 0 END AS exact_title_match,
+                CASE WHEN squash(a.name) = ? THEN 1 ELSE 0 END AS exact_artist_match,
                 {year_match_clause} AS era_match
             FROM tracks t
             LEFT JOIN albums al ON al.id = t.album_id
@@ -579,13 +604,14 @@ class MusicDatabase:
             GROUP BY t.id
             ORDER BY
                 exact_title_match DESC,
+                exact_artist_match DESC,
                 COALESCE(a.sovereignty_rank, 0) DESC,
                 COALESCE(t.year, 9999) ASC,
                 t.title ASC
             LIMIT ?
         """
 
-        params = params + [exact_title_param, limit]
+        params = params + [exact_title_param, exact_artist_param, limit]
         normalized_intent = (intent or "").strip().lower()
         start = time.perf_counter()
         results = self._cached_query(title, artist, genre, year_start, year_end, limit, normalized_intent)
@@ -786,11 +812,9 @@ class MusicDatabase:
         params: List = []
 
         if title:
-            conditions.append("LOWER(t.title) = LOWER(?)")
-            params.append(title)
+            conditions.append(_name_clause("t.title", title, params))
         if artist:
-            conditions.append("LOWER(a.name) = LOWER(?)")
-            params.append(artist)
+            conditions.append(_name_clause("a.name", artist, params))
         if genre:
             conditions.append("LOWER(g.name) = LOWER(?)")
             params.append(genre)
@@ -805,7 +829,8 @@ class MusicDatabase:
         if where_clause:
             where_clause = "WHERE " + where_clause
 
-        exact_title_param = title or ""
+        exact_title_param = _squash(title) if title else ""
+        exact_artist_param = _squash(artist) if artist else ""
 
         sql = f"""
             SELECT
@@ -826,7 +851,8 @@ class MusicDatabase:
             {where_clause}
             GROUP BY t.id
             ORDER BY
-                CASE WHEN LOWER(t.title) = LOWER(?) THEN 1 ELSE 0 END DESC,
+                CASE WHEN squash(t.title) = ? THEN 1 ELSE 0 END DESC,
+                CASE WHEN squash(a.name) = ? THEN 1 ELSE 0 END DESC,
                 COALESCE(a.sovereignty_rank, 0) DESC,
                 COALESCE(t.year, 9999) ASC,
                 t.title ASC
@@ -834,7 +860,7 @@ class MusicDatabase:
         """
 
         # WHERE clause params first, then ORDER BY params, then LIMIT
-        final_params = params + [exact_title_param, limit]
+        final_params = params + [exact_title_param, exact_artist_param, limit]
         conn = self._ensure_connection()
         with self._lock:
             cur = conn.cursor()
