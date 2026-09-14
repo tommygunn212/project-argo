@@ -226,6 +226,16 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.volume_status)
 
+    @function_tool()
+    async def check_music_library(self) -> str:
+        """Whether the music index still matches what is on disk.
+
+        Use this when music will not play, or before claiming the library
+        has something. An index can outlive the files it points at.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.music_library_status)
+
     # --- movies and TV ---------------------------------------------------
 
     @function_tool()

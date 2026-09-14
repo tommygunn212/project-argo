@@ -582,6 +582,70 @@ def volume_status() -> dict:
         return _fail("volume_status", exc)
 
 
+def music_library_status(sample: int = 60) -> dict:
+    """Is the music index still true? Where the library is, and whether it plays.
+
+    The index drifted from the library once already - thousands of tracks
+    were announced for weeks while every one of them 404'd, because nothing
+    ever checked the index against reality. This checks.
+    """
+    try:
+        import sqlite3
+
+        from core.music_player import MUSIC_DB_PATH
+
+        db = ROOT / MUSIC_DB_PATH
+        if not db.exists():
+            return {"ok": False, "error": "no_library",
+                    "message": "There is no music library indexed."}
+
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            total = con.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+            meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+            streamed = con.execute(
+                "SELECT COUNT(*) FROM tracks WHERE path LIKE 'jellyfin://%'"
+            ).fetchone()[0]
+            rows = con.execute(
+                "SELECT path FROM tracks WHERE path NOT LIKE 'jellyfin://%' "
+                "ORDER BY RANDOM() LIMIT ?", (max(1, min(500, int(sample))),)
+            ).fetchall()
+        finally:
+            con.close()
+
+        checked = [r[0] for r in rows]
+        missing = [p for p in checked if not Path(p).exists()]
+        healthy = not missing and not streamed
+
+        result = {
+            "ok": True,
+            "tracks": total,
+            "source": meta.get("source", "unknown"),
+            "root": meta.get("root"),
+            "indexed_at": meta.get("ingested_at"),
+            "checked": len(checked),
+            "missing_from_disk": len(missing),
+            "streamed_from_server": streamed,
+            "healthy": healthy,
+        }
+        if streamed:
+            result["message"] = (
+                f"{streamed} of {total} tracks are server streams rather than files. "
+                "If the server no longer has them they will announce and then fall silent."
+            )
+        elif missing:
+            result["examples"] = missing[:3]
+            result["message"] = (
+                f"{len(missing)} of the {len(checked)} tracks I checked are indexed but "
+                f"missing from disk. The library may have moved - it needs re-indexing."
+            )
+        else:
+            result["message"] = f"{total} tracks indexed from {meta.get('root')}, and they are there."
+        return result
+    except Exception as exc:
+        return _fail("music_library_status", exc)
+
+
 # ---------------------------------------------------------------------------
 # Movies and TV
 # ---------------------------------------------------------------------------
