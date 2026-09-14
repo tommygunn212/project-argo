@@ -1331,6 +1331,14 @@ Response (JSON ONLY):"""
             if not jellyfin_id:
                 jellyfin_id = self._extract_jellyfin_id_from_path(track.get("path"))
             if not jellyfin_id:
+                # Not a Jellyfin item. The index also holds plain file paths,
+                # and those play straight off disk - no server, no stream, no
+                # 404 when a library moves.
+                local_path = track.get("path") or ""
+                if local_path and Path(local_path).exists():
+                    return self.play(local_path, announcement, output_sink, track_data=track)
+                if local_path:
+                    logger.error("[ARGO] Indexed file is missing from disk: %s", local_path)
                 return False
 
             if self.is_playing():
