@@ -355,7 +355,41 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         "personality": cfg.personality,
         "avatar": avatar_status,
         "speaker_identity": speaker_status,
+        # Which voice path actually owns the microphone. The dashboard was
+        # showing the classic STT and TTS settings while Smooth Voice was
+        # doing the talking, so it has to be able to say which is live.
+        "voice_mode": read_voice_mode(),
+        "interruption": {
+            "allowed": True,
+            "min_duration": cfg.min_interruption_duration,
+            "false_timeout": cfg.false_interruption_timeout,
+        },
+        "noise_cancellation": cfg.noise_cancellation,
     }
+
+
+VOICE_MODE_FILE = Path(__file__).resolve().parents[1] / "runtime" / "voice_mode.json"
+
+
+def read_voice_mode() -> str:
+    """Which path owns the microphone: "smooth" or "classic".
+
+    main.py persists this so a restart cannot quietly hand the microphone
+    back; the dashboard reads the same file so it cannot disagree with the
+    server about what is live.
+    """
+    try:
+        import json
+
+        raw = json.loads(VOICE_MODE_FILE.read_text(encoding="utf-8"))
+        mode = str(raw.get("mode", "")).strip().lower()
+        if mode in ("smooth", "classic"):
+            return mode
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return "classic"
 
 
 def mobile_access_status(request_host: str | None = None) -> dict[str, Any]:

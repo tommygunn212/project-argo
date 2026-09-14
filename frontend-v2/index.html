@@ -1324,26 +1324,38 @@ input[type="range"]::-moz-range-thumb {
       <div class="grid-2">
         <!-- System Info -->
         <div class="card">
-          <div class="card-title"><span class="dot"></span>ENGINE STATUS</div>
+          <div class="card-title"><span class="dot"></span>ACTIVE VOICE</div>
           <div class="config-item">
-            <span class="config-key">STT Engine</span>
-            <span class="config-val" id="infoSTT">gpt-4o-mini-transcribe</span>
+            <span class="config-key">Live system</span>
+            <span class="config-val" id="infoVoiceMode">—</span>
           </div>
           <div class="config-item">
-            <span class="config-key">LLM Backend</span>
-            <span class="config-val" id="infoLLM">gpt-4o-mini</span>
-          </div>
-          <div class="config-item">
-            <span class="config-key">TTS Model</span>
-            <span class="config-val" id="infoTTS">gpt-4o-mini-tts</span>
+            <span class="config-key">Brain</span>
+            <span class="config-val" id="infoBrain">—</span>
           </div>
           <div class="config-item">
             <span class="config-key">Voice</span>
-            <span class="config-val" id="infoVoice">nova</span>
+            <span class="config-val" id="infoVoice">—</span>
           </div>
           <div class="config-item">
             <span class="config-key">Personality</span>
-            <span class="config-val" id="infoPersonality">tommy_gunn</span>
+            <span class="config-val" id="infoPersonality">—</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">Interruption</span>
+            <span class="config-val" id="infoInterruption">—</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">State</span>
+            <span class="config-val" id="infoVoiceState">IDLE</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">Deep think</span>
+            <span class="config-val" id="infoDeepThink">—</span>
+          </div>
+          <div class="config-item" title="These only run when the classic listener owns the microphone.">
+            <span class="config-key">Classic fallback</span>
+            <span class="config-val" id="infoClassic">—</span>
           </div>
           <div class="config-item">
             <span class="config-key">Audio Owner</span>
@@ -1458,7 +1470,10 @@ input[type="range"]::-moz-range-thumb {
 
         <!-- Engine Selection -->
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>ENGINE CONFIGURATION</div>
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>CLASSIC PIPELINE SETTINGS</div>
+          <div id="classicPipelineNote" style="font-size:11px;color:var(--text-dim);margin:-4px 0 10px;line-height:1.5">
+            These control the fallback pipeline only. They do not affect Smooth Voice.
+          </div>
 
           <!-- Row 1: STT (unified engine + model) -->
           <div class="grid-2" style="margin-bottom:14px">
@@ -2890,6 +2905,7 @@ function setRealtimeStatus(status, tone = 'dim') {
     error: 'var(--accent-red)'
   };
   statusEl.style.color = colors[tone] || colors.dim;
+  if (typeof setActiveVoiceState === 'function') setActiveVoiceState(status);
   const startBtn = $('livekitStartBtn');
   const stopBtn = $('livekitStopBtn');
   if (startBtn) startBtn.disabled = livekitStarting || livekitConnected || status === 'CONNECTING';
@@ -2972,6 +2988,7 @@ async function refreshRealtimeStatus() {
     configureLocalAvatarMedia(livekitMeta.avatar);
     updateAvatarProviderDisplay(livekitMeta.avatar);
     applyServerPersonality(data.personality);
+    updateActiveVoicePanel(data);
     if (!livekitConnected) {
       setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
     }
@@ -2981,6 +2998,62 @@ async function refreshRealtimeStatus() {
     setRealtimeStatus('ERROR', 'error');
     setRealtimeError(err.message || String(err));
   }
+}
+
+
+// ── Active voice panel ──
+// The old ENGINE STATUS card listed the classic STT, LLM and TTS settings
+// while Smooth Voice was doing the talking with a different model and a
+// different voice. This fills the card from /api/livekit-status, which knows
+// which path actually owns the microphone.
+function updateActiveVoicePanel(data) {
+  if (!data) return;
+  const smooth = (data.voice_mode || 'classic') === 'smooth';
+
+  const modeEl = $('infoVoiceMode');
+  if (modeEl) {
+    modeEl.textContent = smooth ? 'SMOOTH VOICE' : 'CLASSIC';
+    modeEl.style.color = smooth ? 'var(--accent)' : 'var(--text-secondary)';
+  }
+
+  const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+
+  if (smooth) {
+    set('infoBrain', data.model || '—');
+    set('infoVoice', data.voice || '—');
+  } else {
+    const sttSel = $('sttSelect');
+    const ttsSel = $('ttsSelect');
+    set('infoBrain', (sttSel?.value || '').split(':').pop() || 'classic pipeline');
+    set('infoVoice', (ttsSel?.value || '').split(':').pop() || '—');
+  }
+
+  set('infoPersonality', data.personality || '—');
+
+  const interruption = data.interruption || {};
+  set('infoInterruption', interruption.allowed
+    ? `ON · ${Math.round((interruption.min_duration || 0) * 1000)}ms`
+    : 'OFF');
+
+  // Do not advertise the two-tier brain until it exists - a panel claiming a
+  // capability it does not have is the exact problem this card is fixing.
+  set('infoDeepThink', data.deep_think_model || 'not wired yet');
+
+  const classicEl = $('infoClassic');
+  if (classicEl) {
+    const stt = ($('sttSelect')?.value || '').split(':').pop() || 'gpt-4o-mini-transcribe';
+    const ttsModel = $('ttsModelSelect')?.value || 'gpt-4o-mini-tts';
+    classicEl.textContent = smooth ? `${stt} → ${ttsModel} (not live)` : 'in use';
+    classicEl.style.color = smooth ? 'var(--text-dim)' : 'var(--accent2)';
+  }
+
+  const note = $('classicPipelineNote');
+  if (note) note.style.opacity = smooth ? '1' : '0.45';
+}
+
+function setActiveVoiceState(state) {
+  const el = $('infoVoiceState');
+  if (el) el.textContent = state || 'IDLE';
 }
 
 async function refreshMobileAccessStatus() {
@@ -3495,10 +3568,14 @@ function handleTTSModelChange() {
 function updatePipelineDisplay() {
   if (livekitConnected) {
     $('activePipelineDisplay').textContent =
-      `Realtime: LiveKit → OpenAI ${livekitMeta.model} → Voice: ${livekitMeta.voice}`;
-    $('infoSTT').textContent = 'LiveKit / WebRTC';
-    $('infoTTS').textContent = `OpenAI Realtime / ${livekitMeta.model}`;
-    $('infoVoice').textContent = livekitMeta.voice;
+      `Smooth Voice: ${livekitMeta.model} → ${livekitMeta.voice}`;
+    // The ACTIVE VOICE card is filled from /api/livekit-status, which knows
+    // which path owns the microphone. Do not write the classic rows here.
+    const brain = $('infoBrain');
+    if (brain) brain.textContent = livekitMeta.model || '—';
+    const voiceEl = $('infoVoice');
+    if (voiceEl) voiceEl.textContent = livekitMeta.voice || '—';
+    setActiveVoiceState(livekitConnected ? 'LIVE' : 'IDLE');
     return;
   }
 
@@ -3507,10 +3584,10 @@ function updatePipelineDisplay() {
   $('activePipelineDisplay').textContent =
     `STT: ${sttEng} / ${sttModel} → LLM: gpt-4o-mini → TTS: ${ttsEng} / ${voice}`;
 
-  // Also update Dashboard engine info
-  $('infoSTT').textContent = `${sttEng} / ${sttModel}`;
-  $('infoTTS').textContent = `${ttsEng} / ${$('ttsModelSelect').value}`;
-  $('infoVoice').textContent = voice;
+  // Classic is only worth showing as the active voice when it is the one
+  // holding the microphone; the panel decides that from the server.
+  const classicEl = $('infoClassic');
+  if (classicEl) classicEl.textContent = `${sttModel} → ${$('ttsModelSelect').value}`;
 }
 
 // ═══════ CHAT ═══════
