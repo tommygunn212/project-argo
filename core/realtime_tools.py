@@ -264,15 +264,68 @@ def music_play(query: str = "", kind: str = "keyword") -> dict:
                 "genre": player.play_by_genre,
                 "keyword": player.play_by_keyword,
             }[kind](query)
-        return {
-            "ok": bool(started),
-            "kind": kind,
-            "query": query,
-            "playing": player.is_playing(),
-            "message": "Playing." if started else f"Nothing matched {query!r}.",
-        }
+        if not started:
+            return {
+                "ok": False,
+                "error": "no_match",
+                "kind": kind,
+                "query": query,
+                "playing": False,
+                "message": f"Nothing matched {query!r}.",
+            }
+        return _confirm_playing(player, kind=kind, query=query)
     except Exception as exc:
         return _fail("music_play", exc)
+
+
+# How long to wait before believing that playback started. A stream that
+# 404s kills ffplay in well under this; a stream that works is still going.
+PLAYBACK_SETTLE_SECONDS = 1.2
+
+
+def _confirm_playing(player, *, kind: str, query: str) -> dict:
+    """Report what is actually coming out of the speakers.
+
+    Launching a player is not playing. When the source 404s, ffplay exits
+    with code 0 before anyone looks, and ARGO used to announce the track
+    anyway - which is how Tommy was told music was playing in silence.
+    """
+    track = {}
+    try:
+        track = dict(getattr(player, "current_track", {}) or {})
+    except Exception:
+        track = {}
+
+    time.sleep(PLAYBACK_SETTLE_SECONDS)
+
+    try:
+        playing = bool(player.is_playing())
+    except Exception:
+        logger.debug("[Tools] is_playing failed", exc_info=True)
+        playing = False
+
+    song = track.get("song") or track.get("title")
+    artist = track.get("artist")
+    named = " - ".join(p for p in (artist, song) if p) or "the track"
+
+    if playing:
+        return {"ok": True, "kind": kind, "query": query, "playing": True,
+                "track": {"artist": artist, "song": song},
+                "message": f"Playing {named}."}
+
+    return {
+        "ok": False,
+        "error": "playback_died",
+        "kind": kind,
+        "query": query,
+        "playing": False,
+        "track": {"artist": artist, "song": song},
+        "message": (
+            f"I found {named} and started it, but playback stopped immediately - "
+            "no sound is coming out. The track is in ARGO's index but the "
+            "media server could not serve it."
+        ),
+    }
 
 
 _DECADE_WORDS = {
@@ -359,14 +412,19 @@ def music_play_era(era: str, genre: str = "", artist: str = "") -> dict:
         # query_tracks returns the track name under "song", not "title".
         title = pick.get("song") or pick.get("title") or pick.get("name") or "that"
         started = player.play(path, title, track_data=pick) if path else False
-        return {
-            "ok": bool(started),
+        if not started:
+            return {"ok": False, "error": "no_match", "era": era,
+                    "years": [year_start, year_end], "matches": len(tracks),
+                    "playing": False,
+                    "message": f"I could not start {title}."}
+        result = _confirm_playing(player, kind="era", query=era)
+        result.update({
             "era": era,
             "years": [year_start, year_end],
             "matches": len(tracks),
             "now_playing": {"title": title, "artist": pick.get("artist"), "year": pick.get("year")},
-            "playing": player.is_playing(),
-        }
+        })
+        return result
     except Exception as exc:
         return _fail("music_play_era", exc)
 
