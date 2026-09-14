@@ -226,6 +226,41 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.volume_status)
 
+    # --- movies and TV ---------------------------------------------------
+
+    @function_tool()
+    async def play_movie(self, title: str) -> str:
+        """Put a movie on screen by name, full screen.
+
+        Reports whether it STAYED playing, not just that a player launched.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.video_play, title, "movie")
+
+    @function_tool()
+    async def play_episode(self, title: str) -> str:
+        """Play a TV episode by name or by the show it belongs to."""
+        from core import realtime_tools as T
+        return await self._run(T.video_play, title, "episode")
+
+    @function_tool()
+    async def find_something_to_watch(self, query: str, kind: str = "movie") -> str:
+        """Search the movie and TV library. kind is movie, episode or series."""
+        from core import realtime_tools as T
+        return await self._run(T.video_search, query, kind)
+
+    @function_tool()
+    async def stop_video(self) -> str:
+        """Close whatever movie or episode is on screen."""
+        from core import realtime_tools as T
+        return await self._run(T.video_stop)
+
+    @function_tool()
+    async def get_video_status(self) -> str:
+        """What is on screen now, and how many movies and episodes exist."""
+        from core import realtime_tools as T
+        return await self._run(T.video_status)
+
     # --- writing ---------------------------------------------------------
 
     @function_tool()
