@@ -160,6 +160,97 @@ def is_secret(path: Path) -> Optional[str]:
             return f"{part} normally holds credentials"
     if name.startswith(".env"):
         return "environment files normally hold API keys"
+    if name in SECRET_EXTRA_NAMES:
+        return f"{path.name} normally holds credentials or machine secrets"
+    lowered = str(path).lower()
+    for fragment in SECRET_PATH_FRAGMENTS:
+        if fragment in lowered:
+            return "that folder is a credential store"
+    return None
+
+
+# Credential stores that live inside a user's own profile. Tommy's documents
+# stay readable; the places a browser or a CLI parks a token do not.
+SECRET_PATH_FRAGMENTS = (
+    r"appdata\roaming\microsoft\credentials",
+    r"appdata\local\microsoft\credentials",
+    r"appdata\roaming\microsoft\protect",
+    r"appdata\local\google\chrome\user data\default\login data",
+    r"appdata\roaming\mozilla\firefox\profiles",
+    r"appdata\local\microsoft\edge\user data\default\login data",
+)
+SECRET_EXTRA_NAMES = {
+    ".git-credentials", "ntuser.dat", "sam", "security",
+    "unattend.xml", "sysprep.inf", "wpeinit.log",
+}
+
+# Profiles that are not a person: shared or template accounts are fine to see.
+NEUTRAL_PROFILE_NAMES = {"public", "default", "default user", "all users"}
+
+
+def current_user_profile_names() -> set[str]:
+    """Which names under C:\\Users are Tommy's own, lowercased."""
+    names = set()
+    for value in (os.environ.get("USERNAME"), os.environ.get("USER")):
+        if value:
+            names.add(value.strip().lower())
+    try:
+        names.add(Path.home().name.strip().lower())
+    except Exception:
+        pass
+    return {n for n in names if n}
+
+
+def is_foreign_user_profile(path: Path) -> Optional[str]:
+    """Another person's Windows profile. Returns the reason, or None.
+
+    Reading Tommy's own Documents was the whole point of widening access.
+    Reading somebody else's profile never was, and a voice command is a bad
+    way to wander into one.
+    """
+    parts = [p.lower().rstrip("\\/") for p in path.parts]
+    try:
+        index = parts.index("users")
+    except ValueError:
+        return None
+    if index + 1 >= len(parts):
+        return None  # C:\Users itself - listing it is harmless
+    profile = parts[index + 1]
+    if profile in NEUTRAL_PROFILE_NAMES or profile in current_user_profile_names():
+        return None
+    return f"{path.parts[index + 1]} is another user's profile"
+
+
+def path_shape_problem(raw: str | os.PathLike | None) -> Optional[str]:
+    """Reject a path by its SHAPE, before anything resolves it.
+
+    resolve() silently collapses "..", so a traversal that walks out of a
+    granted folder arrives at check_read looking like an ordinary absolute
+    path. The signature has to be caught while it is still visible. UNC and
+    Win32 device paths are refused outright: they sidestep drive-letter
+    scoping altogether and can reach the network.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip().strip('"').strip("'")
+    if not text:
+        return None
+
+    if text.startswith(("\\\\?\\", "\\\\.\\")):
+        return "Win32 device paths are not allowed"
+    if text.startswith("\\\\") or text.startswith("//"):
+        return "network (UNC) paths are not allowed"
+
+    normalised = text.replace("/", "\\")
+    segments = [seg.strip() for seg in normalised.split("\\")]
+    if any(seg == ".." for seg in segments):
+        return "'..' path traversal is not allowed"
+
+    stem = Path(text).stem.upper()
+    if stem in {"CON", "PRN", "AUX", "NUL"} or (
+        len(stem) == 4 and stem[:3] in {"COM", "LPT"} and stem[3].isdigit()
+    ):
+        return f"{stem} is a reserved device name"
     return None
 
 
@@ -173,8 +264,20 @@ def _under(target: Path, roots: Iterable[Path]) -> bool:
     return False
 
 
-def check_read(target: Path) -> Optional[dict]:
-    """None when reading is fine, otherwise the refusal to hand back."""
+def check_read(target: Path, raw: str | os.PathLike | None = None) -> Optional[dict]:
+    """None when reading is fine, otherwise the refusal to hand back.
+
+    Pass `raw` - the path exactly as it arrived - whenever it is available.
+    Shape problems like ".." are invisible once a path has been resolved.
+    """
+    shape = path_shape_problem(raw)
+    if shape:
+        return {
+            "ok": False,
+            "error": "bad_path",
+            "path": str(raw),
+            "message": f"I won't follow that path - {shape}.",
+        }
     secret = is_secret(target)
     if secret:
         return {
@@ -194,11 +297,47 @@ def check_read(target: Path) -> Optional[dict]:
             "message": f"{target} is outside the drives I can read.",
             "allowed": [str(r) for r in read_roots()],
         }
+    # Checked after the roots test on purpose: when the allowed roots have been
+    # narrowed, "outside what I can read" is the more truthful answer, and a
+    # test pins that. In normal operation every drive is a root, so this is
+    # what actually keeps Windows and other profiles unreadable.
+    protected = is_protected_location(target)
+    if protected:
+        return {
+            "ok": False,
+            "error": "protected_location",
+            "path": str(target),
+            "message": f"I won't read inside {target} - {protected}.",
+        }
+    foreign = is_foreign_user_profile(target)
+    if foreign:
+        return {
+            "ok": False,
+            "error": "not_allowed",
+            "path": str(target),
+            "message": f"I won't look in there - {foreign}.",
+        }
     return None
 
 
-def check_write(target: Path) -> Optional[dict]:
+def check_write(target: Path, raw: str | os.PathLike | None = None) -> Optional[dict]:
     """None when writing is fine, otherwise the refusal to hand back."""
+    shape = path_shape_problem(raw)
+    if shape:
+        return {
+            "ok": False,
+            "error": "bad_path",
+            "path": str(raw),
+            "message": f"I won't follow that path - {shape}.",
+        }
+    foreign = is_foreign_user_profile(target)
+    if foreign:
+        return {
+            "ok": False,
+            "error": "not_allowed",
+            "path": str(target),
+            "message": f"I won't change anything there - {foreign}.",
+        }
     protected = is_protected_location(target)
     if protected:
         return {
@@ -240,6 +379,10 @@ def access_report() -> dict:
             + sorted(SECRET_SUFFIXES)
             + sorted(SECRET_DIR_NAMES)
         ),
+        "refused_path_shapes": [
+            "'..' traversal", "UNC / network paths", "Win32 device paths",
+            "reserved device names", "other users' profiles",
+        ],
         "quarantine": str(quarantine_dir()),
         "deletes": "nothing is deleted; removal moves the file to quarantine",
     }
