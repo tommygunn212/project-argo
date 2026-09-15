@@ -209,7 +209,8 @@ class LiveKitRealtimeConfig:
     speaker_id_provider: str
     personality: str = "argo"
     instruction_fingerprint: str = ""
-    noise_cancellation: bool = True
+    # LiveKit Cloud only. Off unless this actually runs against Cloud.
+    noise_cancellation: bool = False
     idle_processes: int = 1
     # How the model decides Tommy has finished a thought. "semantic_vad" reads
     # the words, not just the silence, which is the difference between waiting
@@ -334,7 +335,7 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         # still feeding raw room noise and speaker echo straight to the model.
         noise_cancellation=_bool(
             _env_or_config(
-                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", True
+                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", False
             )
         ),
         turn_detection=str(
