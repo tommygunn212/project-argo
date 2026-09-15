@@ -2,7 +2,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { Envelope } = require('../frontend-v2/assets/cortana-avatar.js');
+const { Envelope, avatarForVoice } = require('../frontend-v2/assets/cortana-avatar.js');
+
+test('voice presets select matching avatars across the available engines', () => {
+  for (const voice of ['openai:onyx', 'openai:cedar', 'edge:ryan', 'azure:az-guy', 'piper:piper-danny']) {
+    assert.equal(avatarForVoice(voice, 'cortana'), 'cyber_male');
+  }
+  for (const voice of ['openai:nova', 'openai:marin', 'edge:jenny', 'azure:az-sonia', 'piper:piper-amy']) {
+    assert.equal(avatarForVoice(voice, 'cyber_male'), 'cortana');
+  }
+});
+
+test('neutral and unspecified voices retain the selected avatar', () => {
+  assert.equal(avatarForVoice('openai:alloy', 'cyber_male'), 'cyber_male');
+  assert.equal(avatarForVoice('webspeech:ws-default', 'cortana'), 'cortana');
+  assert.equal(avatarForVoice('piper:piper-default', 'cyber_male'), 'cyber_male');
+  assert.equal(avatarForVoice('unknown', 'invalid'), 'cortana');
+});
 
 test('mouth stays closed in silence and below the noise floor', () => {
   const e = new Envelope();

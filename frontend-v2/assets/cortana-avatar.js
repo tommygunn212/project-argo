@@ -3,6 +3,21 @@
   'use strict';
   const clamp = (n, a = 0, b = 1) => Math.min(b, Math.max(a, Number(n) || 0));
   const mix = (a, b, t) => a + (b - a) * clamp(t);
+  const maleVoices = new Set([
+    'openai:ash', 'openai:ballad', 'openai:cedar', 'openai:echo', 'openai:fable', 'openai:onyx', 'openai:verse',
+    'edge:ryan', 'edge:abeo', 'edge:guy', 'edge:davis', 'azure:az-guy', 'azure:az-davis', 'azure:az-ryan',
+    'piper:piper-danny',
+  ]);
+  const femaleVoices = new Set([
+    'openai:nova', 'openai:marin', 'openai:coral', 'openai:sage', 'openai:shimmer',
+    'edge:libby', 'edge:natasha', 'edge:jenny', 'edge:aria', 'azure:az-jenny', 'azure:az-aria', 'azure:az-sonia',
+    'piper:piper-amy', 'piper:piper-lessac',
+  ]);
+  function avatarForVoice(voice, previous = 'cortana') {
+    if (maleVoices.has(voice)) return 'cyber_male';
+    if (femaleVoices.has(voice)) return 'cortana';
+    return previous === 'cyber_male' ? 'cyber_male' : 'cortana';
+  }
   class Envelope {
     constructor() {
       this.value = 0;
@@ -166,7 +181,7 @@
           .map(name=>[name,gl.getUniformLocation(program,name)]));
         this.ready=true; this.lost=false;
         const stage = this.canvas.closest('.avatar-stage');
-        if (!stage?.querySelector('.avatar-local-media') || this.image.tagName === 'VIDEO') {
+        if (!stage?.querySelector('.avatar-local-media') || this.image === stage.querySelector('.avatar-local-media')) {
           stage?.classList.add('local-animated');
         }
       } catch(error) {
@@ -195,9 +210,10 @@
       const breath = reducedMotion ? 0 : (0.5 + 0.5*Math.sin(t*0.82));
       gl.uniform2f(u.imageSize,this.image.videoWidth || this.image.naturalWidth,this.image.videoHeight || this.image.naturalHeight);
       const halo = this.profile === 'halo';
+      const male = this.profile === 'cyber_male';
       gl.uniform1f(u.frameZoom,halo?1.10:1.014);
-      gl.uniform3f(u.mouthLandmark,halo?0.488:0.512,halo?0.609:0.543,halo?0.076:0.052);
-      gl.uniform4f(u.eyeLandmarks,halo?0.377:0.447,halo?0.270:0.344,halo?0.596:0.577,halo?0.267:0.344);
+      gl.uniform3f(u.mouthLandmark,halo?0.488:male?0.491:0.512,halo?0.609:male?0.613:0.543,halo?0.076:male?0.082:0.052);
+      gl.uniform4f(u.eyeLandmarks,halo?0.377:male?0.397:0.447,halo?0.270:male?0.400:0.344,halo?0.596:male?0.589:0.577,halo?0.267:male?0.398:0.344);
       gl.uniform2f(u.screenSize,w,h);
       gl.uniform2f(u.gaze,gazeX,gazeY);
       gl.uniform1f(u.mouth,m);gl.uniform1f(u.jaw,jaw);gl.uniform1f(u.blink,blink);
@@ -205,6 +221,6 @@
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
   }
-  root.CortanaAvatar={Envelope,Portrait};
-  if(typeof module!=='undefined') module.exports={Envelope};
+  root.CortanaAvatar={Envelope,Portrait,avatarForVoice};
+  if(typeof module!=='undefined') module.exports={Envelope,avatarForVoice};
 })(typeof window!=='undefined'?window:globalThis);

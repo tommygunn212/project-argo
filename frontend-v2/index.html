@@ -695,6 +695,52 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   align-items: center;
   margin-bottom: 14px;
 }
+.avatar-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.avatar-picker legend {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.avatar-choice {
+  position: relative;
+  cursor: pointer;
+}
+.avatar-choice input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.avatar-choice span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+}
+.avatar-choice input:checked + span {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.avatar-choice input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 .voice-avatar-row .avatar-stage {
   width: 100%;
   min-width: 0;
@@ -1278,6 +1324,12 @@ input[type="range"]::-moz-range-thumb {
         <div class="dash-hero-copy">
           <div class="dash-state-text" id="dashStateText" style="color:var(--text-dim)">IDLE</div>
           <div class="dash-sub-text" id="dashSubText">Waiting for connection...</div>
+          <fieldset class="avatar-picker">
+            <legend>Avatar</legend>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label>
+          </fieldset>
         </div>
       </div>
 
@@ -1340,6 +1392,14 @@ input[type="range"]::-moz-range-thumb {
           <div class="config-item">
             <span class="config-key">Personality</span>
             <span class="config-val" id="infoPersonality">—</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">Instructions</span>
+            <span class="config-val" id="infoInstructions" title="fingerprint of exactly what the live session was told">—</span>
+          </div>
+          <div class="config-item">
+            <span class="config-key">Saved for next</span>
+            <span class="config-val" id="infoSavedNext" title="what the next Smooth Voice connection will use">—</span>
           </div>
           <div class="config-item">
             <span class="config-key">Interruption</span>
@@ -1464,6 +1524,12 @@ input[type="range"]::-moz-range-thumb {
                 <button class="btn" onclick="refreshRealtimeStatus()">↻ Refresh</button>
               </div>
               <div class="livekit-error" id="livekitError"></div>
+              <fieldset class="avatar-picker">
+                <legend>Avatar</legend>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label>
+              </fieldset>
             </div>
           </div>
         </div>
@@ -1472,7 +1538,8 @@ input[type="range"]::-moz-range-thumb {
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>CLASSIC PIPELINE SETTINGS</div>
           <div id="classicPipelineNote" style="font-size:11px;color:var(--text-dim);margin:-4px 0 10px;line-height:1.5">
-            These control the fallback pipeline only. They do not affect Smooth Voice.
+            Speech-to-Text, Text-to-Speech and TTS Model below control the classic fallback pipeline only.
+            They do not affect Smooth Voice. The Smooth Voice personality has its own box further down.
           </div>
 
           <!-- Row 1: STT (unified engine + model) -->
@@ -1559,27 +1626,47 @@ input[type="range"]::-moz-range-thumb {
             </div>
           </div>
 
-          <!-- Row 2: TTS Model + Personality -->
+          <!-- Row 2: TTS Model (classic only) -->
           <div class="grid-2">
             <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">TTS Model</label>
+              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">TTS Model <span style="opacity:.6">(classic fallback only)</span></label>
               <select id="ttsModelSelect" style="width:100%" onchange="handleTTSModelChange()">
                 <option value="gpt-4o-mini-tts" selected>gpt-4o-mini-tts ★</option>
                 <option value="tts-1">tts-1 (standard)</option>
                 <option value="tts-1-hd">tts-1-hd (high quality)</option>
               </select>
             </div>
-            <div>
-              <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px">Personality</label>
-              <select id="personalitySelect" style="width:100%" onchange="handlePersonalityChange(this)">
-                <option value="tommy_gunn">Tommy Gunn — Sharp, witty</option>
-                <option value="jarvis">Jarvis — Calm, formal</option>
-                <option value="tommy_mix">Tommy Mix — Sharp + chaos</option>
-                <option value="rick">Rick — Chaotic, funny</option>
-                <option value="claptrap">Claptrap — Manic, energetic</option>
-                <option value="plain">Plain — Minimal, flat</option>
-              </select>
-            </div>
+            <div></div>
+          </div>
+
+          <!-- Smooth Voice personality: server-side, applies on the NEXT connection -->
+          <div id="personalityBox" style="margin-top:14px;padding:12px 14px;border:1px solid var(--accent);border-radius:var(--radius);background:var(--bg-input)">
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Smooth Voice — voice &amp; personality</div>
+            <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px">Voice</label>
+            <select id="realtimeVoiceSelect" style="width:100%;margin-bottom:10px" onchange="handleRealtimeVoiceChange(this)">
+              <option value="marin">Marin — warm, natural (default)</option>
+              <option value="cedar">Cedar — warm, lower</option>
+              <option value="alloy">Alloy — balanced, neutral</option>
+              <option value="ash">Ash — clear, even</option>
+              <option value="ballad">Ballad — soft, expressive</option>
+              <option value="coral">Coral — bright, friendly</option>
+              <option value="echo">Echo — crisp, measured</option>
+              <option value="sage">Sage — calm, steady</option>
+              <option value="shimmer">Shimmer — light, quick</option>
+              <option value="verse">Verse — rich, narrative</option>
+            </select>
+            <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px">Personality</label>
+            <select id="personalitySelect" style="width:100%" onchange="handlePersonalityChange(this)">
+              <option value="argo">ARGO — Warm, sharp conversation partner (default)</option>
+              <option value="tommy_gunn">Tommy Gunn — Dry, observant, quietly confident</option>
+              <option value="tommy_mix">Tommy Mix — Composed with a sarcastic streak</option>
+              <option value="jarvis">Jarvis — Calm, precise, British composure</option>
+              <option value="rick">Rick — Restless, blunt, always right underneath</option>
+              <option value="claptrap">Claptrap — Loud, eager, delighted to help</option>
+              <option value="plain">Plain — Flat and factual, no personality</option>
+            </select>
+            <div id="personalityDescription" style="font-size:12px;color:var(--text-secondary);margin-top:6px;line-height:1.45">Warm, sharp conversation partner - thinks with you, pushes back gently, dry wit when it fits. The default.</div>
+            <div id="personalityApplies" style="font-size:11px;color:var(--text-dim);margin-top:6px">Saved on the server. Applies to the <b>next</b> Smooth Voice connection - a session that is already running keeps the personality it started with.</div>
           </div>
 
           <!-- Active Combo Display -->
@@ -2190,6 +2277,12 @@ let avatarAudioContext = null;
 let realtimeAvatarVideoEls = [];
 let localAvatarMediaEls = [];
 let localAvatarMediaUrl = '';
+let avatarMode = 'auto';
+try {
+  const savedAvatar = localStorage.getItem('argo_avatar');
+  if (['auto', 'cortana', 'cyber_male'].includes(savedAvatar)) avatarMode = savedAvatar;
+} catch (_) {}
+let selectedAvatar = avatarMode === 'cyber_male' ? 'cyber_male' : 'cortana';
 let avatarMotionPreference = null;
 let avatarAudioLevel = 0;
 let desktopAvatarAudioLevel = 0;
@@ -2945,10 +3038,94 @@ function handlePersonalityChange(select) {
   sendOverride('personality_mode', wanted);
   serverPersonality = wanted;
   saveDropdownSettings();
+  describePersonality(select);
   updatePipelineDisplay();
-  addSystemLog(`Personality set to ${wanted} — applies to the next Smooth Voice session`);
+  const live = livekitMeta.activeNow && livekitMeta.activeNow.live;
+  addSystemLog(live
+    ? `Personality saved as ${wanted}. The current session stays ${livekitMeta.activeNow.personality} until you reconnect.`
+    : `Personality saved as ${wanted} — applies to the next Smooth Voice session`);
+  refreshRealtimeStatus();
 }
 
+
+// Rebuild the selector from the server's list, so a persona added or reworded
+// on the server never needs a dashboard edit. Argo comes first because the
+// server lists it first.
+function applyServerPersonas(personas) {
+  const select = $('personalitySelect');
+  if (!select || !Array.isArray(personas) || !personas.length) return;
+  const current = select.value;
+  const existing = Array.prototype.map.call(select.options, o => o.value).join(',');
+  const incoming = personas.map(p => p.name).join(',');
+  if (existing !== incoming) {
+    select.innerHTML = '';
+    for (const p of personas) {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = `${p.label} — ${p.description.replace(/\.\s*The default\.$/, '')}${p.name === 'argo' ? ' (default)' : ''}`;
+      opt.dataset.description = p.description;
+      select.appendChild(opt);
+    }
+    if (personas.some(p => p.name === current)) select.value = current;
+  } else {
+    for (const opt of select.options) {
+      const p = personas.find(x => x.name === opt.value);
+      if (p) opt.dataset.description = p.description;
+    }
+  }
+  describePersonality(select);
+}
+
+function handleRealtimeVoiceChange(select) {
+  const wanted = select.value;
+  const connected = (typeof ws !== 'undefined') && ws && ws.readyState === WebSocket.OPEN;
+  if (!connected) {
+    select.value = serverRealtimeVoice || select.value;
+    addSystemLog(`Not saved — ARGO is offline. Voice stays ${select.value}.`);
+    setRealtimeError('Voice change was not saved: no connection to ARGO.');
+    return;
+  }
+  sendOverride('realtime_voice', wanted);
+  serverRealtimeVoice = wanted;
+  const live = livekitMeta.activeNow && livekitMeta.activeNow.live;
+  addSystemLog(live
+    ? `Voice saved as ${wanted}. The current session stays ${livekitMeta.activeNow.voice} until you reconnect.`
+    : `Voice saved as ${wanted} — applies to the next Smooth Voice session`);
+  refreshRealtimeStatus();
+}
+
+// Last voice confirmed by the server, so a failed change can be reverted.
+let serverRealtimeVoice = null;
+
+function applyServerRealtimeVoice(voice, voices) {
+  const select = $('realtimeVoiceSelect');
+  if (!select) return;
+  if (Array.isArray(voices) && voices.length) {
+    const incoming = voices.map(v => v.name).join(',');
+    const existing = Array.prototype.map.call(select.options, o => o.value).join(',');
+    if (incoming !== existing) {
+      const current = select.value;
+      select.innerHTML = '';
+      for (const v of voices) {
+        const opt = document.createElement('option');
+        opt.value = v.name; opt.textContent = v.label;
+        select.appendChild(opt);
+      }
+      if (voices.some(v => v.name === current)) select.value = current;
+    }
+  }
+  const name = String(voice || '').trim();
+  if (!name) return;
+  serverRealtimeVoice = name;
+  if (select.value !== name) select.value = name;
+}
+
+function describePersonality(select) {
+  const el = $('personalityDescription');
+  if (!el || !select) return;
+  const opt = select.options[select.selectedIndex];
+  el.textContent = (opt && opt.dataset.description) || '';
+}
 
 function applyServerPersonality(personality) {
   const name = String(personality || '').trim();
@@ -2981,13 +3158,21 @@ async function refreshRealtimeStatus() {
       speakerIdentity: data.speaker_identity || livekitMeta.speakerIdentity,
       avatar: data.avatar || livekitMeta.avatar,
       mobileUrl: livekitMeta.mobileUrl,
+      activeNow: data.active_now || null,
+      savedForNext: data.saved_for_next || null,
     };
+    applyServerPersonas(data.personas);
+    // Reconcile both selectors against what is SAVED for the next session.
+    // Using the live session's values would make the dropdowns snap back to
+    // whatever is currently talking, undoing a change he just made.
+    const savedNext = data.saved_for_next || {};
+    applyServerRealtimeVoice(savedNext.voice || data.voice, data.voices);
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
     configureLocalAvatarMedia(livekitMeta.avatar);
     updateAvatarProviderDisplay(livekitMeta.avatar);
-    applyServerPersonality(data.personality);
+    applyServerPersonality((data.saved_for_next && data.saved_for_next.personality) || data.personality);
     updateActiveVoicePanel(data);
     if (!livekitConnected) {
       setRealtimeStatus(data.server_reachable ? 'READY' : 'SERVER OFFLINE', data.server_reachable ? 'live' : 'dim');
@@ -3018,9 +3203,24 @@ function updateActiveVoicePanel(data) {
 
   const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
 
-  if (smooth) {
-    set('infoBrain', data.model || '—');
-    set('infoVoice', data.voice || '—');
+  const active = data.active_now && data.active_now.live ? data.active_now : null;
+  const saved = data.saved_for_next || {};
+  if (active) {
+    // The live session's own record - what she is ACTUALLY running.
+    set('infoBrain', `${active.model || '—'}  · live`);
+    set('infoVoice', active.voice || '—');
+    set('infoPersonality', active.personality || '—');
+    set('infoInstructions', active.instruction_fingerprint || '—');
+    const differs = saved.personality !== active.personality || saved.voice !== active.voice || saved.model !== active.model;
+    set('infoSavedNext', differs
+      ? `${saved.model} / ${saved.voice} / ${saved.personality}  (reconnect to apply)`
+      : 'same as active');
+  } else if (smooth) {
+    set('infoBrain', `${saved.model || data.model || '—'}  · on connect`);
+    set('infoVoice', saved.voice || data.voice || '—');
+    set('infoPersonality', saved.personality || data.personality || '—');
+    set('infoInstructions', saved.instruction_fingerprint || '—');
+    set('infoSavedNext', 'no live session — this is what the next one will use');
   } else {
     const sttSel = $('sttSelect');
     const ttsSel = $('ttsSelect');
@@ -3028,7 +3228,11 @@ function updateActiveVoicePanel(data) {
     set('infoVoice', (ttsSel?.value || '').split(':').pop() || '—');
   }
 
-  set('infoPersonality', data.personality || '—');
+  if (!active && !smooth) {
+    set('infoPersonality', data.personality || '—');
+    set('infoInstructions', '—');
+    set('infoSavedNext', `${saved.voice || '—'} / ${saved.personality || '—'}`);
+  }
 
   const interruption = data.interruption || {};
   set('infoInterruption', interruption.allowed
@@ -3111,13 +3315,40 @@ function clearLocalAvatarMedia() {
 
 function attachLocalAvatarRenderer(stage, el) {
   const renderer = portraitRenderers.find(item => item.canvas.closest('.avatar-stage') === stage);
-  if (renderer && el.dataset.expressionProfile === 'halo' && el.tagName === 'VIDEO') {
-    renderer.setMediaSource(el, 'halo');
+  if (renderer && ['halo', 'cyber_male'].includes(el.dataset.expressionProfile)) {
+    renderer.setMediaSource(el, el.dataset.expressionProfile);
   }
 }
 
+function selectAvatar(value, persist = true) {
+  avatarMode = ['cortana', 'cyber_male'].includes(value) ? value : 'auto';
+  if (persist) {
+    try { localStorage.setItem('argo_avatar', avatarMode); } catch (_) {}
+  }
+  configureLocalAvatarMedia(livekitMeta.avatar);
+  updateAvatarProviderDisplay(livekitMeta.avatar);
+}
+
+window.addEventListener('storage', event => {
+  if (event.key === 'argo_avatar') selectAvatar(event.newValue, false);
+});
+
 function configureLocalAvatarMedia(status) {
-  const media = status?.local_media || {};
+  const voice = livekitConnected ? `openai:${livekitMeta.voice}` : $('ttsSelect').value;
+  selectedAvatar = avatarMode === 'auto'
+    ? (window.CortanaAvatar?.avatarForVoice(voice, selectedAvatar) || selectedAvatar)
+    : avatarMode;
+  const male = selectedAvatar === 'cyber_male';
+  const name = male ? 'Cyber Male' : 'Cortana';
+  document.querySelectorAll('.avatar-picker input').forEach(input => {
+    input.checked = input.value === avatarMode;
+  });
+  avatarCanvases.forEach(canvas => canvas.setAttribute('aria-label', `${name} voice-driven portrait`));
+  const media = male ? {
+    ready: true, url: '/v2-assets/argo_cyber_male.png', media_type: 'image',
+    content_type: 'image/png', expression_profile: 'cyber_male',
+    motion_enabled: status?.local_media?.motion_enabled,
+  } : status?.local_media || {};
   avatarMotionPreference = typeof media.motion_enabled === 'boolean' ? media.motion_enabled : null;
   const url = media.ready && media.url ? argoUrl(media.url) : '';
   avatarStages.forEach(stage => stage.classList.toggle('local-media-selected', Boolean(url)));
@@ -3141,6 +3372,7 @@ function configureLocalAvatarMedia(status) {
       el.muted = true;
       el.playsInline = true;
       el.addEventListener('loadeddata', () => {
+        if (!el.isConnected) return;
         stage.classList.add('has-local-media');
         attachLocalAvatarRenderer(stage, el);
         updateAvatarProviderDisplay(livekitMeta.avatar);
@@ -3148,15 +3380,19 @@ function configureLocalAvatarMedia(status) {
       el.src = url;
       try { el.play().catch(() => {}); } catch(e) {}
     } else {
-      el.alt = 'Local animated Cortana avatar';
+      el.alt = `${name} avatar`;
       el.onload = () => {
+        if (!el.isConnected) return;
         stage.classList.add('has-local-media');
+        attachLocalAvatarRenderer(stage, el);
         updateAvatarProviderDisplay(livekitMeta.avatar);
       };
       el.src = url;
     }
     el.onerror = () => {
+      if (!el.isConnected) return;
       stage.classList.remove('has-local-media');
+      addSystemLog(`${name} avatar could not be loaded.`);
       updateAvatarProviderDisplay(livekitMeta.avatar);
     };
     stage.insertBefore(el, stage.firstChild);
@@ -3168,11 +3404,12 @@ function updateAvatarProviderDisplay(status) {
   const el = $('infoAvatar');
   if (!el) return;
   if (realtimeAvatarVideoEls.length) return;
+  const avatarName = selectedAvatar === 'cyber_male' ? 'CYBER MALE' : 'CORTANA';
   const hasLocalMedia = avatarStages.some(stage => stage.classList.contains('has-local-media'));
   if (hasLocalMedia) {
     const animated = avatarStages.some(stage => stage.classList.contains('local-animated'));
     const synced = animated && realtimeAvatarMeter?.audioContext.state === 'running';
-    const label = synced ? 'CORTANA · VOICE SYNC' : animated ? 'CORTANA · LOCAL' : 'CORTANA · LOCAL LOOP';
+    const label = `${avatarName} · ${synced ? 'VOICE SYNC' : animated ? 'LOCAL' : 'LOCAL LOOP'}`;
     el.textContent = label;
     el.style.color = 'var(--accent3)';
     el.title = synced ? 'Local face animation follows ARGO voice audio.' : 'Local animated avatar media.';
@@ -3181,7 +3418,7 @@ function updateAvatarProviderDisplay(status) {
   }
   const animated = avatarStages.some(stage => stage.classList.contains('local-animated'));
   const synced = animated && realtimeAvatarMeter?.audioContext.state === 'running';
-  const label = synced ? 'CORTANA · VOICE SYNC' : animated ? 'CORTANA · LOCAL' : 'CORTANA PORTRAIT';
+  const label = `${avatarName} · ${synced ? 'VOICE SYNC' : animated ? 'LOCAL' : 'PORTRAIT'}`;
   el.textContent = label;
   el.style.color = synced ? 'var(--accent3)' : 'var(--text-dim)';
   el.title = animated ? 'Local 2D portrait animated from received voice audio; no avatar cloud service.' : 'Static portrait; voice remains available.';
@@ -3566,9 +3803,12 @@ function handleTTSModelChange() {
 }
 
 function updatePipelineDisplay() {
+  configureLocalAvatarMedia(livekitMeta.avatar);
   if (livekitConnected) {
-    $('activePipelineDisplay').textContent =
-      `Smooth Voice: ${livekitMeta.model} → ${livekitMeta.voice}`;
+    const a = livekitMeta.activeNow && livekitMeta.activeNow.live ? livekitMeta.activeNow : null;
+    $('activePipelineDisplay').textContent = a
+      ? `Active now: ${a.model} / ${a.voice} / personality ${a.personality}  (${a.instruction_fingerprint || '—'})`
+      : `Smooth Voice: ${livekitMeta.model} → ${livekitMeta.voice}  (session record pending)`;
     // The ACTIVE VOICE card is filled from /api/livekit-status, which knows
     // which path owns the microphone. Do not write the classic rows here.
     const brain = $('infoBrain');
@@ -3739,7 +3979,7 @@ function initAvatar() {
       portraitRenderers.push(renderer);
       const stage = canvas.closest('.avatar-stage');
       const media = stage?.querySelector('.avatar-local-media');
-      if (media?.readyState >= 2) attachLocalAvatarRenderer(stage, media);
+      if (media && (media.readyState >= 2 || (media.complete && media.naturalWidth))) attachLocalAvatarRenderer(stage, media);
     } catch (error) {
       console.warn('Local avatar unavailable; keeping the static portrait',error);
     }
