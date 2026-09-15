@@ -814,6 +814,17 @@ def _handle_override(payload: dict):
             log_event(f"VOICE_PERSONALITY_PERSISTED {value}", stage="ui")
         except Exception:
             logger.exception("[OVERRIDE] Could not persist voice personality")
+    if key == "realtime_voice":
+        # Smooth Voice's voice, not the classic pipeline's. Separate control,
+        # separate file, same cross-process reason as the personality.
+        try:
+            from core.livekit_config import write_realtime_voice
+
+            write_realtime_voice(str(value))
+            log_event(f"REALTIME_VOICE_PERSISTED {value}", stage="ui")
+        except Exception as exc:
+            logger.exception("[OVERRIDE] Could not persist realtime voice")
+            broadcast_msg("log", f"Voice not saved: {exc}")
     if pipeline_ref and hasattr(pipeline_ref, "apply_runtime_tuning"):
         try:
             pipeline_ref.apply_runtime_tuning()
@@ -1296,6 +1307,10 @@ def main_loop():
         in_echo_cooldown = (time.time() - pipeline.tts_finished_at) < POST_TTS_COOLDOWN
         if (
             not passive_listen
+            # Smooth Voice owns the microphone: the browser is already
+            # publishing this same audio to the realtime model, so recording
+            # it here would be ARGO listening to herself.
+            and VOICE_MODE != VOICE_MODE_SMOOTH
             and not pipeline.is_speaking
             and not is_recording
             and not in_echo_cooldown
@@ -1408,15 +1423,39 @@ def main_loop():
 
                         audio.clear_buffers()
 
-                        # Offload to pipeline
-                        overrides = dict(NEXT_INTERACTION_OVERRIDES)
-                        NEXT_INTERACTION_OVERRIDES.clear()
-                        t = threading.Thread(
-                            target=pipeline.run_interaction,
-                            args=(full_audio, current_interaction_id, False, overrides),
-                        )
-                        t.start()
-                        current_interaction_id = ""
+                        # Last gate before the classic path can answer OR
+                        # speak. LISTENING_ENABLED already stops capture when
+                        # Smooth Voice owns the microphone, but "already
+                        # stopped" is not a guarantee: a race on the mode
+                        # switch, a buffer captured a moment earlier, or a
+                        # future caller that forgets the flag all end the same
+                        # way - two voices answering one question. This is the
+                        # check that makes double-speaking impossible rather
+                        # than unlikely.
+                        if VOICE_MODE == VOICE_MODE_SMOOTH:
+                            logger.warning(
+                                "[VoiceMode] dropped a classic turn: Smooth Voice owns "
+                                "the microphone (%.1fs of audio discarded)",
+                                len(full_audio) / 16000.0,
+                            )
+                            log_event(
+                                "CLASSIC_TURN_DROPPED reason=smooth_voice_owns_mic",
+                                stage="voice_mode",
+                                interaction_id=current_interaction_id,
+                            )
+                            audio.clear_buffers()
+                            pipeline.transition_state("LISTENING", source="smooth_owns_mic")
+                            current_interaction_id = ""
+                        else:
+                            # Offload to pipeline
+                            overrides = dict(NEXT_INTERACTION_OVERRIDES)
+                            NEXT_INTERACTION_OVERRIDES.clear()
+                            t = threading.Thread(
+                                target=pipeline.run_interaction,
+                                args=(full_audio, current_interaction_id, False, overrides),
+                            )
+                            t.start()
+                            current_interaction_id = ""
                     else:
                         logger.warning(f"[Audio] Input too quiet/silent (peak: {peak:.4f}), ignoring")
                         audio.clear_buffers()
@@ -1434,6 +1473,16 @@ if __name__ == "__main__":
     # Engine selection/loading belongs to STTEngineManager. The former local
     # Whisper preload was never used and also ran when cloud STT was selected.
     
+    # Refuse to start wrong rather than start broken. The check reads
+    # sys.PREFIX, not sys.executable: on Windows the venv python is a stub
+    # that re-executes the base interpreter, so a perfectly healthy ARGO
+    # reports a base-interpreter executable. Reading that as "wrong
+    # interpreter" is how you end up killing the only working process.
+    from core.runtime_guard import SingleInstance, verify_runtime
+
+    verify_runtime("main")
+    _instance_lock = SingleInstance("main").acquire()
+
     _restore_voice_mode()
     _start_main_loop_thread()
     
@@ -1450,4 +1499,8 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Asyncio loop exited with error: {e}", exc_info=True)
     finally:
+        try:
+            _instance_lock.release()
+        except Exception:
+            pass
         logger.info("Main thread exiting")

@@ -13,6 +13,7 @@ import re
 import socket
 import uuid
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from importlib import metadata
@@ -25,6 +26,8 @@ from dotenv import load_dotenv
 from core.config import get_config
 
 
+logger = logging.getLogger("ARGO.LiveKitConfig")
+
 DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
 
 # The realtime worker runs in its own process, so a UI personality change cannot
@@ -32,6 +35,65 @@ DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
 # cross-process handoff: main.py writes it, and each new realtime session reads
 # it at start. No restart needed — the value is resolved per session.
 VOICE_PERSONALITY_FILE = Path(__file__).resolve().parents[1] / "runtime" / "voice_personality.json"
+# Same cross-process handoff as the personality, for the same reason: the
+# worker is a separate process and in-memory runtime overrides never reach it.
+REALTIME_VOICE_FILE = Path(__file__).resolve().parents[1] / "runtime" / "realtime_voice.json"
+
+# What gpt-realtime will actually accept. Anything else is refused at the
+# session level, which is a bad way to find out - so it is checked here.
+REALTIME_VOICES = [
+    ("marin", "Marin - warm, natural (default)"),
+    ("cedar", "Cedar - warm, lower"),
+    ("alloy", "Alloy - balanced, neutral"),
+    ("ash", "Ash - clear, even"),
+    ("ballad", "Ballad - soft, expressive"),
+    ("coral", "Coral - bright, friendly"),
+    ("echo", "Echo - crisp, measured"),
+    ("sage", "Sage - calm, steady"),
+    ("shimmer", "Shimmer - light, quick"),
+    ("verse", "Verse - rich, narrative"),
+]
+REALTIME_VOICE_NAMES = [v for v, _ in REALTIME_VOICES]
+
+
+def read_realtime_voice(config: Any | None = None) -> str:
+    """Which voice the next realtime session speaks in.
+
+    Precedence matches the personality: env override, then the UI selection
+    persisted by main.py, then config.json, then marin.
+    """
+    env_value = (os.getenv("ARGO_REALTIME_VOICE") or "").strip()
+    if env_value:
+        return env_value
+    try:
+        import json
+
+        raw = json.loads(REALTIME_VOICE_FILE.read_text(encoding="utf-8"))
+        chosen = str(raw.get("voice", "")).strip().lower()
+        if chosen in REALTIME_VOICE_NAMES:
+            return chosen
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    cfg = config or get_config()
+    return str(_env_or_config(cfg, "ARGO_REALTIME_VOICE", "livekit.voice", "marin") or "marin")
+
+
+def write_realtime_voice(voice: str) -> None:
+    """Persist the UI's voice selection for the next realtime session."""
+    import json
+    from datetime import datetime, timezone
+
+    name = str(voice or "").strip().lower()
+    if name not in REALTIME_VOICE_NAMES:
+        raise ValueError(f"{voice!r} is not a gpt-realtime voice. "
+                         f"Choose from: {', '.join(REALTIME_VOICE_NAMES)}")
+    REALTIME_VOICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"voice": name, "updated_at": datetime.now(timezone.utc).isoformat()}
+    tmp = REALTIME_VOICE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(REALTIME_VOICE_FILE)
 HEDRA_REALTIME_RETIRED = True
 HEDRA_REALTIME_NOTICE = (
     "Hedra retired its realtime avatar service. Voice uses direct LiveKit audio; "
@@ -47,25 +109,20 @@ LOCAL_AVATAR_MEDIA_TYPES = {
 }
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-DEFAULT_REALTIME_INSTRUCTIONS = (
-    "You are ARGO, Tommy's realtime voice assistant. Speak like a capable, fun "
-    "room assistant, not a research lab system. This is a spoken conversation, so "
-    "talk the way a sharp person talks out loud. "
-    "Let the answer be as long as the question deserves and no longer: a quick "
-    "question gets a quick answer, and something he actually wants explained gets "
-    "the explanation, in a few sentences, without padding it out. Do not cut an "
-    "answer short to seem brisk, and do not stretch one to seem thorough. "
-    "Get to the point first, then add detail if it earns its place. Do not narrate "
-    "your thinking, do not preface the answer with filler, and do not recap what he "
-    "just said before answering. "
-    "Be highly interruptible: when Tommy starts talking, stop cleanly and listen, "
-    "without apologizing or replaying the interruption. If a short phrase is "
-    "ambiguous, ask one quick grounding question instead of guessing. "
-    "Do not lecture about gates, policy, or architecture unless Tommy asks. "
-    "You can act on this machine through your tools - use them and answer from what "
-    "they return. Never claim an action you did not take, and never claim you cannot "
-    "do something when one of your tools would do it."
+from core.persona_briefs import (  # noqa: E402
+    CONVERSATION_CONTRACT,
+    DEEP_THINK_POLICY,
+    TOOL_POLICY,
+    compose_instructions,
+    instruction_fingerprint,
 )
+
+# The product contract is the base instruction. Everything ARGO is told is
+# assembled once, in core.persona_briefs.compose_instructions; these names are
+# kept so existing callers and tests keep working.
+DEFAULT_REALTIME_INSTRUCTIONS = CONVERSATION_CONTRACT
+TOOL_BRIEF = TOOL_POLICY
+DEEP_THINK_BRIEF = DEEP_THINK_POLICY
 
 
 def read_voice_personality(config: Any | None = None) -> str:
@@ -92,7 +149,7 @@ def read_voice_personality(config: Any | None = None) -> str:
         pass
 
     cfg = config or get_config()
-    return str(_env_or_config(cfg, "ARGO_PERSONALITY", "personality.default", "neutral") or "neutral")
+    return str(_env_or_config(cfg, "ARGO_PERSONALITY", "personality.default", "argo") or "argo")
 
 
 def write_voice_personality(personality: str) -> None:
@@ -110,31 +167,23 @@ def write_voice_personality(personality: str) -> None:
     tmp.replace(VOICE_PERSONALITY_FILE)
 
 
-def compose_realtime_instructions(base_instructions: str, personality: str) -> str:
-    """Fold a persona's tone into the realtime instructions.
+def compose_realtime_instructions(
+    base_instructions: str,
+    personality: str,
+    *,
+    deep_think: bool = True,
+) -> str:
+    """Assemble everything the realtime model is told - once, here.
 
-    The realtime model emits audio directly, so there is no text for the persona
-    post-processors in personas/ to transform. The persona has to be carried here
-    instead — as manner, never as scripted lines.
+    Order: the conversation contract (what every ARGO does), the selected
+    persona's voice AND collaboration style, the deep-think policy, the short
+    tool policy. Nothing else is layered on top: not the classic personas'
+    text post-processors, not a tool manual, not a second system prompt.
+
+    `base_instructions` is the contract unless a caller overrides it (tests
+    do); an unknown persona contributes no manner at all.
     """
-    try:
-        from personas import get_voice_style
-
-        style = get_voice_style(personality)
-    except Exception:
-        style = ""
-
-    if not style:
-        return base_instructions
-
-    return (
-        f"{base_instructions}\n\n"
-        f"Voice and manner: {style} "
-        "Carry this purely through word choice, rhythm and attitude. Never "
-        "announce or describe your personality, never use a signature catchphrase, "
-        "tagline or recurring stock phrase, and never let the manner crowd out the "
-        "substance. If manner and a clear useful answer ever conflict, the answer wins."
-    )
+    return compose_instructions(personality, deep_think=deep_think, contract=base_instructions)
 
 
 @dataclass(frozen=True)
@@ -152,13 +201,66 @@ class LiveKitRealtimeConfig:
     temperature: float
     speed: float
     token_ttl_minutes: int
+    # Deliberate, not hair-trigger. A cough, a chair creak and ARGO's own
+    # speaker bleeding back into the Brio all used to clear the old 0.08s.
     min_interruption_duration: float
     false_interruption_timeout: float
     speaker_id_enabled: bool
     speaker_id_provider: str
-    personality: str = "neutral"
+    personality: str = "argo"
+    instruction_fingerprint: str = ""
     noise_cancellation: bool = True
     idle_processes: int = 1
+    # How the model decides Tommy has finished a thought. "semantic_vad" reads
+    # the words, not just the silence, which is the difference between waiting
+    # through a mid-sentence pause and talking over him.
+    turn_detection: str = "semantic_vad"
+    # How ready it is to jump in. "low" waits longest - that is the setting
+    # that stops it answering half a question.
+    turn_eagerness: str = "low"
+    # Server-side cleanup on the inbound mic. "far_field" suits a speakerphone
+    # across a desk with an AC running; "near_field" suits a headset.
+    input_noise_reduction: str = "far_field"
+    # How many words he has to actually say before it counts as an
+    # interruption. 0 means a cough stops her mid-sentence.
+    min_interruption_words: int = 2
+    deep_think_enabled: bool = True
+    deep_think_model: str = "gpt-5.5"
+    deep_think_timeout: float = 90.0
+    # Where to land if the configured realtime model will not run. Never the
+    # same string as `model`, or a failure would retry itself forever.
+    fallback_model: str = "gpt-realtime-1.5"
+    # Said clearly and on purpose, these stop ARGO the instant they are
+    # recognised - they do not wait for the sustained-speech threshold that
+    # keeps coughs and the AC from barging in.
+    urgent_interrupt_phrases: tuple[str, ...] = (
+        "stop", "wait", "hold on", "hang on", "pause",
+        "stop talking", "shut up", "never mind", "nevermind", "no no",
+    )
+
+
+DEFAULT_URGENT_INTERRUPT_PHRASES = (
+    "stop", "wait", "hold on", "hang on", "pause",
+    "stop talking", "shut up", "never mind", "nevermind", "no no",
+)
+
+
+def _urgent_phrases(cfg: Any) -> tuple[str, ...]:
+    """Phrases that interrupt ARGO immediately, however short.
+
+    The sustained-speech threshold is what keeps a cough or the AC from
+    cutting her off, but it also means a single confident "stop" would have
+    to wait for a second word that is never coming. These get a fast path
+    instead: recognised clearly at the start of an utterance, they interrupt
+    at once.
+    """
+    raw = _env_or_config(cfg, "ARGO_REALTIME_URGENT_PHRASES", "livekit.urgent_interrupt_phrases", None)
+    if raw is None:
+        return DEFAULT_URGENT_INTERRUPT_PHRASES
+    if isinstance(raw, str):
+        raw = [part for part in raw.split(",")]
+    phrases = tuple(str(p).strip().lower() for p in raw if str(p).strip())
+    return phrases or DEFAULT_URGENT_INTERRUPT_PHRASES
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -176,6 +278,14 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         cfg, "ARGO_REALTIME_INSTRUCTIONS", "livekit.instructions", DEFAULT_REALTIME_INSTRUCTIONS
     )
 
+    _instructions = compose_realtime_instructions(
+        base_instructions,
+        personality,
+        deep_think=_bool(
+            _env_or_config(cfg, "ARGO_DEEP_THINK_ENABLED", "livekit.deep_think.enabled", True)
+        ),
+    )
+
     return LiveKitRealtimeConfig(
         enabled=_bool(_env_or_config(cfg, "ARGO_LIVEKIT_ENABLED", "livekit.enabled", True)),
         url=_env_or_config(cfg, "LIVEKIT_URL", "livekit.url", "ws://127.0.0.1:7880"),
@@ -184,8 +294,9 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         room=_clean_name(_env_or_config(cfg, "ARGO_LIVEKIT_ROOM", "livekit.room", "argo-live")),
         agent_name=_clean_name(_env_or_config(cfg, "LIVEKIT_AGENT_NAME", "livekit.agent_name", "")),
         model=_env_or_config(cfg, "ARGO_REALTIME_MODEL", "livekit.model", "gpt-realtime"),
-        voice=_env_or_config(cfg, "ARGO_REALTIME_VOICE", "livekit.voice", "marin"),
-        instructions=compose_realtime_instructions(base_instructions, personality),
+        voice=read_realtime_voice(cfg),
+        instructions=_instructions,
+        instruction_fingerprint=instruction_fingerprint(_instructions),
         personality=personality,
         greeting=_env_or_config(cfg, "ARGO_REALTIME_GREETING", "livekit.greeting", ""),
         temperature=_float(_env_or_config(cfg, "ARGO_REALTIME_TEMPERATURE", "livekit.temperature", 0.6), 0.6),
@@ -199,18 +310,18 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
                 cfg,
                 "ARGO_REALTIME_MIN_INTERRUPTION_DURATION",
                 "livekit.min_interruption_duration",
-                0.08,
+                0.35,
             ),
-            0.08,
+            0.35,
         ),
         false_interruption_timeout=_float(
             _env_or_config(
                 cfg,
                 "ARGO_REALTIME_FALSE_INTERRUPTION_TIMEOUT",
                 "livekit.false_interruption_timeout",
-                0.22,
+                1.2,
             ),
-            0.22,
+            1.2,
         ),
         speaker_id_enabled=_bool(
             _env_or_config(cfg, "ARGO_SPEAKER_ID_ENABLED", "speaker_identity.enabled", False)
@@ -218,11 +329,49 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         speaker_id_provider=_env_or_config(
             cfg, "ARGO_SPEAKER_ID_PROVIDER", "speaker_identity.provider", "speechmatics"
         ),
+        # Default ON. It was defaulting to False with no key in config.json, so
+        # the plugin was installed, the code path existed, and the mic was
+        # still feeding raw room noise and speaker echo straight to the model.
         noise_cancellation=_bool(
             _env_or_config(
-                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", False
+                cfg, "ARGO_REALTIME_NOISE_CANCELLATION", "livekit.noise_cancellation", True
             )
         ),
+        turn_detection=str(
+            _env_or_config(cfg, "ARGO_REALTIME_TURN_DETECTION", "livekit.turn_detection", "semantic_vad")
+        ).strip().lower(),
+        turn_eagerness=str(
+            _env_or_config(cfg, "ARGO_REALTIME_TURN_EAGERNESS", "livekit.turn_eagerness", "low")
+        ).strip().lower(),
+        input_noise_reduction=str(
+            _env_or_config(
+                cfg, "ARGO_REALTIME_INPUT_NOISE_REDUCTION", "livekit.input_noise_reduction", "far_field"
+            )
+        ).strip().lower(),
+        min_interruption_words=max(
+            0,
+            _int(
+                _env_or_config(
+                    cfg, "ARGO_REALTIME_MIN_INTERRUPTION_WORDS", "livekit.min_interruption_words", 2
+                ),
+                2,
+            ),
+        ),
+        deep_think_enabled=_bool(
+            _env_or_config(cfg, "ARGO_DEEP_THINK_ENABLED", "livekit.deep_think.enabled", True)
+        ),
+        deep_think_model=str(
+            _env_or_config(cfg, "ARGO_DEEP_THINK_MODEL", "livekit.deep_think.model", "gpt-5.5")
+        ).strip(),
+        deep_think_timeout=_float(
+            _env_or_config(cfg, "ARGO_DEEP_THINK_TIMEOUT", "livekit.deep_think.timeout_seconds", 90.0),
+            90.0,
+        ),
+        fallback_model=str(
+            _env_or_config(cfg, "ARGO_REALTIME_FALLBACK_MODEL", "livekit.fallback_model",
+                           "gpt-realtime-1.5")
+        ).strip(),
+        urgent_interrupt_phrases=_urgent_phrases(cfg),
         idle_processes=max(
             0,
             _int(
@@ -276,12 +425,40 @@ def build_livekit_token_response(
         )
 
     token = token_builder.to_jwt()
+    dispatch_id = ""
+    dispatch_error = ""
     try:
         dispatch_id = ensure_livekit_agent_dispatch(room_name=room_name, config=cfg)
-    except Exception:
+    except Exception as exc:
         # Some local LiveKit builds expose worker dispatch through room config
-        # but return 503 from the agent dispatch API. Do not block browser join.
-        dispatch_id = ""
+        # but return 503 from the agent dispatch API. Do not block the browser
+        # join - but never swallow this silently again. A failure here IS the
+        # "ARGO says LIVE and then cannot hear me" bug: the browser joins the
+        # room and publishes a mic track, and no agent is ever dispatched to
+        # listen to it. It has to be loud in the log and visible on the
+        # dashboard instead of looking like success.
+        dispatch_error = f"{type(exc).__name__}: {exc}"
+        logger.error(
+            "[LiveKit] AGENT DISPATCH FAILED room=%s agent=%s - the browser will "
+            "join and publish audio but NOTHING will be listening: %s",
+            room_name,
+            cfg.agent_name,
+            dispatch_error,
+        )
+    else:
+        logger.info(
+            "[LiveKit] agent dispatched room=%s agent=%s dispatch_id=%s",
+            room_name,
+            cfg.agent_name,
+            dispatch_id or "(none)",
+        )
+    if cfg.agent_name and not dispatch_id and not dispatch_error:
+        dispatch_error = "no dispatch id returned"
+        logger.error(
+            "[LiveKit] no dispatch id for room=%s agent=%s - no agent will hear this session",
+            room_name,
+            cfg.agent_name,
+        )
 
     return {
         "enabled": cfg.enabled,
@@ -292,6 +469,8 @@ def build_livekit_token_response(
         "token": token,
         "agent_name": cfg.agent_name,
         "agent_dispatch_id": dispatch_id,
+        "agent_dispatch_error": dispatch_error,
+        "agent_listening": bool(dispatch_id) or not cfg.agent_name,
         "model": cfg.model,
         "voice": cfg.voice,
         "ttl_minutes": ttl_minutes,
@@ -321,10 +500,38 @@ def ensure_livekit_agent_dispatch(
         lk = api.LiveKitAPI(url=cfg.url, api_key=cfg.api_key, api_secret=cfg.api_secret)
         try:
             room = _clean_name(room_name or cfg.room) or cfg.room
-            existing = await lk.agent_dispatch.list_dispatch(room)
+            # A dispatch record outlives the worker process that claimed it.
+            # Reusing one left behind by a killed worker is exactly why ARGO
+            # goes LIVE and then hears nothing: LiveKit considers the agent
+            # already dispatched for this room and never hands the job to the
+            # worker that is actually running now. Clear ours out and dispatch
+            # fresh on every connect - creating a dispatch is cheap, silence
+            # is not.
+            try:
+                existing = await lk.agent_dispatch.list_dispatch(room)
+            except Exception:
+                logger.warning(
+                    "[LiveKit] could not list dispatches for room=%s", room, exc_info=True
+                )
+                existing = []
             for dispatch in existing:
-                if dispatch.agent_name == cfg.agent_name:
-                    return dispatch.id
+                if dispatch.agent_name != cfg.agent_name:
+                    continue
+                try:
+                    await lk.agent_dispatch.delete_dispatch(dispatch.id, room)
+                    logger.info(
+                        "[LiveKit] cleared stale dispatch id=%s agent=%s room=%s",
+                        dispatch.id,
+                        cfg.agent_name,
+                        room,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[LiveKit] could not clear stale dispatch id=%s room=%s",
+                        dispatch.id,
+                        room,
+                        exc_info=True,
+                    )
             created = await lk.agent_dispatch.create_dispatch(
                 api.CreateAgentDispatchRequest(
                     room=room,
@@ -332,11 +539,35 @@ def ensure_livekit_agent_dispatch(
                     metadata="argo-realtime",
                 )
             )
+            logger.info(
+                "[LiveKit] created dispatch id=%s agent=%s room=%s",
+                created.id,
+                cfg.agent_name,
+                room,
+            )
             return created.id
         finally:
             await lk.aclose()
 
     return asyncio.run(_ensure())
+
+
+def _active_now() -> dict[str, Any] | None:
+    try:
+        from core.voice_active import read_active
+
+        return read_active()
+    except Exception:
+        return None
+
+
+def _persona_list() -> list[dict[str, str]]:
+    try:
+        from core.persona_briefs import selectable
+
+        return selectable()
+    except Exception:
+        return []
 
 
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
@@ -359,12 +590,38 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         # showing the classic STT and TTS settings while Smooth Voice was
         # doing the talking, so it has to be able to say which is live.
         "voice_mode": read_voice_mode(),
+        # What the live session is ACTUALLY running, from the record the
+        # worker writes at session start - not what is saved in config.
+        "active_now": _active_now(),
+        # What the NEXT connection will use. Shown separately, so a changed
+        # dropdown never looks like it transformed a session already in flight.
+        "saved_for_next": {
+            "model": cfg.model,
+            "voice": cfg.voice,
+            "personality": cfg.personality,
+            "instruction_fingerprint": cfg.instruction_fingerprint,
+        },
+        "personas": _persona_list(),
+        "voices": [{"name": v, "label": label} for v, label in REALTIME_VOICES],
         "interruption": {
             "allowed": True,
             "min_duration": cfg.min_interruption_duration,
+            "min_words": cfg.min_interruption_words,
             "false_timeout": cfg.false_interruption_timeout,
         },
+        "turn_detection": {
+            "mode": cfg.turn_detection,
+            "eagerness": cfg.turn_eagerness,
+        },
+        "urgent_interrupt_phrases": list(cfg.urgent_interrupt_phrases),
+        "fallback_model": cfg.fallback_model,
         "noise_cancellation": cfg.noise_cancellation,
+        "input_noise_reduction": cfg.input_noise_reduction,
+        "deep_think": {
+            "enabled": cfg.deep_think_enabled,
+            "model": cfg.deep_think_model,
+            "timeout_seconds": cfg.deep_think_timeout,
+        },
     }
 
 

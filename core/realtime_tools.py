@@ -36,6 +36,12 @@ LIST_CAP = 200
 
 
 def _fail(action: str, exc: Exception) -> dict:
+    # A refused path is a policy answer, not a crash: hand back the refusal
+    # itself so the model can say why, instead of a generic tool failure.
+    refusal = getattr(exc, "refusal", None)
+    if isinstance(refusal, dict):
+        logger.info("[Tools] %s refused: %s", action, refusal.get("message"))
+        return refusal
     logger.exception("[Tools] %s failed", action)
     return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -143,14 +149,42 @@ def writable_roots() -> list[Path]:
     return write_roots()
 
 
-def _within_allowed(target: Path) -> bool:
+def _within_allowed(target: Path, raw: str | None = None) -> bool:
     from core.filesystem_access import check_read
 
-    return check_read(target) is None
+    return check_read(target, raw) is None
+
+
+class PathRefused(Exception):
+    """A path was rejected on its shape, before anything touched the disk.
+
+    resolve() collapses "..", so by the time a traversal reaches check_read it
+    looks like an ordinary absolute path. _resolve is the last place the
+    original shape is still visible, so the refusal is raised from here and
+    each tool turns it into an ordinary ok:false result.
+    """
+
+    def __init__(self, refusal: dict) -> None:
+        super().__init__(refusal.get("message", "path refused"))
+        self.refusal = refusal
+
+
+def _refuse_bad_shape(raw: str) -> None:
+    from core.filesystem_access import path_shape_problem
+
+    problem = path_shape_problem(raw)
+    if problem:
+        raise PathRefused({
+            "ok": False,
+            "error": "bad_path",
+            "path": str(raw),
+            "message": f"I won't follow that path - {problem}.",
+        })
 
 
 def _resolve(raw: str, base: Path | None = None) -> Path:
     """Interpret a spoken path. Relative means inside the ARGO install."""
+    _refuse_bad_shape(raw)
     text = (raw or "").strip().strip('"').strip("'")
     candidate = Path(text).expanduser() if text else (base or ROOT)
     if not candidate.is_absolute():
@@ -166,13 +200,14 @@ def list_folder(path: str = "") -> dict:
     """
     try:
         raw = (path or "").strip().strip('"')
+        _refuse_bad_shape(raw)
         candidate = Path(raw).expanduser() if raw else ROOT
         target = candidate if candidate.is_absolute() else (ROOT / raw)
         target = target.resolve()
 
         from core.filesystem_access import check_read
 
-        refusal = check_read(target)
+        refusal = check_read(target, raw)
         if refusal:
             return refusal
         if not target.is_dir():
@@ -199,11 +234,12 @@ def read_text_file(path: str, max_chars: int = 4000) -> dict:
     """Read a text file inside an allowed folder."""
     try:
         raw = (path or "").strip().strip('"')
+        _refuse_bad_shape(raw)
         candidate = Path(raw).expanduser()
         target = (candidate if candidate.is_absolute() else (ROOT / raw)).resolve()
         from core.filesystem_access import check_read
 
-        refusal = check_read(target)
+        refusal = check_read(target, raw)
         if refusal:
             return refusal
         if not target.is_file():

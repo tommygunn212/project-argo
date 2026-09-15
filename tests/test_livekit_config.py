@@ -95,13 +95,23 @@ def test_realtime_defaults_are_tuned_for_fast_turn_taking(monkeypatch):
 
     cfg = get_livekit_realtime_config(FakeConfig({"livekit": {}}))
 
-    assert cfg.min_interruption_duration == 0.08
-    assert cfg.false_interruption_timeout == 0.22
-    # Interruption stays fast, but reply LENGTH is no longer capped: the
-    # instructions used to say "answer in one short sentence by default",
-    # which is what made ARGO sound clipped next to ChatGPT voice mode.
+    # These used to be 0.08s / 0.22s - hair-trigger. That is what made ARGO
+    # cut in on a cough, on the AC, and on her own speaker bleeding back into
+    # the Brio. Generic speech now has to be sustained; a decisive "stop" gets
+    # a separate fast path instead (see urgent_interrupt_phrases), so nothing
+    # urgent pays for this.
+    assert cfg.min_interruption_duration >= 0.3
+    assert cfg.false_interruption_timeout >= 1.0
+    assert cfg.min_interruption_words >= 2
+    assert "stop" in cfg.urgent_interrupt_phrases
+
+    # Reply LENGTH stays uncapped: the instructions used to say "answer in one
+    # short sentence by default", which is what made ARGO sound clipped next
+    # to ChatGPT voice mode.
     assert "one short sentence" not in cfg.instructions
-    assert "as long as the question deserves" in cfg.instructions
+    lowered = cfg.instructions.lower()
+    assert "a casual thought gets a real but short reply" in lowered
+    assert "not a cut-off" in lowered
 
 
 def test_mobile_access_status_uses_request_host(monkeypatch):

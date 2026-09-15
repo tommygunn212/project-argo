@@ -21,6 +21,8 @@ import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
+from dataclasses import replace
+
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io, function_tool
 from livekit.plugins import openai
 
@@ -45,23 +47,19 @@ logger = logging.getLogger("ARGO.LiveKit")
 
 
 class ArgoRealtimeAgent(Agent):
+    """ARGO as the realtime model sees her.
+
+    The instructions are assembled once, in core.livekit_config, and handed
+    here whole. This constructor used to append its own paragraph of tool
+    directions on top of them, which meant most of what the model read was
+    about machinery - and it started answering like a command parser because
+    that is what it had mostly been told about.
+    """
+
     def __init__(self, cfg: LiveKitRealtimeConfig) -> None:
+        self._cfg = cfg
         super().__init__(
-            instructions=cfg.instructions + (
-                " When the user reports ARGO is broken or requests self repair, call repair_argo with their exact words. "
-                "Read the actual returned findings. Ask them to say 'approve repair' or 'cancel repair' "
-                "only when a runtime proposal exists; pass that exact phrase to the tool when they do. "
-                "Never invent a successful repair. Code repairs require dashboard approval and review."
-                " You can act on this machine, and you should. Hardware: get_pc_specs. Disk space: "
-                "get_drive_space. Live health and temperatures: get_system_status. Your own faults: "
-                "run_self_diagnostics. Files: list_argo_files, list_folder, read_text_file, find_files. "
-                "Music: play_music, stop_music, next_track, get_music_status. Applications: open_app, "
-                "close_app, focus_app, list_running_apps. Sound: set_volume, get_volume. "
-                "Call the tool and answer from what it returns. Never guess at hardware, free space, "
-                "filenames or what is playing, and never say you cannot look or cannot do something "
-                "when one of these tools would do it. If a tool returns ok false, say plainly what it "
-                "reported - if a folder was refused, tell Tommy it needs adding to "
-                "filesystem.allowed_folders in config.json."),
+            instructions=cfg.instructions,
             allow_interruptions=True,
         )
 
@@ -83,6 +81,55 @@ class ArgoRealtimeAgent(Agent):
             return await asyncio.to_thread(call)
         except Exception as exc:
             return json.dumps({"status": "unavailable", "message": f"ARGO repair service could not be reached: {type(exc).__name__}. Open System in the dashboard."})
+
+    @function_tool()
+    async def think_deeply(self, question: str) -> str:
+        """Work a hard question through properly with the deep reasoning model.
+
+        Use for planning, research, debugging, comparing options, designing
+        something, or any question where answering fast would answer worse.
+        Pass the question in Tommy's own words. Not for ordinary conversation
+        or quick facts.
+        """
+        from core import deep_think
+
+        cfg = self._cfg
+        if not cfg.deep_think_enabled:
+            return json.dumps({"ok": False, "message": "Deep thinking is switched off."})
+
+        history = []
+        try:
+            session = self.session
+            for item in list(getattr(session.history, "items", []) or [])[-24:]:
+                text = (getattr(item, "text_content", "") or "").strip()
+                if text:
+                    history.append({"role": getattr(item, "role", "user"), "text": text})
+        except Exception:
+            logger.debug("[DeepThink] could not read session history", exc_info=True)
+
+        from core import voice_events as _ve
+        _ve.emit("deep_think_start", question=question[:200], model=cfg.deep_think_model)
+        result = await deep_think.think(
+            question,
+            history=history,
+            model=cfg.deep_think_model,
+            timeout=cfg.deep_think_timeout,
+            persona=cfg.personality,
+        )
+        _ve.emit("deep_think_done", ok=result.ok, cancelled=result.cancelled,
+                 elapsed_ms=result.elapsed_ms, error=result.error)
+        if result.cancelled:
+            # He started talking again. Saying anything here would talk over
+            # the thought that cancelled this one.
+            return json.dumps({"ok": False, "cancelled": True, "message": ""})
+        if not result.ok:
+            return json.dumps({"ok": False, "message": deep_think.spoken_failure(result)})
+        return json.dumps({
+            "ok": True,
+            "answer": result.text,
+            "model": result.model,
+            "elapsed_ms": result.elapsed_ms,
+        })
 
     # ---- Capability tools ------------------------------------------------
     # Bodies live in core.realtime_tools so they are unit-testable without a
@@ -440,6 +487,13 @@ def build_agent_server(cfg: LiveKitRealtimeConfig | None = None) -> AgentServer:
     )
 
     server.rtc_session(_run_realtime_session, agent_name=cfg.agent_name)
+
+    try:
+        from core import voice_events as _ve
+
+        _ve.emit("worker_built", agent_name=cfg.agent_name, url=cfg.url, model=cfg.model)
+    except Exception:
+        pass
     return server
 
 
@@ -457,8 +511,46 @@ def _ensure_logging() -> None:
     logger.setLevel(logging.INFO)
 
 
+def _safe_error(exc: BaseException) -> str:
+    """An exception message with anything key-shaped removed."""
+    import re
+
+    text = f"{type(exc).__name__}: {exc}"
+    text = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
+    text = re.sub(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}", "***jwt***", text)
+    return text[:400]
+
+
 async def _run_realtime_session(ctx: JobContext) -> None:
     _ensure_logging()
+    # Emitted before anything else can fail, so "the entrypoint ran" is
+    # separable from "the model built" and "the session started". The
+    # lifecycle test correlates on room name; every event carries the pid.
+    from core import voice_events as _ve
+
+    job = getattr(ctx, "job", None)
+    _ve.emit(
+        "job_received",
+        job_id=str(getattr(job, "id", "") or ""),
+        dispatch_id=str(getattr(job, "dispatch_id", "") or ""),
+        room=str(getattr(getattr(job, "room", None), "name", "") or ""),
+    )
+
+    async def _on_shutdown(reason: str = "") -> None:
+        _ve.emit("session_end", room=str(getattr(getattr(job, "room", None), "name", "") or ""),
+                 job_id=str(getattr(job, "id", "") or ""), reason=str(reason or ""))
+        try:
+            from core.voice_active import mark_ended
+
+            mark_ended(str(reason or ""))
+        except Exception:
+            pass
+
+    try:
+        ctx.add_shutdown_callback(_on_shutdown)
+    except Exception:
+        logger.debug("[Session] could not register shutdown callback", exc_info=True)
+
     cfg = get_livekit_realtime_config()
     logger.info(
         "[LiveKit] starting ARGO realtime session room=%s model=%s voice=%s personality=%s",
@@ -466,6 +558,18 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         cfg.model,
         cfg.voice,
         cfg.personality,
+    )
+    # The whole live configuration in one line, so "what was actually running"
+    # is answerable from the log instead of from config.json.
+    logger.info(
+        "[LiveKit] live config: model=%s voice=%s personality=%s turn=%s/%s "
+        "noise_cancellation=%s input_reduction=%s min_interrupt=%.2fs/%dw "
+        "false_interrupt=%.2fs deep_think=%s(%s)",
+        cfg.model, cfg.voice, cfg.personality, cfg.turn_detection, cfg.turn_eagerness,
+        cfg.noise_cancellation, cfg.input_noise_reduction,
+        cfg.min_interruption_duration, cfg.min_interruption_words,
+        cfg.false_interruption_timeout,
+        cfg.deep_think_enabled, cfg.deep_think_model,
     )
     speaker_status = speaker_identity_status(cfg)
     logger.info(
@@ -478,11 +582,20 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     await ctx.connect()
 
+    try:
+        realtime_llm = _build_realtime_model(cfg)
+    except Exception as exc:
+        _ve.emit("model_build_failed", model=cfg.model, error=_safe_error(exc))
+        raise
+    _ve.emit("model_built", model=cfg.model, voice=cfg.voice)
+
     session = AgentSession(
-        llm=_build_realtime_model(cfg),
+        llm=realtime_llm,
         allow_interruptions=True,
         min_interruption_duration=cfg.min_interruption_duration,
-        min_interruption_words=0,
+        # Was 0: a cough, a chair creak or a stray "uh" cut ARGO off
+        # mid-sentence. He has to actually start saying something.
+        min_interruption_words=cfg.min_interruption_words,
         false_interruption_timeout=cfg.false_interruption_timeout,
         resume_false_interruption=False,
         user_away_timeout=None,
@@ -492,28 +605,143 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     noise_filter = _build_noise_filter(cfg)
 
-    await session.start(
-        agent=ArgoRealtimeAgent(cfg),
-        room=ctx.room,
-        room_input_options=room_io.RoomInputOptions(
-            audio_enabled=True,
-            text_enabled=True,
-            pre_connect_audio=True,
-            noise_cancellation=noise_filter,
-        ),
-        room_output_options=room_io.RoomOutputOptions(
-            audio_enabled=True,
-            transcription_enabled=True,
-        ),
+    input_options = room_io.RoomInputOptions(
+        audio_enabled=True,
+        text_enabled=True,
+        pre_connect_audio=True,
+        noise_cancellation=noise_filter,
+    )
+    output_options = room_io.RoomOutputOptions(
+        audio_enabled=True,
+        transcription_enabled=True,
     )
 
+    try:
+        await session.start(
+            agent=ArgoRealtimeAgent(cfg),
+            room=ctx.room,
+            room_input_options=input_options,
+            room_output_options=output_options,
+        )
+    except Exception:
+        # A model name this account or this plugin will not run must not mean
+        # a silent room. Fall back to the known-good model once, loudly, and
+        # keep the conversation - Tommy finds out from the log and the
+        # dashboard, not from talking to nobody.
+        fallback = (cfg.fallback_model or "").strip()
+        if not fallback or fallback == cfg.model:
+            logger.exception("[LiveKit] session failed to start and there is no fallback model")
+            raise
+        logger.exception(
+            "[LiveKit] %s would not start; falling back to %s for this session",
+            cfg.model, fallback,
+        )
+        session.llm = _build_realtime_model(replace(cfg, model=fallback))
+        await session.start(
+            agent=ArgoRealtimeAgent(cfg),
+            room=ctx.room,
+            room_input_options=input_options,
+            room_output_options=output_options,
+        )
+        logger.warning("[LiveKit] running on fallback model %s", fallback)
+
     _log_session_activity(session)
+    _wire_urgent_interrupts(session, cfg)
+
+    # The one line that answers "what is she running right now", and the
+    # record the dashboard's 'Active now' is filled from.
+    from core.voice_active import write_active
+
+    room_name = str(getattr(getattr(ctx, "room", None), "name", "") or "")
+    logger.info(
+        "[LiveKit] Active now: %s / %s / personality %s (instructions %s)",
+        cfg.model, cfg.voice, cfg.personality, cfg.instruction_fingerprint,
+    )
+    write_active(
+        model=cfg.model, voice=cfg.voice, personality=cfg.personality,
+        instruction_fingerprint=cfg.instruction_fingerprint, room=room_name,
+        job_id=str(getattr(getattr(ctx, "job", None), "id", "") or ""),
+    )
+    _ve.emit("session_config", model=cfg.model, voice=cfg.voice, personality=cfg.personality,
+             instruction_fingerprint=cfg.instruction_fingerprint, room=room_name)
 
     if cfg.greeting:
         session.generate_reply(instructions=cfg.greeting, allow_interruptions=True)
 
     # Keep the optional avatar session strongly referenced for the room lifetime.
     _ = hedra_avatar
+
+
+_PUNCTUATION = str.maketrans("", "", ".,!?;:\"'")
+
+
+def matches_urgent_phrase(transcript: str, phrases) -> str | None:
+    """Is this the start of someone saying "stop"?
+
+    Matched at the START of the utterance only. "Stop" and "stop talking"
+    fire; "don't stop the music" and "wait for the render to finish" do not,
+    because in those the phrase is not what the sentence opens with. That
+    distinction is the whole safety margin here - a fast path that fires on
+    any occurrence of the word "wait" would cut ARGO off constantly.
+    """
+    text = (transcript or "").strip().lower().translate(_PUNCTUATION)
+    if not text:
+        return None
+    for phrase in phrases:
+        if text == phrase or text.startswith(phrase + " "):
+            return phrase
+    return None
+
+
+def _wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) -> None:
+    """Let a clear "stop" cut in without waiting for the sustained threshold.
+
+    min_interruption_words keeps a cough, a chair creak and the AC from
+    barging in - but it also means a single decisive word would sit waiting
+    for a second one. So generic speech keeps the stronger threshold and
+    these get their own door: interim transcripts are watched, and the first
+    one that opens with an urgent phrase interrupts at once.
+
+    Only while ARGO is actually speaking, and only once per utterance.
+    """
+    phrases = tuple(cfg.urgent_interrupt_phrases or ())
+    if not phrases:
+        logger.info("[Interrupt] no urgent phrases configured")
+        return
+
+    state = {"fired_for": ""}
+
+    def on_transcript(event):
+        transcript = getattr(event, "transcript", "") or ""
+        if not transcript.strip():
+            return
+        if getattr(event, "is_final", False):
+            state["fired_for"] = ""       # utterance over; re-arm
+            return
+        if state["fired_for"] and transcript.startswith(state["fired_for"]):
+            return                        # already interrupted on this one
+
+        phrase = matches_urgent_phrase(transcript, phrases)
+        if not phrase:
+            return
+        if str(getattr(session, "agent_state", "")) != "speaking":
+            return                        # nothing to interrupt
+
+        state["fired_for"] = transcript
+        logger.info("[Interrupt] urgent phrase %r -> interrupting now (heard %r)",
+                    phrase, transcript[:80])
+        from core import voice_events as _ve
+        _ve.emit("urgent_interrupt", phrase=phrase, transcript=transcript[:120])
+        try:
+            session.interrupt()
+        except Exception:
+            logger.warning("[Interrupt] session.interrupt() failed", exc_info=True)
+
+    try:
+        session.on("user_input_transcribed", on_transcript)
+        logger.info("[Interrupt] urgent phrases armed: %s", ", ".join(phrases))
+    except Exception:
+        logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
 
 
 def _log_session_activity(session: AgentSession) -> None:
@@ -523,6 +751,13 @@ def _log_session_activity(session: AgentSession) -> None:
     "starting ARGO realtime session" line and nothing after it. Every handler
     swallows its own errors - diagnostics must never be what breaks voice.
     """
+
+    from core import voice_events
+
+    voice_events.emit(
+        "session_start",
+        room=str(getattr(getattr(session, "_room", None), "name", "") or ""),
+    )
 
     def _safe(name, handler):
         def wrapped(event):
@@ -537,22 +772,41 @@ def _log_session_activity(session: AgentSession) -> None:
         if transcript is None:
             transcript = getattr(event, "transcript", "")
         logger.info("[Session] heard: %r", transcript)
+        voice_events.emit("heard", text=transcript,
+                          final=bool(getattr(event, "is_final", False)))
 
     def on_user_state(event):
-        logger.info("[Session] user %s -> %s",
-                    getattr(event, "old_state", "?"), getattr(event, "new_state", "?"))
+        old = getattr(event, "old_state", "?")
+        new = getattr(event, "new_state", "?")
+        logger.info("[Session] user %s -> %s", old, new)
+        voice_events.emit("user_state", old=str(old), new=str(new))
+        # The moment he starts talking again, any deep request in flight is
+        # answering a question he has moved on from. Killing it here is the
+        # difference between ARGO listening and ARGO talking over him with a
+        # paragraph about something else.
+        if str(new) == "speaking":
+            from core import deep_think
+
+            killed = deep_think.cancel_all(reason="user_started_speaking")
+            if killed:
+                voice_events.emit("deep_think_cancelled", count=killed)
 
     def on_agent_state(event):
-        logger.info("[Session] agent %s -> %s",
-                    getattr(event, "old_state", "?"), getattr(event, "new_state", "?"))
+        old = getattr(event, "old_state", "?")
+        new = getattr(event, "new_state", "?")
+        logger.info("[Session] agent %s -> %s", old, new)
+        voice_events.emit("agent_state", old=str(old), new=str(new))
 
     def on_conversation_item(event):
         item = getattr(event, "item", None)
         logger.info("[Session] %s said: %r",
                     getattr(item, "role", "?"), (getattr(item, "text_content", "") or "")[:200])
+        voice_events.emit("said", role=str(getattr(item, "role", "?")),
+                          text=(getattr(item, "text_content", "") or "")[:600])
 
     def on_error(event):
         logger.error("[Session] error: %s", getattr(event, "error", event))
+        voice_events.emit("error", detail=str(getattr(event, "error", event))[:400])
 
     for name, handler in (
         ("user_input_transcribed", on_user_input),
@@ -589,12 +843,81 @@ def _build_noise_filter(cfg: LiveKitRealtimeConfig):
     return filt
 
 
+def _build_turn_detection(cfg: LiveKitRealtimeConfig):
+    """How the model decides Tommy has finished a thought.
+
+    This was never configured, so the session ran on the Realtime API's plain
+    silence timer: stop making noise for long enough and it answers, whether
+    or not the sentence was finished. Semantic VAD reads the words as well as
+    the silence, and "low" eagerness is the setting that waits longest.
+
+    Returns a value for the `turn_detection` kwarg, or None meaning "do not
+    pass the kwarg at all" - passing turn_detection=None would switch server
+    turn detection OFF, which is not the same thing and would be much worse.
+    """
+    mode = (cfg.turn_detection or "").strip().lower()
+    if mode in ("", "default", "auto_default"):
+        return None
+    eagerness = (cfg.turn_eagerness or "auto").strip().lower()
+    if eagerness not in ("low", "medium", "high", "auto"):
+        logger.warning("[Turn] unknown eagerness %r; using 'auto'", eagerness)
+        eagerness = "auto"
+
+    if mode == "semantic_vad":
+        payload = {
+            "type": "semantic_vad",
+            "eagerness": eagerness,
+            "create_response": True,
+            "interrupt_response": True,
+        }
+    elif mode == "server_vad":
+        payload = {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            # Long on purpose: a normal thinking pause is ~600ms and the old
+            # default cut in under it.
+            "silence_duration_ms": 900,
+            "create_response": True,
+            "interrupt_response": True,
+        }
+    else:
+        logger.warning("[Turn] unknown turn_detection %r; leaving the API default", mode)
+        return None
+
+    # Prefer the SDK's typed object when this openai version exposes it, and
+    # fall back to the plain dict the API accepts. Which one was used is
+    # logged, because "turn detection is configured" and "turn detection
+    # actually reached the session" are different claims.
+    try:
+        from openai.types import realtime as _realtime_types
+
+        typed = _realtime_types.realtime_audio_input_turn_detection.SemanticVad(**payload) \
+            if mode == "semantic_vad" else None
+        if typed is not None:
+            logger.info("[Turn] %s eagerness=%s (typed)", mode, eagerness)
+            return typed
+    except Exception:
+        logger.debug("[Turn] typed turn-detection unavailable; sending a dict", exc_info=True)
+
+    logger.info("[Turn] %s eagerness=%s (dict)", mode, eagerness)
+    return payload
+
+
 def _build_realtime_model(cfg: LiveKitRealtimeConfig) -> openai.realtime.RealtimeModel:
+    from core.runtime_guard import ensure_openai_key
+
+    ensure_openai_key()
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for OpenAI Realtime voice.")
+        raise RuntimeError(
+            "OPENAI_API_KEY is required for OpenAI Realtime voice, and it was "
+            "not found in this process, in .env, or in the Windows User "
+            "environment. ARGO will have accepted this job and then failed "
+            "inside it, which from the room looks like no agent ever arrived."
+        )
 
-    return openai.realtime.RealtimeModel(
+    kwargs = dict(
         model=cfg.model,
         voice=cfg.voice,
         modalities=["text", "audio"],
@@ -602,6 +925,51 @@ def _build_realtime_model(cfg: LiveKitRealtimeConfig) -> openai.realtime.Realtim
         temperature=cfg.temperature,
         speed=cfg.speed,
     )
+
+    turn_detection = _build_turn_detection(cfg)
+    if turn_detection is not None:
+        kwargs["turn_detection"] = turn_detection
+
+    # Pin the input transcription language. Without it, two of thirty turns in
+    # the first real mic run came back as Chinese characters (the AC was on)
+    # and ARGO answered one. Typed object first, dict fallback, logged either
+    # way - same pattern as turn detection.
+    try:
+        from openai.types import realtime as _rt
+
+        transcription = _rt.AudioTranscription(model="gpt-4o-mini-transcribe", language="en")
+        logger.info("[Audio] input transcription: gpt-4o-mini-transcribe language=en (typed)")
+    except Exception:
+        transcription = {"model": "gpt-4o-mini-transcribe", "language": "en"}
+        logger.info("[Audio] input transcription: gpt-4o-mini-transcribe language=en (dict)")
+    kwargs["input_audio_transcription"] = transcription
+
+    reduction = (cfg.input_noise_reduction or "").strip().lower()
+    if reduction in ("near_field", "far_field"):
+        kwargs["input_audio_noise_reduction"] = reduction
+        logger.info("[Audio] server-side input noise reduction: %s", reduction)
+    elif reduction not in ("", "off", "none"):
+        logger.warning("[Audio] unknown input_noise_reduction %r; leaving it off", reduction)
+
+    logger.info(
+        "[LiveKit] realtime model=%s voice=%s temp=%.2f speed=%.2f turn_detection=%s",
+        cfg.model, cfg.voice, cfg.temperature, cfg.speed,
+        (turn_detection if isinstance(turn_detection, dict) else type(turn_detection).__name__)
+        if turn_detection is not None else "api-default",
+    )
+
+    try:
+        return openai.realtime.RealtimeModel(**kwargs)
+    except TypeError:
+        # An older plugin that does not know one of these kwargs must not take
+        # voice down - drop the optional ones and say so, loudly.
+        logger.exception(
+            "[LiveKit] realtime model rejected the tuning kwargs; retrying without "
+            "turn_detection/noise-reduction. Turn-taking will be the API default."
+        )
+        for optional in ("turn_detection", "input_audio_noise_reduction", "input_audio_transcription"):
+            kwargs.pop(optional, None)
+        return openai.realtime.RealtimeModel(**kwargs)
 
 
 def _apply_livekit_env(cfg: LiveKitRealtimeConfig) -> None:
@@ -693,7 +1061,56 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
 
 
 if __name__ == "__main__":
-    # Built here, not at import. build_agent_server() calls _apply_livekit_env,
-    # which mutates os.environ, and opens a LiveKit AgentServer - importing this
-    # module to inspect its tools or to test them should do neither.
-    cli.run_app(build_agent_server())
+    # Guarded here rather than in build_agent_server(): the framework's idle
+    # job executors import this module, and they must not each take the lock
+    # or re-run the environment check.
+    #
+    # The lock is the important half. A second worker registering under the
+    # same agent_name fails silently - LiveKit just hands the job to whichever
+    # it likes, so "can ARGO hear me" becomes a coin flip and both workers'
+    # logs look identical either way.
+    from core.runtime_guard import SingleInstance, verify_runtime
+
+    verify_runtime("realtime-worker")
+
+    def _watch_for_drain() -> None:
+        """Graceful stop on request, without a console or a kill.
+
+        The framework shuts down on SIGINT: _ExitCli -> server.drain() ->
+        server.aclose(), which deregisters this worker from LiveKit. On
+        Windows nothing outside the process can deliver that signal to a
+        hidden, redirected process - but the process can raise it on itself.
+        So: a file appears, this thread raises SIGINT, the main thread takes
+        the normal shutdown path. The file is removed first so a stale one
+        cannot stop the next start.
+        """
+        import signal
+        import time as _time
+
+        drain_file = ROOT / "runtime" / "locks" / "realtime-worker.drain"
+        while True:
+            _time.sleep(0.5)
+            try:
+                if drain_file.exists():
+                    try:
+                        drain_file.unlink()
+                    except Exception:
+                        pass
+                    logger.warning("[Lifecycle] drain requested - shutting down gracefully")
+                    from core import voice_events as _ve
+                    _ve.emit("drain_requested")
+                    signal.raise_signal(signal.SIGINT)
+                    return
+            except Exception:
+                logger.debug("[Lifecycle] drain watcher error", exc_info=True)
+
+    import threading as _threading
+
+    _threading.Thread(target=_watch_for_drain, name="argo-drain-watcher", daemon=True).start()
+
+    with SingleInstance("realtime-worker"):
+        # Built here, not at import. build_agent_server() calls
+        # _apply_livekit_env, which mutates os.environ, and opens a LiveKit
+        # AgentServer - importing this module to inspect its tools or to test
+        # them should do neither.
+        cli.run_app(build_agent_server())
