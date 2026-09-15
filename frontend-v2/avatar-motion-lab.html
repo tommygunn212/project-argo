@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ARGO Avatar Motion Lab</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #05070d;
+    --panel: #0c111c;
+    --line: #1c2740;
+    --ink: #d7e3f4;
+    --dim: #7c8ba6;
+    --accent: #35d6ff;
+    --warm: #ff8a5c;
+    --ok: #46e39b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px 48px;
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 20px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .04em; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0; }
+  .flag { color: var(--warm); font-size: 12px; margin-top: 6px; }
+
+  .stages { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+  .stage { flex: 1 1 360px; min-width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .stage h2 { margin: 0 0 2px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .stage .note { margin: 0 0 10px; font-size: 12px; color: var(--dim); min-height: 32px; }
+  canvas { width: 100%; height: auto; aspect-ratio: 1/1; display: block; background: #04060b; border-radius: 8px; border: 1px solid var(--line); }
+
+  .controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .row:last-child { margin-bottom: 0; }
+  label.lbl { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; min-width: 92px; }
+  button {
+    background: #14203a; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button[aria-pressed="true"] { background: var(--accent); color: #04060b; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=file] { color: var(--dim); font-size: 12px; max-width: 100%; }
+
+  .meters { display: flex; flex-wrap: wrap; gap: 14px; }
+  .meter { flex: 1 1 128px; min-width: 110px; }
+  .meter .name { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; }
+  .bar { height: 7px; background: #0a1120; border-radius: 4px; overflow: hidden; margin-top: 3px; border: 1px solid var(--line); }
+  .bar > i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .05s linear; }
+  .bar.warm > i { background: var(--warm); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  td.num { font-variant-numeric: tabular-nums; color: var(--accent); }
+  .verdict { margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; }
+  .verdict.good { border-color: var(--ok); color: var(--ok); }
+  .verdict.bad { border-color: var(--warm); color: var(--warm); }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ARGO Avatar Motion Lab</h1>
+  <p class="sub">Neutral placeholder rig. Proving the motion system before any final art goes on it.</p>
+  <p class="flag">Feature-flagged. Smooth Voice audio is untouched by this page.</p>
+</header>
+
+<div class="stages">
+  <div class="stage">
+    <h2>Before &mdash; mouth scale</h2>
+    <p class="note">One mouth shape, scaled by an audio envelope. Everything else is frozen. This is the current behaviour.</p>
+    <canvas id="beforeCanvas" width="420" height="420"></canvas>
+  </div>
+  <div class="stage">
+    <h2>After &mdash; motion rig</h2>
+    <p class="note">Jaw aperture separated from a blend across six visemes, plus eyes, posture, breathing and chamber light on independent timing.</p>
+    <canvas id="afterCanvas" width="420" height="420"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="row">
+    <label class="lbl" for="stateButtons">State</label>
+    <span id="stateButtons">
+      <button data-state="IDLE" aria-pressed="false">Idle</button>
+      <button data-state="LISTENING" aria-pressed="false">Listening</button>
+      <button data-state="THINKING" aria-pressed="false">Thinking</button>
+      <button data-state="SPEAKING" aria-pressed="true">Speaking</button>
+      <button data-state="INTERRUPTED" aria-pressed="false">Interrupt</button>
+    </span>
+  </div>
+  <div class="row">
+    <label class="lbl" for="audioFile">Audio</label>
+    <button id="synthBtn" aria-pressed="true">Synthetic speech</button>
+    <button id="playBtn" disabled>Play file</button>
+    <button id="stopBtn">Stop</button>
+    <input type="file" id="audioFile" accept="audio/*">
+  </div>
+  <div class="row">
+    <label class="lbl">Proof</label>
+    <button id="stripBtn">Capture frame strip</button>
+    <button id="resetBtn">Reset stats</button>
+    <span id="status" style="color:var(--dim);font-size:12px"></span>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="row"><label class="lbl">Live</label></div>
+  <div class="meters" id="meters"></div>
+</div>
+
+<div class="controls">
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Measure</th><th>Before</th><th>After</th><th>What it means</th></tr></thead>
+      <tbody id="statsBody"></tbody>
+    </table>
+  </div>
+  <div class="verdict" id="verdict">Collecting&hellip;</div>
+</div>
+
+<canvas id="stripCanvas" width="1680" height="240" style="width:100%;margin-top:16px;display:none"></canvas>
+
+<script src="/v2-assets/avatar-motion.js"></script>
+<script>
+(function () {
+  'use strict';
+  var M = window.ArgoAvatarMotion;
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ------------------------------------------------------------------
+  // Renderer - deliberately synthetic. No skin, no human lip-sync filter.
+  // ------------------------------------------------------------------
+
+  function drawHead(ctx, w, h, pose, opts) {
+    var cx = w / 2, cy = h / 2;
+    ctx.clearRect(0, 0, w, h);
+
+    var tilt = pose.tilt || 0, nod = pose.nod || 0;
+    var breath = (pose.breath == null ? 0.5 : pose.breath);
+
+    ctx.save();
+    ctx.translate(cx, cy + nod * h * 0.5 + (breath - 0.5) * h * 0.012);
+    ctx.rotate(tilt);
+
+    var R = w * 0.30 * (1 + (breath - 0.5) * 0.012);
+
+    // Head shell
+    ctx.strokeStyle = 'rgba(53,214,255,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, R * 0.82, R * 1.06, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Circuit lines
+    var circuit = pose.circuit == null ? 0.1 : pose.circuit;
+    ctx.strokeStyle = 'rgba(53,214,255,' + (0.08 + circuit * 0.5).toFixed(3) + ')';
+    ctx.lineWidth = 1;
+    for (var i = -3; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.78, i * R * 0.24);
+      ctx.lineTo(R * 0.78, i * R * 0.24);
+      ctx.stroke();
+    }
+    for (var j = -2; j <= 2; j++) {
+      ctx.beginPath();
+      ctx.moveTo(j * R * 0.32, -R * 1.0);
+      ctx.lineTo(j * R * 0.32, R * 1.0);
+      ctx.stroke();
+    }
+
+    // Eyes
+    var gx = (pose.gaze && pose.gaze.x) || 0;
+    var gy = (pose.gaze && pose.gaze.y) || 0;
+    var lid = pose.lid == null ? 1 : pose.lid;
+    var eyeY = -R * 0.24;
+    [-1, 1].forEach(function (side) {
+      var ex = side * R * 0.34;
+      ctx.strokeStyle = 'rgba(53,214,255,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, R * 0.19, R * 0.11, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      if (lid > 0.08) {
+        var grd = ctx.createRadialGradient(ex + gx * R * 0.09, eyeY + gy * R * 0.06, 1,
+                                           ex + gx * R * 0.09, eyeY + gy * R * 0.06, R * 0.10);
+        grd.addColorStop(0, 'rgba(180,244,255,' + lid.toFixed(3) + ')');
+        grd.addColorStop(1, 'rgba(53,214,255,0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.ellipse(ex + gx * R * 0.09, eyeY + gy * R * 0.06,
+                    R * 0.075, R * 0.075 * lid, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (lid < 0.98) {
+        ctx.strokeStyle = 'rgba(53,214,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ex - R * 0.19, eyeY - R * 0.11 + R * 0.22 * (1 - lid));
+        ctx.lineTo(ex + R * 0.19, eyeY - R * 0.11 + R * 0.22 * (1 - lid));
+        ctx.stroke();
+      }
+    });
+
+    // Jaw panel / vocal chamber
+    var aperture = pose.aperture || 0;
+    var chamber = pose.chamber == null ? 0 : pose.chamber;
+    var mouthY = R * 0.42;
+
+    if (chamber > 0.02) {
+      var cg = ctx.createRadialGradient(0, mouthY, 1, 0, mouthY, R * 0.5);
+      cg.addColorStop(0, 'rgba(53,214,255,' + (chamber * 0.55).toFixed(3) + ')');
+      cg.addColorStop(1, 'rgba(53,214,255,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(0, mouthY, R * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Mouth
+    if (opts.scaleOnly) {
+      // The old approach, drawn honestly: one shape, scaled.
+      var s = aperture;
+      ctx.strokeStyle = 'rgba(255,138,92,0.9)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(0, mouthY, R * 0.30, R * 0.30 * s, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      var w8 = pose.visemes || {};
+      // Width and roundness come from SHAPE; height comes from APERTURE.
+      var width = R * (0.20
+        + (w8.wide || 0) * 0.22
+        + (w8.open || 0) * 0.10
+        + (w8.contact || 0) * 0.13
+        - (w8.rounded || 0) * 0.05);
+      var height = R * (0.02 + aperture * 0.34) * (1 - (w8.contact || 0) * 0.55);
+      var round = (w8.rounded || 0);
+
+      ctx.strokeStyle = 'rgba(255,138,92,0.95)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      if (round > 0.35) {
+        var rr = Math.max(height, R * 0.09) * (0.7 + round * 0.6);
+        ctx.ellipse(0, mouthY, rr * 0.82, rr, 0, 0, Math.PI * 2);
+      } else {
+        ctx.ellipse(0, mouthY, width, Math.max(height, R * 0.012), 0, 0, Math.PI * 2);
+      }
+      ctx.stroke();
+
+      // Teeth / contact line - the state a scale-only rig cannot express.
+      if ((w8.contact || 0) > 0.18) {
+        ctx.strokeStyle = 'rgba(215,227,244,' + Math.min(1, w8.contact * 1.4).toFixed(3) + ')';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(-width * 0.78, mouthY - height * 0.12);
+        ctx.lineTo(width * 0.78, mouthY - height * 0.12);
+        ctx.stroke();
+      }
+
+      // Jaw plate swings with aperture.
+      ctx.strokeStyle = 'rgba(53,214,255,0.35)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.46, mouthY + R * 0.16 + aperture * R * 0.16);
+      ctx.quadraticCurveTo(0, mouthY + R * 0.44 + aperture * R * 0.26,
+                           R * 0.46, mouthY + R * 0.16 + aperture * R * 0.16);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // ------------------------------------------------------------------
+  // Old rig, for the honest comparison
+  // ------------------------------------------------------------------
+
+  function LegacyEnvelope() { this.value = 0; }
+  LegacyEnvelope.prototype.update = function (energy, dt) {
+    var target = energy > 0.045 ? Math.min(1, energy * 2.4) : 0;
+    var k = 1 - Math.exp(-dt / 0.08);
+    this.value += (target - this.value) * k;
+    return this.value;
+  };
+
+  // ------------------------------------------------------------------
+  // Audio
+  // ------------------------------------------------------------------
+
+  var audioCtx = null, analyser = null, sourceNode = null, freqData = null, timeData = null;
+  var prevSpectrum = null, usingSynth = true, synthT = 0;
+
+  function ensureAudio() {
+    if (audioCtx) return audioCtx;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.35;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    timeData = new Uint8Array(analyser.fftSize);
+    return audioCtx;
+  }
+
+  /* Synthetic speech: a sequence of vowel-ish and fricative-ish segments, so
+   * the lab is useful with no audio file and no microphone. */
+  function syntheticFeatures(dt) {
+    synthT += dt;
+    var seg = Math.floor(synthT / 0.17) % 9;
+    var table = [
+      { e: 0.55, c: 0.74, h: 0.18 },  // wide vowel
+      { e: 0.14, c: 0.86, h: 0.80 },  // sibilant
+      { e: 0.60, c: 0.15, h: 0.12 },  // rounded vowel
+      { e: 0.48, c: 0.40, h: 0.20 },  // open vowel
+      { e: 0.02, c: 0.20, h: 0.10 },  // brief closure
+      { e: 0.58, c: 0.68, h: 0.22 },
+      { e: 0.16, c: 0.88, h: 0.76 },
+      { e: 0.52, c: 0.22, h: 0.14 },
+      { e: 0.01, c: 0.10, h: 0.05 },  // pause
+    ][seg];
+    var jitter = Math.sin(synthT * 37) * 0.04;
+    return {
+      energy: Math.max(0, table.e + jitter),
+      centroid: table.c,
+      hfRatio: table.h,
+      flux: (synthT % 0.17) < 0.03 ? 0.8 : 0.08,
+    };
+  }
+
+  function liveFeatures() {
+    if (!analyser) return { energy: 0, centroid: 0, hfRatio: 0, flux: 0 };
+    analyser.getByteFrequencyData(freqData);
+    analyser.getByteTimeDomainData(timeData);
+    var f = M.analyseFrame(freqData, timeData, prevSpectrum);
+    prevSpectrum = freqData.slice(0);
+    return f;
+  }
+
+  // ------------------------------------------------------------------
+  // Wiring
+  // ------------------------------------------------------------------
+
+  var rig = new M.AvatarRig({ seed: 20260915 });
+  rig.setState('SPEAKING');
+  var legacy = new LegacyEnvelope();
+
+  var afterCtx = $('afterCanvas').getContext('2d');
+  var beforeCtx = $('beforeCanvas').getContext('2d');
+
+  var samples = [];
+  var legacySamples = [];
+  var stripFrames = [];
+  var capturingStrip = false;
+
+  $('stateButtons').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    rig.setState(btn.dataset.state);
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+  });
+
+  $('synthBtn').addEventListener('click', function () {
+    usingSynth = true;
+    this.setAttribute('aria-pressed', 'true');
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} sourceNode = null; }
+    $('status').textContent = 'synthetic speech';
+  });
+
+  var loadedBuffer = null;
+  $('audioFile').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    $('status').textContent = 'decoding ' + file.name + '…';
+    file.arrayBuffer().then(function (buf) {
+      return ensureAudio().decodeAudioData(buf);
+    }).then(function (decoded) {
+      loadedBuffer = decoded;
+      $('playBtn').disabled = false;
+      $('status').textContent = file.name + ' ready (' + decoded.duration.toFixed(1) + 's)';
+    }).catch(function (err) {
+      $('status').textContent = 'could not decode: ' + err.message;
+    });
+  });
+
+  $('playBtn').addEventListener('click', function () {
+    if (!loadedBuffer) return;
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} }
+    sourceNode = audioCtx.createBufferSource();
+    sourceNode.buffer = loadedBuffer;
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    sourceNode.start();
+    usingSynth = false;
+    $('synthBtn').setAttribute('aria-pressed', 'false');
+    rig.setState('SPEAKING');
+    $('status').textContent = 'playing file';
+  });
+
+  $('stopBtn').addEventListener('click', function () {
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} sourceNode = null; }
+    $('status').textContent = 'stopped';
+  });
+
+  $('resetBtn').addEventListener('click', function () {
+    samples = []; legacySamples = [];
+    $('status').textContent = 'stats reset';
+  });
+
+  $('stripBtn').addEventListener('click', function () {
+    stripFrames = []; capturingStrip = true;
+    $('status').textContent = 'capturing frame strip…';
+  });
+
+  // ------------------------------------------------------------------
+  // Meters and stats
+  // ------------------------------------------------------------------
+
+  var meterKeys = ['aperture'].concat(M.VISEMES);
+  var meterEls = {};
+  meterKeys.forEach(function (k) {
+    var wrap = document.createElement('div');
+    wrap.className = 'meter';
+    wrap.innerHTML = '<div class="name"><span>' + k + '</span><span data-v>0.00</span></div>' +
+                     '<div class="bar' + (k === 'aperture' ? ' warm' : '') + '"><i></i></div>';
+    $('meters').appendChild(wrap);
+    meterEls[k] = { bar: wrap.querySelector('i'), val: wrap.querySelector('[data-v]') };
+  });
+
+  function updateStats() {
+    var after = M.shapeVariety(samples);
+    var before = M.shapeVariety(legacySamples);
+    var rows = [
+      ['Distinct mouth shapes', before.distinctVisemes || 0, after.distinctVisemes || 0,
+       'A scale-only rig can only ever reach 1.'],
+      ['Shape changes', before.transitions || 0, after.transitions || 0,
+       'How often the mouth actually re-forms.'],
+      ['Non-mouth motion', 'none', 'eyes, head, breath, circuits',
+       'What keeps the face alive between words.'],
+    ];
+    $('statsBody').innerHTML = rows.map(function (r) {
+      return '<tr><td>' + r[0] + '</td><td class="num">' + r[1] + '</td>' +
+             '<td class="num">' + r[2] + '</td><td style="color:var(--dim)">' + r[3] + '</td></tr>';
+    }).join('');
+
+    var v = $('verdict');
+    if ((after.distinctVisemes || 0) >= 4) {
+      v.className = 'verdict good';
+      v.textContent = 'Rig is blending ' + after.distinctVisemes + ' distinct mouth shapes: ' +
+                      after.visemesSeen.join(', ') + '. This is not a scaled mouth.';
+    } else {
+      v.className = 'verdict bad';
+      v.textContent = 'Only ' + (after.distinctVisemes || 0) +
+                      ' shape(s) seen so far — let it run on speech audio.';
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Loop
+  // ------------------------------------------------------------------
+
+  var last = performance.now();
+  var statTimer = 0;
+
+  function loop(now) {
+    var dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+
+    var features = usingSynth ? syntheticFeatures(dt) : liveFeatures();
+    var pose = rig.update(dt, features);
+
+    // Old rig: mouth scale only, everything else static.
+    var legacyValue = legacy.update(
+      rig.machine.state === 'SPEAKING' ? features.energy : 0, dt);
+    var legacyPose = {
+      aperture: legacyValue, visemes: null, lid: 1,
+      gaze: { x: 0, y: 0 }, tilt: 0, nod: 0, breath: 0.5, chamber: 0, circuit: 0.1,
+    };
+
+    drawHead(afterCtx, 420, 420, pose, { scaleOnly: false });
+    drawHead(beforeCtx, 420, 420, legacyPose, { scaleOnly: true });
+
+    if (pose.state === 'SPEAKING') {
+      samples.push({ dominantViseme: pose.dominantViseme });
+      legacySamples.push({ dominantViseme: legacyValue > 0.05 ? 'open' : 'rest' });
+      if (samples.length > 3000) { samples.shift(); legacySamples.shift(); }
+    }
+
+    meterEls.aperture.bar.style.width = (pose.aperture * 100).toFixed(1) + '%';
+    meterEls.aperture.val.textContent = pose.aperture.toFixed(2);
+    M.VISEMES.forEach(function (k) {
+      var w = pose.visemes[k] || 0;
+      meterEls[k].bar.style.width = (w * 100).toFixed(1) + '%';
+      meterEls[k].val.textContent = w.toFixed(2);
+    });
+
+    if (capturingStrip) {
+      if (stripFrames.length < 7 && (stripFrames.length === 0 || now - stripFrames[stripFrames.length - 1].t > 120)) {
+        var tmp = document.createElement('canvas');
+        tmp.width = 240; tmp.height = 240;
+        tmp.getContext('2d').drawImage($('afterCanvas'), 0, 0, 240, 240);
+        stripFrames.push({ t: now, img: tmp, viseme: pose.dominantViseme });
+      }
+      if (stripFrames.length >= 7) {
+        capturingStrip = false;
+        var strip = $('stripCanvas');
+        strip.style.display = 'block';
+        var sc = strip.getContext('2d');
+        sc.fillStyle = '#04060b';
+        sc.fillRect(0, 0, strip.width, strip.height);
+        stripFrames.forEach(function (fr, i) {
+          sc.drawImage(fr.img, i * 240, 0);
+          sc.fillStyle = '#35d6ff';
+          sc.font = '14px ui-sans-serif, system-ui, sans-serif';
+          sc.fillText(fr.viseme, i * 240 + 10, 228);
+        });
+        $('status').textContent = 'frame strip captured';
+      }
+    }
+
+    statTimer += dt;
+    if (statTimer > 0.5) { statTimer = 0; updateStats(); }
+
+    requestAnimationFrame(loop);
+  }
+
+  $('status').textContent = 'synthetic speech';
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

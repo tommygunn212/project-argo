@@ -171,6 +171,14 @@ repair_bridge_token = None
 # 5) LOGGING
 # ============================================================================
 # Custom logging handler to broadcast logs via WebSocket
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    """True when an ARGO feature flag is switched on in the environment."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 class WebSocketLogHandler(logging.Handler):
     def emit(self, record):
         try:
@@ -418,6 +426,33 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("[LiveKit] token mint failed")
                 self._send_json({"error": str(exc)}, status=500)
+        elif path == '/v2/motion-lab':
+            # Avatar Motion Lab. Feature-flagged, and deliberately separate
+            # from the live avatar: it proves the rig on a neutral placeholder
+            # before any of it goes near the final ARGO art.
+            if not _env_enabled('ARGO_AVATAR_MOTION_LAB'):
+                self._send_json(
+                    {
+                        "error": "Motion lab is off",
+                        "enable": "set ARGO_AVATAR_MOTION_LAB=1 and restart",
+                    },
+                    status=404,
+                )
+                return
+            lab = Path(__file__).parent / 'frontend-v2' / 'avatar-motion-lab.html'
+            if not lab.exists():
+                self._send_json({"error": "motion lab page missing"}, status=404)
+                return
+            content = lab.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(content)
+            return
         elif path.startswith('/v2-assets/'):
             asset_name = Path(path).name
             if asset_name == 'local-avatar-media':
@@ -449,6 +484,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 'cortana_portrait_smirky.png': ('assets', 'image/png'),
                 'argo_cyber_male.png': ('assets', 'image/png'),
                 'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
+                'avatar-motion.js': ('assets', 'application/javascript; charset=utf-8'),
                 'cortana_hedra_avatar_test.mp4': ('assets', 'video/mp4'),
             }
             if asset_name not in allowed_assets:
