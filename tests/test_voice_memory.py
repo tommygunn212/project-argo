@@ -18,9 +18,11 @@ from core import voice_memory as vm  # noqa: E402
 
 
 class FakeRow:
-    def __init__(self, key, value):
+    def __init__(self, key, value, source="explicit_user_request"):
         self.key = key
         self.value = value
+        self.source = source
+        self.timestamp = "2026-02-01T00:00:00Z"
 
 
 class FakeTurn:

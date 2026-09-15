@@ -23,9 +23,18 @@ from core import voice_memory as vm  # noqa: E402
 
 
 class Row:
-    def __init__(self, key, value):
+    """A row Tommy explicitly confirmed.
+
+    Only confirmed rows reach the instruction block, so these tests must use
+    them - otherwise every injection test would pass vacuously by being
+    filtered out before the sanitiser ever ran.
+    """
+
+    def __init__(self, key, value, source="explicit_user_request"):
         self.key = key
         self.value = value
+        self.source = source
+        self.timestamp = "2026-02-01T00:00:00Z"
 
 
 class Turn:
