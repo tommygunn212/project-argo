@@ -29,7 +29,7 @@ from .base import (
 # to be imported here — otherwise only consumers that import core.pipeline get a
 # populated registry, and the realtime voice worker (a separate process that does
 # not import the pipeline) sees an empty one.
-from . import neutral, plain, tommy_gunn, tommy_mix, jarvis, rick, claptrap  # noqa: F401,E402
+from . import argo, neutral, plain, tommy_gunn, tommy_mix, jarvis, rick, claptrap  # noqa: F401,E402
 
 __all__ = [
     "ResponseType",

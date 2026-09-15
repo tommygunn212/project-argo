@@ -14,7 +14,7 @@ import personas
 from core import livekit_config
 
 
-SELECTABLE = ["tommy_gunn", "jarvis", "tommy_mix", "rick", "claptrap", "plain"]
+SELECTABLE = ["argo", "tommy_gunn", "jarvis", "tommy_mix", "rick", "claptrap", "plain"]
 
 
 # --- registry -------------------------------------------------------------
@@ -41,14 +41,25 @@ def test_unknown_persona_returns_empty_style():
 def test_compose_includes_style_and_guardrails():
     out = livekit_config.compose_realtime_instructions("BASE.", "jarvis")
     assert out.startswith("BASE.")
-    assert personas.get_voice_style("jarvis") in out
+    from core.persona_briefs import get as _brief
+    assert _brief("jarvis").block in out
     # Personality must be manner only, never scripted lines.
     assert "catchphrase" in out.lower()
     assert "the answer wins" in out.lower()
 
 
-def test_compose_with_unknown_persona_returns_base_unchanged():
-    assert livekit_config.compose_realtime_instructions("BASE.", "nope") == "BASE."
+def test_compose_with_unknown_persona_adds_no_manner():
+    """The briefs are always assembled; an unknown persona just contributes
+    no voice of its own."""
+    composed = livekit_config.compose_realtime_instructions("BASE.", "nope")
+    assert composed.startswith("BASE.")
+    assert "WHO YOU ARE TODAY:" not in composed
+
+
+def test_compose_with_a_known_persona_adds_manner():
+    composed = livekit_config.compose_realtime_instructions("BASE.", "argo")
+    assert composed.startswith("BASE.")
+    assert "WHO YOU ARE TODAY:" in composed
 
 
 def test_each_persona_produces_distinct_instructions():
@@ -109,4 +120,5 @@ def test_session_config_carries_selected_personality(temp_personality_file):
     livekit_config.write_voice_personality("claptrap")
     cfg = livekit_config.get_livekit_realtime_config()
     assert cfg.personality == "claptrap"
-    assert personas.get_voice_style("claptrap") in cfg.instructions
+    from core.persona_briefs import get as _brief
+    assert _brief("claptrap").block in cfg.instructions
