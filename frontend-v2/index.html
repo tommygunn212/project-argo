@@ -375,6 +375,11 @@ body::before {
 }
 .btn-primary:hover { background: #0284c7; box-shadow: var(--glow-sm); }
 .btn-danger { border-color: var(--accent-red); color: var(--accent-red); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.btn-live { background: #16a34a; border-color: #16a34a; color: #fff; }
+.btn-live:hover { background: #15803d; }
+.btn-live:disabled { opacity: 1; cursor: default; }
+.btn-busy { background: var(--accent2); border-color: var(--accent2); color: #fff; }
 .btn-danger:hover { background: rgba(239,68,68,0.1); }
 .btn-sm { padding: 5px 10px; font-size: 11px; }
 
@@ -1439,7 +1444,7 @@ input[type="range"]::-moz-range-thumb {
         <div class="card">
           <div class="card-title"><span class="dot"></span>QUICK ACTIONS</div>
           <div class="quick-actions" style="margin-bottom:12px">
-            <button class="btn btn-primary" onclick="startVoiceConversation()">▶ Start Smooth Voice</button>
+            <button class="btn btn-primary" id="quickSmoothBtn" onclick="toggleSmoothVoice()">▶ Start Smooth Voice</button>
             <button class="btn" onclick="pauseVoiceConversation()">⏸ Pause</button>
             <button class="btn btn-danger" onclick="sendControl('FULL_RESET'); clearDropdownSettings()">⟲ Reset</button>
           </div>
@@ -2631,17 +2636,8 @@ function handleStatus(state) {
     typingIndicator.classList.remove('visible');
   }
 
-  // Sync mic button state
-  const micBtn = $('chatMicBtn');
-  if (micBtn) {
-    if (state === 'LISTENING' || state === 'TRANSCRIBING') {
-      micBtn.classList.add('active');
-      chatMicActive = true;
-    } else if (state === 'IDLE') {
-      micBtn.classList.remove('active');
-      chatMicActive = false;
-    }
-  }
+  // Mic button follows Smooth Voice, which is what it controls.
+  syncSmoothVoiceButtons();
 }
 
 let _skipNextUserLog = false;  // prevents duplicate user bubble from server echo
@@ -3003,7 +2999,42 @@ function setRealtimeStatus(status, tone = 'dim') {
   const stopBtn = $('livekitStopBtn');
   if (startBtn) startBtn.disabled = livekitStarting || livekitConnected || status === 'CONNECTING';
   if (stopBtn) stopBtn.disabled = !livekitStarting && !livekitConnected && status !== 'CONNECTING';
+  syncSmoothVoiceButtons();
   setAvatarState(avatarVisualState());
+}
+
+// Buttons say what Smooth Voice is actually doing: blue = off (press to
+// start), amber = connecting, green = live. Driven by livekitConnected /
+// livekitStarting, never by the classic pipeline's LISTENING state.
+function syncSmoothVoiceButtons() {
+  const live = !!livekitConnected;
+  const busy = !live && !!(livekitStarting || livekitRoom);
+  const paint = (btn, labels) => {
+    if (!btn) return;
+    btn.classList.toggle('btn-primary', !live && !busy);
+    btn.classList.toggle('btn-live', live);
+    btn.classList.toggle('btn-busy', busy);
+    btn.textContent = live ? labels.live : busy ? labels.busy : labels.off;
+  };
+  paint($('livekitStartBtn'), { off: '\u25B6 Start Smooth Voice', busy: '\u2026 Connecting', live: '\u25CF Smooth Voice ON' });
+  const quick = $('quickSmoothBtn');
+  paint(quick, { off: '\u25B6 Start Smooth Voice', busy: '\u2026 Connecting (tap to cancel)', live: '\u25CF Smooth Voice ON (tap to stop)' });
+  if (quick) quick.title = live ? 'Smooth Voice is live. Tap to stop.' : busy ? 'Connecting. Tap to cancel.' : 'Smooth Voice is off. Tap to start.';
+  const mic = $('chatMicBtn');
+  if (mic) {
+    mic.classList.toggle('active', live || busy);
+    mic.title = live ? 'Smooth Voice is live - click to stop' : busy ? 'Connecting - click to cancel' : 'Start Smooth Voice (mic)';
+    try { chatMicActive = live || busy; } catch (e) {}
+  }
+}
+
+function toggleSmoothVoice() {
+  if (livekitConnected || livekitStarting || livekitRoom) {
+    stopRealtimeVoice({ resumeClassic: false });
+    return;
+  }
+  startVoiceConversation().catch(err => addSystemLog(`Smooth voice error: ${err?.message || err}`));
+  syncSmoothVoiceButtons();
 }
 
 function setRealtimeError(message) {
@@ -3893,17 +3924,7 @@ $('chatSendBtn').addEventListener('click', () => {
 // ─── Chat Mic / Stop / Mute ─────────────────────────────────
 let chatMicActive = false;
 function toggleMic() {
-  chatMicActive = !chatMicActive;
-  const btn = $('chatMicBtn');
-  if (chatMicActive) {
-    startVoiceConversation().catch(err => addSystemLog(`Smooth voice error: ${err?.message || err}`));
-    btn.classList.add('active');
-    btn.title = 'Stop listening';
-  } else {
-    pauseVoiceConversation();
-    btn.classList.remove('active');
-    btn.title = 'Start listening (mic)';
-  }
+  toggleSmoothVoice();
 }
 function stopSpeaking() {
   sendControl('FORCE_RELEASE_AUDIO');
