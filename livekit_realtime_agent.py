@@ -56,12 +56,42 @@ class ArgoRealtimeAgent(Agent):
     that is what it had mostly been told about.
     """
 
-    def __init__(self, cfg: LiveKitRealtimeConfig) -> None:
+    def __init__(self, cfg: LiveKitRealtimeConfig, memory=None) -> None:
         self._cfg = cfg
+        self._memory = memory
+        instructions = cfg.instructions
+        # Durable facts ride along with the personality. Past conversations do
+        # not - they are reached with the recall tool, so history cannot drown
+        # the directives that make her sound like herself.
+        if memory is not None:
+            try:
+                known = memory.opening_context()
+                if known:
+                    instructions = f"{instructions}\n\n{known}"
+                    logger.info("[Memory] session opened with %d remembered fact line(s)",
+                                known.count("\n- "))
+            except Exception:
+                logger.debug("[Memory] could not load opening context", exc_info=True)
         super().__init__(
-            instructions=cfg.instructions,
+            instructions=instructions,
             allow_interruptions=True,
         )
+
+    @function_tool()
+    async def recall(self, about: str) -> str:
+        """Search your own past conversations with Tommy.
+
+        Use when he refers to something you talked about before - "what did we
+        decide about", "you said", "remember when", "what was that thing" - or
+        when you need what was agreed earlier to answer properly. Pass what to
+        look for in his words. Not for general knowledge.
+        """
+        if self._memory is None:
+            return "I don't have memory wired up in this session."
+        try:
+            return await asyncio.to_thread(self._memory.recall, about)
+        except Exception as exc:
+            return f"I couldn't search my memory: {type(exc).__name__}"
 
     @function_tool()
     async def repair_argo(self, text: str) -> str:
@@ -536,6 +566,16 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         room=str(getattr(getattr(job, "room", None), "name", "") or ""),
     )
 
+    # Built before the shutdown closure so the closure can flush it.
+    try:
+        from core.voice_memory import VoiceMemory
+
+        voice_memory = VoiceMemory(session_id=str(getattr(job, "id", "") or ""))
+        logger.info("[Memory] durable voice memory ready: %s", voice_memory.stats().get("backend"))
+    except Exception:
+        voice_memory = None
+        logger.warning("[Memory] durable memory unavailable for this session", exc_info=True)
+
     async def _on_shutdown(reason: str = "") -> None:
         _ve.emit("session_end", room=str(getattr(getattr(job, "room", None), "name", "") or ""),
                  job_id=str(getattr(job, "id", "") or ""), reason=str(reason or ""))
@@ -545,6 +585,12 @@ async def _run_realtime_session(ctx: JobContext) -> None:
             mark_ended(str(reason or ""))
         except Exception:
             pass
+        try:
+            if voice_memory is not None:
+                voice_memory.flush()
+                logger.info("[Memory] %s", voice_memory.stats())
+        except Exception:
+            logger.debug("[Memory] flush failed", exc_info=True)
 
     try:
         ctx.add_shutdown_callback(_on_shutdown)
@@ -618,7 +664,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     try:
         await session.start(
-            agent=ArgoRealtimeAgent(cfg),
+            agent=ArgoRealtimeAgent(cfg, memory=voice_memory),
             room=ctx.room,
             room_input_options=input_options,
             room_output_options=output_options,
@@ -638,14 +684,14 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         )
         session.llm = _build_realtime_model(replace(cfg, model=fallback))
         await session.start(
-            agent=ArgoRealtimeAgent(cfg),
+            agent=ArgoRealtimeAgent(cfg, memory=voice_memory),
             room=ctx.room,
             room_input_options=input_options,
             room_output_options=output_options,
         )
         logger.warning("[LiveKit] running on fallback model %s", fallback)
 
-    _log_session_activity(session)
+    _log_session_activity(session, voice_memory)
     _wire_urgent_interrupts(session, cfg)
 
     # The one line that answers "what is she running right now", and the
@@ -744,7 +790,7 @@ def _wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) -
         logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
 
 
-def _log_session_activity(session: AgentSession) -> None:
+def _log_session_activity(session: AgentSession, memory=None) -> None:
     """Say, in the log, whether ARGO heard anything and whether it answered.
 
     Without this a silent session and a deaf session look identical: one
@@ -803,6 +849,8 @@ def _log_session_activity(session: AgentSession) -> None:
                     getattr(item, "role", "?"), (getattr(item, "text_content", "") or "")[:200])
         voice_events.emit("said", role=str(getattr(item, "role", "?")),
                           text=(getattr(item, "text_content", "") or "")[:600])
+        if memory is not None:
+            memory.note(str(getattr(item, "role", "")), getattr(item, "text_content", "") or "")
 
     def on_error(event):
         logger.error("[Session] error: %s", getattr(event, "error", event))
