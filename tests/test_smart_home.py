@@ -28,8 +28,9 @@ def test_redact_removes_a_known_secret():
 
 
 def test_redact_scrubs_bearer_tokens_it_has_never_seen():
-    out = sh.redact("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6")
-    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6" not in out
+    token = "redaction-test-token"
+    out = sh.redact(f"Authorization: Bearer {token}")
+    assert token not in out
 
 
 def test_redact_leaves_ordinary_text_alone():
