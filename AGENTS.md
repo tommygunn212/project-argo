@@ -116,8 +116,10 @@ because LiveKit creates placeholder participants. Require a real
 `session_start` event. Add a negative control and watch it fail.
 
 **Slow startup is not failure.** The backend takes ~30s (audio enumeration,
-model warmup, ambient calibration). `start_argo_stack.ps1` samples the ports too
-early and will report `8000 NOT LISTENING` on a healthy boot.
+model warmup, ambient calibration). `start_argo_stack.ps1` now polls each port
+for up to 60s before reporting it, instead of snapshotting once right after a
+fixed sleep — it used to report `8000 NOT LISTENING` on a healthy boot; fixed
+2026-09-17.
 
 ---
 
