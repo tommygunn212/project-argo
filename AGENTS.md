@@ -44,6 +44,12 @@ layer, currently disabled), `conversation_buffer.py` (short-term), `brain.py`
 Seven personas, each producing a distinct instruction set with a
 `v3-<sha>` fingerprint. Never stack persona text from more than one place.
 
+**Deletion is already safe — do not "fix" it.** `remove_file` / `remove_item`
+move things to a dated quarantine folder with `shutil.move`; Tommy empties it
+himself. There is no `os.remove`, `os.unlink`, `.unlink()` or `shutil.rmtree`
+anywhere in `core/` or the agent. An agent has already wasted a round proposing
+to add Recycle Bin support that was neither needed nor as safe as what exists.
+
 **Runtime safety** — `core/runtime_guard.py` (venv check via `sys.prefix`,
 single-instance PID lock, orphan detection), `core/voice_active.py`,
 `core/voice_events.py` (JSONL at `runtime/voice_tests/live_events.jsonl`).
