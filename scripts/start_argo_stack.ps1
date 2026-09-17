@@ -110,10 +110,32 @@ Start-Process -FilePath $Py -ArgumentList '-u', (Join-Path $Root 'livekit_realti
 Start-Sleep -Seconds 12
 
 # ---- 5. prove it -----------------------------------------------------------------------
+# The backend takes ~30s to bind (audio enumeration, model warmup, ambient
+# calibration). A single snapshot right after a fixed sleep catches it mid-boot
+# and misreports "NOT LISTENING" on a stack that is, in fact, healthy. Poll
+# instead: each port gets up to $PortWaitSeconds to come up on its own.
 Write-Host ""
+$PortWaitSeconds = 60
+Write-Host "Waiting for ports to bind (up to $PortWaitSeconds s; slow startup is not failure)..."
+$pending  = [System.Collections.Generic.List[int]]@($Port, 8000, 8001)
+$foundPid = @{}
+$deadline = (Get-Date).AddSeconds($PortWaitSeconds)
+while ($pending.Count -gt 0 -and (Get-Date) -lt $deadline) {
+    foreach ($p in @($pending)) {
+        $c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($c) {
+            $foundPid[$p] = $c.OwningProcess
+            $pending.Remove($p) | Out-Null
+        }
+    }
+    if ($pending.Count -gt 0) { Start-Sleep -Milliseconds 1000 }
+}
 foreach ($p in $Port, 8000, 8001) {
-    $c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    Write-Host ("  {0,-5} {1}" -f $p, $(if ($c) { "PID $($c.OwningProcess)" } else { "NOT LISTENING" }))
+    if ($foundPid.ContainsKey($p)) {
+        Write-Host ("  {0,-5} PID {1}" -f $p, $foundPid[$p])
+    } else {
+        Write-Host ("  {0,-5} NOT LISTENING (waited {1}s)" -f $p, $PortWaitSeconds)
+    }
 }
 $held = Get-ChildItem $Locks -Filter *.lock -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }
 Write-Host "  locks: $($held -join ', ')"
