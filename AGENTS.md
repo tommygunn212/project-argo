@@ -146,4 +146,25 @@ Dashboard: `http://localhost:8000/v2` — **not** `/`, which is the retired one.
   air that is a tool-description problem, not a storage one.
 - Mic scenarios C, D, E, F never run: `tools\voice_scenarios.py --only c d e f`
 - GE air conditioners built and tested; waiting only on two `.env` values.
-- Avatar motion proven on a neutral placeholder; final art not started.
+- **Avatar motion — final art not started (note for whoever picks this up next).**
+  The 5-layer rig in `frontend-v2/assets/avatar-motion.js` (jaw aperture blended
+  across six visemes, eyes, posture/breathing, chamber-light detail, and
+  IDLE/LISTENING/THINKING/SPEAKING/INTERRUPTED state) is proven only against
+  the lab's own procedural neutral placeholder face, not any real ARGO
+  portrait. Iterate on it with zero mic/voice budget: `tests/test_avatar_motion.cjs`
+  runs the rig headless in Node, and `frontend-v2/avatar-motion-lab.html` is
+  servable two ways — behind `main.py`'s `/v2/motion-lab` route with
+  `ARGO_AVATAR_MOTION_LAB=1` set, or standalone via
+  `tools/motion_lab_server.py` on `http://127.0.0.1:8777` (a throwaway server,
+  not ARGO). What's actually live today is older and simpler:
+  `frontend-v2/assets/cortana-avatar.js` drives the real portraits (Cortana /
+  Cyber Male, see `docs/AVATAR_SELECTION.md`) with one audio-envelope mouth
+  scale, no visemes. "Complete" means calibrating real per-face landmarks
+  (eye positions, a mouth region per viseme, jaw pivot) for those portraits the
+  way `cortana-avatar.js` is already calibrated for them, proving that on the
+  lab page first, and only then wiring the richer rig into the live
+  dashboard/voice avatar panels in place of (or blended with)
+  `cortana-avatar.js`'s envelope. Do not skip the "prove it on the lab page
+  first" step — a rig that looks right on a placeholder face is not proof it
+  looks right on a real one, and this is exactly the kind of task that burns a
+  lot of context/budget if picked up without reading this first.
