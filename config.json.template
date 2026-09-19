@@ -42,6 +42,14 @@
     "timeout_seconds": 30
   },
 
+  "rag": {
+    "enabled": true,
+    "provider": "anythingllm",
+    "base_url": "http://127.0.0.1:3001",
+    "workspace": "tommy-knowledge-base",
+    "timeout_seconds": 45
+  },
+
   "personality": {
     "mode": "tommy_gunn"
   },
