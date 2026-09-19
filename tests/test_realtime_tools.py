@@ -25,6 +25,7 @@ EXPECTED_TOOLS = [
     "play_music", "stop_music", "next_track", "get_music_status",
     "open_app", "close_app", "focus_app", "list_running_apps",
     "set_volume", "get_volume",
+    "set_pc_profile", "get_pc_profile_status",
 ]
 
 
