@@ -239,10 +239,36 @@ class LiveKitRealtimeConfig:
         "stop talking", "shut up", "never mind", "nevermind", "no no",
     )
 
+    # Off by default - nothing about ARGO's live behavior changes until this
+    # is deliberately turned on. When on, a sleep phrase silences her (cuts
+    # off mid-sentence if she is speaking, no confirmation) until a wake
+    # phrase is heard. She keeps transcribing while "asleep" - only her
+    # replies are gated, not the microphone - because the realtime model
+    # keeps its own turn-taking regardless of this flag.
+    wake_sleep_gate_enabled: bool = False
+    sleep_phrases: tuple[str, ...] = (
+        "go to sleep", "goodnight argo", "argo go to sleep", "argo sleep",
+    )
+    wake_phrases: tuple[str, ...] = (
+        "hey argo", "argo wake up", "wake up argo", "argo are you there",
+    )
+    # A one or two word acknowledgement on waking. Off by default to match
+    # the sleep side, which never confirms - Tommy can turn this on alone
+    # without changing anything else.
+    wake_ack_enabled: bool = False
+
 
 DEFAULT_URGENT_INTERRUPT_PHRASES = (
     "stop", "wait", "hold on", "hang on", "pause",
     "stop talking", "shut up", "never mind", "nevermind", "no no",
+)
+
+DEFAULT_SLEEP_PHRASES = (
+    "go to sleep", "goodnight argo", "argo go to sleep", "argo sleep",
+)
+
+DEFAULT_WAKE_PHRASES = (
+    "hey argo", "argo wake up", "wake up argo", "argo are you there",
 )
 
 
@@ -262,6 +288,36 @@ def _urgent_phrases(cfg: Any) -> tuple[str, ...]:
         raw = [part for part in raw.split(",")]
     phrases = tuple(str(p).strip().lower() for p in raw if str(p).strip())
     return phrases or DEFAULT_URGENT_INTERRUPT_PHRASES
+
+
+def _phrase_list(cfg: Any, env_key: str, config_key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Shared loader for the sleep/wake phrase lists - same shape as urgent
+    phrases (comma-separated env var, or a config.json list), same fallback
+    behavior (an empty or missing value means "use the default list", not
+    "no phrases at all", so a typo in config.json cannot silently disable
+    the gate's vocabulary).
+    """
+    raw = _env_or_config(cfg, env_key, config_key, None)
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        raw = [part for part in raw.split(",")]
+    phrases = tuple(str(p).strip().lower() for p in raw if str(p).strip())
+    return phrases or default
+
+
+def _sleep_phrases(cfg: Any) -> tuple[str, ...]:
+    return _phrase_list(
+        cfg, "ARGO_REALTIME_SLEEP_PHRASES", "livekit.wake_sleep_gate.sleep_phrases",
+        DEFAULT_SLEEP_PHRASES,
+    )
+
+
+def _wake_phrases(cfg: Any) -> tuple[str, ...]:
+    return _phrase_list(
+        cfg, "ARGO_REALTIME_WAKE_PHRASES", "livekit.wake_sleep_gate.wake_phrases",
+        DEFAULT_WAKE_PHRASES,
+    )
 
 
 def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeConfig:
@@ -373,6 +429,14 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
                            "gpt-realtime-1.5")
         ).strip(),
         urgent_interrupt_phrases=_urgent_phrases(cfg),
+        wake_sleep_gate_enabled=_bool(
+            _env_or_config(cfg, "ARGO_WAKE_SLEEP_GATE_ENABLED", "livekit.wake_sleep_gate.enabled", False)
+        ),
+        sleep_phrases=_sleep_phrases(cfg),
+        wake_phrases=_wake_phrases(cfg),
+        wake_ack_enabled=_bool(
+            _env_or_config(cfg, "ARGO_WAKE_ACK_ENABLED", "livekit.wake_sleep_gate.wake_ack_enabled", False)
+        ),
         idle_processes=max(
             0,
             _int(
