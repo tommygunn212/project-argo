@@ -34,6 +34,14 @@ except Exception as exc:  # pragma: no cover - optional avatar dependency
 else:
     HEDRA_PLUGIN_IMPORT_ERROR = None
 
+try:
+    from livekit.plugins import simli as simli_plugin
+except Exception as exc:  # pragma: no cover - optional avatar dependency
+    simli_plugin = None
+    SIMLI_PLUGIN_IMPORT_ERROR = exc
+else:
+    SIMLI_PLUGIN_IMPORT_ERROR = None
+
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
 from core.livekit_config import speaker_identity_status, HEDRA_REALTIME_RETIRED, HEDRA_REALTIME_NOTICE
 
@@ -733,6 +741,9 @@ async def _run_realtime_session(ctx: JobContext) -> None:
     )
 
     hedra_avatar = await _maybe_start_hedra_avatar(session, ctx.room)
+    simli_avatar = None
+    if hedra_avatar is None:
+        simli_avatar = await _maybe_start_simli_avatar(session, ctx.room)
 
     noise_filter = _build_noise_filter(cfg)
 
@@ -800,7 +811,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         session.generate_reply(instructions=cfg.greeting, allow_interruptions=True)
 
     # Keep the optional avatar session strongly referenced for the room lifetime.
-    _ = hedra_avatar
+    _ = hedra_avatar, simli_avatar
 
 
 _PUNCTUATION = str.maketrans("", "", ".,!?;:\"'")
@@ -1190,6 +1201,55 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         return avatar
     except Exception:
         logger.exception("[Hedra] avatar session failed; continuing without avatar video")
+        return None
+
+
+async def _maybe_start_simli_avatar(session: AgentSession, room):
+    """Start a Simli LiveKit avatar when explicitly enabled.
+
+    Prototype path (avatar-simli-prototype branch): Simli animates a single
+    still portrait (works with the AI-generated Cortana/Cyber Male art,
+    unlike providers that require filming a real human), so this is the
+    replacement candidate for the dead Hedra realtime avatar.
+    """
+
+    if not _env_enabled("ARGO_SIMLI_AVATAR_ENABLED", False):
+        logger.info("[Simli] avatar disabled; using local portrait fallback")
+        return None
+
+    simli_api_key = (os.getenv("SIMLI_API_KEY") or "").strip()
+    if not simli_api_key:
+        logger.warning("[Simli] ARGO_SIMLI_AVATAR_ENABLED is true but SIMLI_API_KEY is missing")
+        return None
+
+    face_id = (os.getenv("SIMLI_FACE_ID") or "").strip()
+    if not face_id:
+        logger.warning(
+            "[Simli] SIMLI_FACE_ID is missing; create/upload a face at "
+            "https://app.simli.com/faces and set SIMLI_FACE_ID"
+        )
+        return None
+
+    if simli_plugin is None:
+        logger.warning(
+            "[Simli] livekit.plugins.simli is not available; the core realtime voice path will continue: %s",
+            SIMLI_PLUGIN_IMPORT_ERROR,
+        )
+        return None
+
+    logger.info("[Simli] starting live avatar video face_id=%s", face_id)
+    try:
+        avatar = simli_plugin.AvatarSession(
+            simli_config=simli_plugin.SimliConfig(
+                api_key=simli_api_key,
+                face_id=face_id,
+            ),
+        )
+        await avatar.start(session, room=room)
+        logger.info("[Simli] live avatar session started; waiting for remote video track")
+        return avatar
+    except Exception:
+        logger.exception("[Simli] avatar session failed; continuing without avatar video")
         return None
 
 
