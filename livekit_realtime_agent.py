@@ -395,6 +395,35 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.smart_home_command, command)
 
+    # --- air conditioners (GE SmartHQ) -------------------------------------
+
+    @function_tool()
+    async def list_air_conditioners(self) -> str:
+        """List the GE SmartHQ air conditioners ARGO can see, with their state."""
+        from core import realtime_tools as T
+        return await self._run(T.ac_list)
+
+    @function_tool()
+    async def get_ac_status(self, name: str) -> str:
+        """Current state of one air conditioner: on/off, room temp, target, mode."""
+        from core import realtime_tools as T
+        return await self._run(T.ac_status, name)
+
+    @function_tool()
+    async def control_ac(self, name: str, power: str = "", temperature_f: int = 0,
+                          mode: str = "", fan: str = "") -> str:
+        """Turn an air conditioner on/off, or set its temperature, mode or fan speed.
+
+        power is "on" or "off" - leave it "" if power should not change.
+        temperature_f is 60-86 - leave it 0 if it should not change.
+        mode and fan are whatever was said ("cool", "auto", "low", "high") -
+        leave "" if they should not change. Only pass what Tommy actually
+        asked to change, and report back what the unit says its state is
+        now, not just that the command was sent.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.ac_control, name, power, temperature_f, mode, fan)
+
     # --- movies and TV ---------------------------------------------------
 
     @function_tool()

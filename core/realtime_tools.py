@@ -1218,3 +1218,89 @@ def smart_home_command(text: str) -> dict:
         return {"ok": True, "message": message}
     except Exception as exc:
         return _fail("smart_home_command", exc)
+
+# ---------------------------------------------------------------------------
+# Air conditioners (GE SmartHQ)
+# ---------------------------------------------------------------------------
+
+_AC_NOT_CONFIGURED = {
+    "ok": False,
+    "error": "not_configured",
+    "message": (
+        "GE SmartHQ isn't configured yet - add GE_SMARTHQ_USERNAME and "
+        "GE_SMARTHQ_PASSWORD to .env."
+    ),
+}
+
+
+def _ac_unit_dict(unit) -> dict:
+    from dataclasses import asdict
+
+    d = asdict(unit)
+    d.pop("raw", None)  # internal SDK payload, not for the model
+    d["description"] = unit.describe()
+    return d
+
+
+def ac_list(include_all: bool = False) -> dict:
+    """List the GE SmartHQ air conditioners and their current state."""
+    try:
+        from core.smart_home import SmartHomeError, credentials_present, discover
+
+        if not credentials_present():
+            return dict(_AC_NOT_CONFIGURED)
+        try:
+            units = discover(include_all=include_all)
+            return {"ok": True, "count": len(units), "units": [_ac_unit_dict(u) for u in units]}
+        except SmartHomeError as exc:
+            return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+    except Exception as exc:
+        return _fail("ac_list", exc)
+
+
+def ac_status(name: str) -> dict:
+    """Current state of one air conditioner by name (power, temperature, mode)."""
+    try:
+        from core.smart_home import SmartHomeError, ac_state, credentials_present
+
+        if not credentials_present():
+            return dict(_AC_NOT_CONFIGURED)
+        try:
+            unit = ac_state(name)
+            return {"ok": True, **_ac_unit_dict(unit)}
+        except SmartHomeError as exc:
+            return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+    except Exception as exc:
+        return _fail("ac_status", exc)
+
+
+def ac_control(name: str, power: str = "", temperature_f: int = 0,
+               mode: str = "", fan: str = "") -> dict:
+    """Turn an air conditioner on/off, or set its temperature, mode or fan.
+
+    power is "on"/"off" or "" to leave it alone. temperature_f is 60-86, or
+    0 to leave it alone. mode/fan are whatever GE calls them ("cool",
+    "auto", "low", "high", ...) passed through as heard - the SDK enum
+    lookup is fuzzy. Returns the unit's real state after the change, not
+    just an acknowledgement.
+    """
+    try:
+        from core.smart_home import SmartHomeError, ac_set, credentials_present
+
+        if not credentials_present():
+            return dict(_AC_NOT_CONFIGURED)
+        try:
+            power_val = {"on": True, "off": False}.get((power or "").strip().lower())
+            temp_val = int(temperature_f) if temperature_f else None
+            unit = ac_set(
+                name,
+                power=power_val,
+                temperature_f=temp_val,
+                mode=mode or None,
+                fan=fan or None,
+            )
+            return {"ok": True, **_ac_unit_dict(unit)}
+        except SmartHomeError as exc:
+            return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+    except Exception as exc:
+        return _fail("ac_control", exc)
