@@ -88,9 +88,13 @@ class ArgoRealtimeAgent(Agent):
         """
         if self._memory is None:
             return "I don't have memory wired up in this session."
+        logger.info("[Recall] tool invoked: about=%r", about)
         try:
-            return await asyncio.to_thread(self._memory.recall, about)
+            result = await asyncio.to_thread(self._memory.recall, about)
+            logger.info("[Recall] tool returned %d char(s): %r", len(result), result[:200])
+            return result
         except Exception as exc:
+            logger.warning("[Recall] tool failed", exc_info=True)
             return f"I couldn't search my memory: {type(exc).__name__}"
 
     @function_tool()

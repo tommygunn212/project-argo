@@ -311,6 +311,7 @@ class VoiceMemory:
         except Exception:
             logger.warning("[VoiceMemory] turn search failed", exc_info=True)
             return "Something went wrong searching my memory."
+        logger.info("[VoiceMemory] recall(%r) matched %d stored turn(s)", question, len(turns))
 
         layer = _mem0()
         extra = ""
