@@ -56,7 +56,6 @@
     uniform vec4 eyeLandmarks;
     uniform float frameZoom;
     uniform float mouth, jaw, blink, time, motion, breath;
-    uniform float shapeWide, shapeRound;
     void main() {
       float scale = max(screenSize.x/imageSize.x, screenSize.y/imageSize.y);
       vec2 uv = (screenUV*screenSize + (imageSize*scale-screenSize)*0.5)/(imageSize*scale);
@@ -69,9 +68,8 @@
       uv.x += alive*sin(time*0.31+0.7)*0.0018;
       float mx = (uv.x-mouthLandmark.x)/mouthLandmark.z;
       float seam = mouthLandmark.y - 0.0065*mx*mx - 0.0022*mx + sin(time*7.1+mx*2.4)*mouth*0.0014;
-      float widthSpan = 1.12 + shapeWide*0.28 - shapeRound*0.20;
-      float width = 1.0-smoothstep(0.06,max(0.3,widthSpan),abs(mx));
-      float speech = pow(mouth,0.72) * (1.0 + shapeRound*0.5 - shapeWide*0.18);
+      float width = 1.0-smoothstep(0.06,1.12,abs(mx));
+      float speech = pow(mouth,0.72);
       float asymmetric = 1.0 + 0.10*sin(time*9.0) + 0.06*sin(time*13.0+mx);
       float dy = uv.y-seam;
       float mouthRegion = exp(-pow(abs(dy)/0.115,2.0))*width;
@@ -79,8 +77,6 @@
       uv.y = seam + dy/(1.0+speech*0.90*mouthRegion*asymmetric);
       uv.y -= jaw*0.004*mouthRegion;
       uv.x += mx*speech*0.005*mouthRegion;
-      float xWarp = 1.0 - shapeWide*0.22 + shapeRound*0.26;
-      uv.x = mouthLandmark.x + mx*mouthLandmark.z*mix(1.0, xWarp, mouthRegion);
 
       // Compress and nudge the original eye texture; retain the portrait's own shading.
       for (int i=0;i<2;i++) {
@@ -181,7 +177,7 @@
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,this.image);
         this.gl=gl; this.program=program;
-        this.uniforms = Object.fromEntries(['imageSize','screenSize','gaze','mouthLandmark','eyeLandmarks','frameZoom','mouth','jaw','blink','time','motion','breath','shapeWide','shapeRound']
+        this.uniforms = Object.fromEntries(['imageSize','screenSize','gaze','mouthLandmark','eyeLandmarks','frameZoom','mouth','jaw','blink','time','motion','breath']
           .map(name=>[name,gl.getUniformLocation(program,name)]));
         this.ready=true; this.lost=false;
         const stage = this.canvas.closest('.avatar-stage');
@@ -192,7 +188,7 @@
         console.warn('Local portrait renderer unavailable',error);
       }
     }
-    draw(now, mouth, reducedMotion = false, shape) {
+    draw(now, mouth, reducedMotion = false) {
       if (!this.ready || this.lost || !this.canvas.clientWidth || !this.canvas.clientHeight) return;
       const gl=this.gl, u=this.uniforms;
       const dpr=Math.min(window.devicePixelRatio||1,1.5);
@@ -220,9 +216,7 @@
       gl.uniform4f(u.eyeLandmarks,halo?0.377:male?0.397:0.447,halo?0.270:male?0.400:0.344,halo?0.596:male?0.589:0.577,halo?0.267:male?0.398:0.344);
       gl.uniform2f(u.screenSize,w,h);
       gl.uniform2f(u.gaze,gazeX,gazeY);
-      const shapeWide=(shape&&shape.wide)||0, shapeRound=(shape&&shape.round)||0;
       gl.uniform1f(u.mouth,m);gl.uniform1f(u.jaw,jaw);gl.uniform1f(u.blink,blink);
-      gl.uniform1f(u.shapeWide,shapeWide);gl.uniform1f(u.shapeRound,shapeRound);
       gl.uniform1f(u.time,t);gl.uniform1f(u.motion,reducedMotion?0:1);gl.uniform1f(u.breath,breath);
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
