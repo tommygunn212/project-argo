@@ -519,6 +519,21 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.email_status)
 
+    @function_tool()
+    async def search_knowledge_base(self, query: str) -> str:
+        """Look up Tommy's own knowledge base for biographical or written-record answers.
+
+        This is his AnythingLLM library - his about-me profile, wiki notes,
+        blog mirrors, and book manuscript - not ordinary conversation
+        history (use recall() for that). Reach for this when he asks
+        something about his own life, writing, or history that isn't
+        already in your instructions or memory: "what did I write about
+        the Gunn Kraft build", "what's in my writing guide", "what's my
+        maker background". Not for small talk or anything about right now.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.rag_search, query)
+
 
 def _clear_stale_agents(cfg: LiveKitRealtimeConfig) -> None:
     """Remove agent participants left behind by a previous worker process.
