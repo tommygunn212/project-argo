@@ -224,6 +224,7 @@ async def _with_client(job: Callable[[Any], Any], *, timeout: float = CONNECT_TI
     cancelled once the job is done. Any failure is re-raised redacted.
     """
     try:
+        import aiohttp
         from gehomesdk import GeWebsocketClient
         from gehomesdk.clients.const import (
             EVENT_APPLIANCE_INITIAL_UPDATE,
@@ -247,7 +248,11 @@ async def _with_client(job: Callable[[Any], Any], *, timeout: float = CONNECT_TI
     client.add_event_handler(EVENT_GOT_APPLIANCE_LIST, on_list)
     client.add_event_handler(EVENT_APPLIANCE_INITIAL_UPDATE, on_appliance)
 
-    runner = asyncio.create_task(client.async_get_credentials_and_run())
+    # gehomesdk 2026.8.0 moved login to take its own aiohttp session rather
+    # than opening one internally - it is kept open for the client's whole
+    # connected lifetime (token refresh reuses it), not just the login call.
+    session = aiohttp.ClientSession()
+    runner = asyncio.create_task(client.async_get_credentials_and_run(session))
     try:
         done, _ = await asyncio.wait(
             [asyncio.create_task(listed.wait()), runner],
@@ -273,7 +278,7 @@ async def _with_client(job: Callable[[Any], Any], *, timeout: float = CONNECT_TI
         return await job(client)
     finally:
         try:
-            client.disconnect()
+            await client.disconnect()
         except Exception:
             logger.debug("[SmartHome] disconnect failed", exc_info=True)
         runner.cancel()
@@ -281,6 +286,7 @@ async def _with_client(job: Callable[[Any], Any], *, timeout: float = CONNECT_TI
             await runner
         except (asyncio.CancelledError, Exception):
             pass
+        await session.close()
 
 
 def _ac_appliances(client) -> list:
