@@ -816,6 +816,29 @@ def volume_status() -> dict:
         return _fail("volume_status", exc)
 
 
+def pc_profile_set(mode: str) -> dict:
+    """Switch the PC between the "gaming" and "editing" profiles - power
+    plan, display refresh rate, and any configured background apps to close.
+    """
+    try:
+        from core.pc_profile import apply_profile
+
+        return apply_profile(mode)
+    except Exception as exc:
+        return _fail("pc_profile_set", exc)
+
+
+def pc_profile_status() -> dict:
+    """Current power plan, display refresh rate, and which PC profile was
+    applied last."""
+    try:
+        from core.pc_profile import get_status
+
+        return get_status()
+    except Exception as exc:
+        return _fail("pc_profile_status", exc)
+
+
 def music_library_status(sample: int = 60) -> dict:
     """Is the music index still true? Where the library is, and whether it plays.
 
