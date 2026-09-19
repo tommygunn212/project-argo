@@ -313,6 +313,21 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.volume_status)
 
+    @function_tool()
+    async def set_pc_profile(self, mode: str) -> str:
+        """Switch the PC between "gaming" and "editing" profiles - power
+        plan, display refresh rate, and any configured background apps to
+        close. mode must be "gaming" or "editing"."""
+        from core import realtime_tools as T
+        return await self._run(T.pc_profile_set, mode)
+
+    @function_tool()
+    async def get_pc_profile_status(self) -> str:
+        """Current power plan, display refresh rate, and which PC profile -
+        gaming or editing - was applied last."""
+        from core import realtime_tools as T
+        return await self._run(T.pc_profile_status)
+
     # --- files: reading, searching, and now writing -----------------------
 
     @function_tool()
