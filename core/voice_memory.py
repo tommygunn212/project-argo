@@ -294,7 +294,7 @@ class VoiceMemory:
             "Use these when they change your answer. Do not recite them back at him."
         )
 
-    def recall(self, query: str, limit: int = 3) -> str:
+    def recall(self, query: str, limit: int = 5) -> str:
         """Search past conversations. Returns plain text ARGO can speak from."""
         question = _clean(query)
         if not question:

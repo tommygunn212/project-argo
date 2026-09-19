@@ -318,14 +318,36 @@ class MemoryStore:
             )
             params.append(candidate_cap)
             candidates = conn.execute(sql, params).fetchall()
-            conn.close()
 
             def _match_count(row) -> int:
                 haystack = f"{row[1]} {row[2]}".lower()
                 return sum(1 for term in terms if term in haystack)
 
+            # A "what did you just tell me" question often shares more
+            # vocabulary with its OWN follow-up turns than with the turn
+            # that actually states the fact - "what were the three things
+            # I told you to remember" scores high against every later turn
+            # asking the same thing, but not against the turn that lists
+            # them. Force the most recent couple of turns into the pool
+            # regardless of keyword match, so a just-stated fact can't be
+            # crowded out purely by being outnumbered by turns about it.
+            # Verified live 2026-09-19: without this, that exact question
+            # never surfaced the turn where Tommy said "light bulb,
+            # camera, iPhone" - recall matched turns, just not that one.
+            forced_recent_n = min(2, limit)
+            recent_sql = (
+                "SELECT id, user_text, assistant_text, source, intent, metadata, timestamp "
+                "FROM conversation_turns ORDER BY id DESC LIMIT ?"
+            )
+            recent_rows = conn.execute(recent_sql, [forced_recent_n]).fetchall()
+            conn.close()
+
+            pool = {row[0]: row for row in candidates}
+            for row in recent_rows:
+                pool.setdefault(row[0], row)
+
             rows = sorted(
-                candidates,
+                pool.values(),
                 key=lambda row: (_match_count(row), row[0]),
                 reverse=True,
             )[:limit]
