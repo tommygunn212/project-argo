@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ARGO Avatar Motion Rig - Portrait Preview</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #05070d;
+    --panel: #0c111c;
+    --line: #1c2740;
+    --ink: #d7e3f4;
+    --dim: #7c8ba6;
+    --accent: #35d6ff;
+    --warm: #ff8a5c;
+    --ok: #46e39b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px 48px;
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header { padding: 20px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .04em; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0; }
+  .flag { color: var(--warm); font-size: 12px; margin-top: 8px; max-width: 780px; }
+
+  .stages { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+  .stage { flex: 1 1 360px; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .stage h2 { margin: 0 0 2px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+  .stage .note { margin: 0 0 10px; font-size: 12px; color: var(--dim); min-height: 32px; }
+  canvas { width: 100%; height: auto; aspect-ratio: 1/1; display: block; background: #04060b; border-radius: 8px; border: 1px solid var(--line); }
+
+  .controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; max-width: 900px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .row:last-child { margin-bottom: 0; }
+  label.lbl { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; min-width: 92px; }
+  button {
+    background: #14203a; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button[aria-pressed="true"] { background: var(--accent); color: #04060b; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=file] { color: var(--dim); font-size: 12px; max-width: 100%; }
+
+  .meters { display: flex; flex-wrap: wrap; gap: 14px; max-width: 900px; }
+  .meter { flex: 1 1 128px; min-width: 110px; }
+  .meter .name { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; }
+  .bar { height: 7px; background: #0a1120; border-radius: 4px; overflow: hidden; margin-top: 3px; border: 1px solid var(--line); }
+  .bar > i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .05s linear; }
+  .bar.warm > i { background: var(--warm); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ARGO Avatar Motion Rig &mdash; Portrait Preview</h1>
+  <p class="sub">The new 5-layer rig (avatar-motion.js) driving the real portrait art through the live, unmodified Portrait renderer (cortana-avatar.js).</p>
+  <p class="flag">Honest limit of this first pass: only the rig's <b>aperture</b> curve (open/close timing, attack/release, per-state onset) is being fed into the photo, exactly the way index.html already feeds its envelope value in. The six-viseme <b>shape</b> blend (open/wide/rounded/contact/closed) is real and visible in the meters below, but the portrait shader only exposes one continuous "mouth" scalar today - it does not yet warp differently per viseme. Making the photo's mouth actually change SHAPE (not just openness) needs calibrated per-viseme landmark work in cortana-avatar.js's shader, which is the "final art not started" item AGENTS.md flags. This page is safe to leave running: it only reads cortana-avatar.js, nothing about the live dashboard is touched.</p>
+</header>
+
+<div class="stages">
+  <div class="stage">
+    <h2 id="portraitLabel">Cortana</h2>
+    <p class="note">Real portrait art, driven live by the new rig's aperture output.</p>
+    <canvas id="portraitCanvas"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="row">
+    <label class="lbl">Portrait</label>
+    <button id="btnCortana" aria-pressed="true">Cortana</button>
+    <button id="btnCyberMale" aria-pressed="false">Cyber Male</button>
+  </div>
+  <div class="row">
+    <label class="lbl">State</label>
+    <span id="stateButtons">
+      <button data-state="IDLE" aria-pressed="false">Idle</button>
+      <button data-state="LISTENING" aria-pressed="false">Listening</button>
+      <button data-state="THINKING" aria-pressed="false">Thinking</button>
+      <button data-state="SPEAKING" aria-pressed="true">Speaking</button>
+      <button data-state="INTERRUPTED" aria-pressed="false">Interrupt</button>
+    </span>
+  </div>
+  <div class="row">
+    <label class="lbl">Audio</label>
+    <button id="synthBtn" aria-pressed="true">Synthetic speech</button>
+    <button id="playBtn" disabled>Play file</button>
+    <button id="stopBtn">Stop</button>
+    <input type="file" id="audioFile" accept="audio/*">
+    <span id="status" style="color:var(--dim);font-size:12px"></span>
+  </div>
+</div>
+
+<div class="meters" id="meters"></div>
+
+<script src="/v2-assets/avatar-motion.js"></script>
+<script src="/v2-assets/cortana-avatar.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var M = window.ArgoAvatarMotion;
+  var CA = window.CortanaAvatar;
+
+  var usingSynth = true;
+  var synthT = 0;
+  var audioCtx = null, analyser = null, freqData = null, timeData = null, sourceNode = null, prevSpectrum = null;
+
+  function ensureAudio() {
+    if (audioCtx) return audioCtx;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.35;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    timeData = new Uint8Array(analyser.fftSize);
+    return audioCtx;
+  }
+
+  /* Same synthetic vowel/fricative sequence as the placeholder-face lab, so
+   * the two pages are comparable with no audio file or microphone needed. */
+  function syntheticFeatures(dt) {
+    synthT += dt;
+    var seg = Math.floor(synthT / 0.17) % 9;
+    var table = [
+      { e: 0.55, c: 0.74, h: 0.18 },
+      { e: 0.14, c: 0.86, h: 0.80 },
+      { e: 0.60, c: 0.15, h: 0.12 },
+      { e: 0.48, c: 0.40, h: 0.20 },
+      { e: 0.02, c: 0.20, h: 0.10 },
+      { e: 0.58, c: 0.68, h: 0.22 },
+      { e: 0.16, c: 0.88, h: 0.76 },
+      { e: 0.52, c: 0.22, h: 0.14 },
+      { e: 0.01, c: 0.10, h: 0.05 },
+    ][seg];
+    var jitter = Math.sin(synthT * 37) * 0.04;
+    return {
+      energy: Math.max(0, table.e + jitter),
+      centroid: table.c,
+      hfRatio: table.h,
+      flux: (synthT % 0.17) < 0.03 ? 0.8 : 0.08,
+    };
+  }
+
+  function liveFeatures() {
+    if (!analyser) return { energy: 0, centroid: 0, hfRatio: 0, flux: 0 };
+    analyser.getByteFrequencyData(freqData);
+    analyser.getByteTimeDomainData(timeData);
+    var f = M.analyseFrame(freqData, timeData, prevSpectrum);
+    prevSpectrum = freqData.slice(0);
+    return f;
+  }
+
+  // ------------------------------------------------------------------
+  // Portrait renderer - the exact class index.html uses, unmodified.
+  // ------------------------------------------------------------------
+
+  var canvas = $('portraitCanvas');
+  var portrait = new CA.Portrait(canvas, '/v2-assets/cortana_portrait_smirky.png');
+  var cyberMaleImg = null;
+
+  function selectPortrait(which) {
+    $('btnCortana').setAttribute('aria-pressed', String(which === 'cortana'));
+    $('btnCyberMale').setAttribute('aria-pressed', String(which === 'cyber_male'));
+    $('portraitLabel').textContent = which === 'cyber_male' ? 'Cyber Male' : 'Cortana';
+    if (which === 'cortana') {
+      portrait.setImageSource('/v2-assets/cortana_portrait_smirky.png');
+      return;
+    }
+    if (cyberMaleImg) { portrait.setMediaSource(cyberMaleImg, 'cyber_male'); return; }
+    var img = new Image();
+    img.onload = function () {
+      cyberMaleImg = img;
+      portrait.setMediaSource(img, 'cyber_male');
+    };
+    img.src = '/v2-assets/argo_cyber_male.png';
+  }
+
+  $('btnCortana').addEventListener('click', function () { selectPortrait('cortana'); });
+  $('btnCyberMale').addEventListener('click', function () { selectPortrait('cyber_male'); });
+
+  // ------------------------------------------------------------------
+  // Rig + controls
+  // ------------------------------------------------------------------
+
+  var rig = new M.AvatarRig({ seed: 20260918 });
+  rig.setState('SPEAKING');
+
+  $('stateButtons').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    rig.setState(btn.dataset.state);
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+  });
+
+  $('synthBtn').addEventListener('click', function () {
+    usingSynth = true;
+    this.setAttribute('aria-pressed', 'true');
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} sourceNode = null; }
+    $('status').textContent = 'synthetic speech';
+  });
+
+  var loadedBuffer = null;
+  $('audioFile').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    $('status').textContent = 'decoding ' + file.name + '...';
+    file.arrayBuffer().then(function (buf) {
+      return ensureAudio().decodeAudioData(buf);
+    }).then(function (decoded) {
+      loadedBuffer = decoded;
+      $('playBtn').disabled = false;
+      $('status').textContent = file.name + ' ready (' + decoded.duration.toFixed(1) + 's)';
+    }).catch(function (err) {
+      $('status').textContent = 'could not decode: ' + err.message;
+    });
+  });
+
+  $('playBtn').addEventListener('click', function () {
+    if (!loadedBuffer) return;
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} }
+    sourceNode = audioCtx.createBufferSource();
+    sourceNode.buffer = loadedBuffer;
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    sourceNode.start();
+    usingSynth = false;
+    $('synthBtn').setAttribute('aria-pressed', 'false');
+    rig.setState('SPEAKING');
+    Array.prototype.forEach.call($('stateButtons').querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.state === 'SPEAKING'));
+    });
+    $('status').textContent = 'playing file';
+  });
+
+  $('stopBtn').addEventListener('click', function () {
+    if (sourceNode) { try { sourceNode.stop(); } catch (_) {} sourceNode = null; }
+    $('status').textContent = 'stopped';
+  });
+
+  // ------------------------------------------------------------------
+  // Meters (diagnostic - the shape blend the photo cannot show yet)
+  // ------------------------------------------------------------------
+
+  var meterKeys = ['aperture'].concat(M.VISEMES);
+  var meterEls = {};
+  meterKeys.forEach(function (k) {
+    var wrap = document.createElement('div');
+    wrap.className = 'meter';
+    wrap.innerHTML = '<div class="name"><span>' + k + '</span><span data-v>0.00</span></div>' +
+                     '<div class="bar' + (k === 'aperture' ? ' warm' : '') + '"><i></i></div>';
+    $('meters').appendChild(wrap);
+    meterEls[k] = { bar: wrap.querySelector('i'), val: wrap.querySelector('[data-v]') };
+  });
+
+  // ------------------------------------------------------------------
+  // Loop
+  // ------------------------------------------------------------------
+
+  var last = performance.now();
+
+  function loop(now) {
+    var dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+
+    var features = usingSynth ? syntheticFeatures(dt) : liveFeatures();
+    var pose = rig.update(dt, features);
+
+    portrait.draw(now, pose.aperture, false);
+
+    meterEls.aperture.bar.style.width = (pose.aperture * 100).toFixed(1) + '%';
+    meterEls.aperture.val.textContent = pose.aperture.toFixed(2);
+    M.VISEMES.forEach(function (k) {
+      var w = pose.visemes[k] || 0;
+      meterEls[k].bar.style.width = (w * 100).toFixed(1) + '%';
+      meterEls[k].val.textContent = w.toFixed(2);
+    });
+
+    requestAnimationFrame(loop);
+  }
+
+  $('status').textContent = 'synthetic speech';
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
