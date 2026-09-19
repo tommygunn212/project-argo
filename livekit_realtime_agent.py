@@ -81,10 +81,16 @@ class ArgoRealtimeAgent(Agent):
     async def recall(self, about: str) -> str:
         """Search your own past conversations with Tommy.
 
-        Use when he refers to something you talked about before - "what did we
-        decide about", "you said", "remember when", "what was that thing" - or
-        when you need what was agreed earlier to answer properly. Pass what to
-        look for in his words. Not for general knowledge.
+        Call this BEFORE telling him you don't know, don't have, or don't
+        remember something about him - not only when he says "remember
+        when" or "what did we decide." The trigger is not a phrase, it's a
+        gap: any question about a fact, preference, or detail of his life
+        that isn't already sitting in your instructions ("what's my
+        favorite color", "what did I say about the dog") means check here
+        first, because it may well be sitting in a past turn even though
+        it never became a standing fact. Only skip this for general
+        knowledge that has nothing to do with him or a past conversation.
+        Pass what to look for in his words.
         """
         if self._memory is None:
             return "I don't have memory wired up in this session."
