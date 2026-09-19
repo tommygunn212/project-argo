@@ -379,6 +379,22 @@ class ArgoRealtimeAgent(Agent):
         from core import realtime_tools as T
         return await self._run(T.music_library_status)
 
+    # --- smart home: lights, switches, climate, locks, scenes -------------
+
+    @function_tool()
+    async def control_smart_home(self, command: str) -> str:
+        """Control a Home Assistant device: lights, switches, climate, locks, scenes.
+
+        Pass the request close to how Tommy said it - "turn on Jesse's
+        light", "dim the living room light to 30 percent", "make Jesse's
+        light blue", "is the living room light on", "turn off the living
+        room light". Also answers "what devices do I have" / "list my
+        lights". If Home Assistant is not configured, say so plainly rather
+        than guessing at device names.
+        """
+        from core import realtime_tools as T
+        return await self._run(T.smart_home_command, command)
+
     # --- movies and TV ---------------------------------------------------
 
     @function_tool()

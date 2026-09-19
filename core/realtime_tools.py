@@ -1187,3 +1187,34 @@ def email_status() -> dict:
         }
     except Exception as exc:
         return _fail("email_status", exc)
+
+
+# ---------------------------------------------------------------------------
+# Smart home (Home Assistant)
+# ---------------------------------------------------------------------------
+
+def smart_home_command(text: str) -> dict:
+    """Run a spoken smart-home command through Home Assistant.
+
+    One entry point for lights, switches, climate, locks and scenes - turn
+    on/off, dim, set color, ask status, or "list my devices" - because that
+    is how Tommy talks to her, not by domain. The parsing and the HA REST
+    calls already existed for the classic pipeline (tools/home_assistant.py);
+    this just gives the realtime agent the same door.
+    """
+    try:
+        from tools.home_assistant import execute_smart_home_command, is_home_assistant_configured
+
+        if not is_home_assistant_configured():
+            return {
+                "ok": False,
+                "error": "not_configured",
+                "message": (
+                    "Home Assistant isn't configured yet - add its URL and "
+                    "access token to config.json under home_assistant."
+                ),
+            }
+        message = execute_smart_home_command(text)
+        return {"ok": True, "message": message}
+    except Exception as exc:
+        return _fail("smart_home_command", exc)
