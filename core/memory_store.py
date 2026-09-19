@@ -62,8 +62,33 @@ def _validate_memory_type(mem_type: str) -> None:
         raise ValueError("mem_type must be FACT, PROJECT, or PREFERENCE")
 
 
+# Common words that appear in nearly every spoken turn ("we", "about", "what").
+# Without filtering these, search_turns()'s OR-across-terms match degenerates into
+# "match almost every row", which made recall() silently behave like "return the
+# last N turns" regardless of what was actually asked - see 2026-09-18 live test.
+_QUERY_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have",
+    "has", "had", "do", "does", "did", "will", "would", "could", "should", "may",
+    "might", "must", "shall", "can", "to", "of", "in", "for", "on", "with", "at",
+    "by", "from", "as", "into", "through", "during", "before", "after", "above",
+    "below", "between", "under", "again", "further", "then", "once", "and", "but",
+    "or", "nor", "so", "yet", "both", "either", "neither", "not", "only", "own",
+    "same", "than", "too", "very", "just", "i", "me", "my", "you", "your", "he",
+    "him", "his", "she", "her", "it", "its", "we", "our", "they", "their", "this",
+    "that", "these", "those", "what", "who", "when", "where", "which",
+})
+
+
 def _query_terms(query: str) -> list[str]:
-    return [term for term in re.findall(r"[a-z0-9]{2,}", (query or "").lower())[:8]]
+    """Meaningful search terms from a spoken query, stopwords filtered out.
+
+    Falls back to the unfiltered token list if every token happened to be a
+    stopword, so a query that is genuinely just noise still behaves the way it
+    did before this filter existed rather than silently searching on nothing.
+    """
+    tokens = re.findall(r"[a-z0-9]{2,}", (query or "").lower())
+    meaningful = [t for t in tokens if t not in _QUERY_STOPWORDS]
+    return (meaningful or tokens)[:8]
 
 
 class MemoryStore:
@@ -281,21 +306,36 @@ class MemoryStore:
                 pattern = f"%{term}%"
                 clauses.append("(lower(user_text) LIKE ? OR lower(assistant_text) LIKE ?)")
                 params.extend([pattern, pattern])
+            # Cast a wider net than `limit` so ranking by how many terms actually
+            # matched has more than just the last few rows to choose from - see
+            # _QUERY_STOPWORDS above for why recency alone was misleading here.
+            candidate_cap = max(limit * 8, 40)
             sql = (
                 "SELECT id, user_text, assistant_text, source, intent, metadata, timestamp "
                 "FROM conversation_turns WHERE "
                 + " OR ".join(clauses)
                 + " ORDER BY id DESC LIMIT ?"
             )
-            params.append(limit)
+            params.append(candidate_cap)
+            candidates = conn.execute(sql, params).fetchall()
+            conn.close()
+
+            def _match_count(row) -> int:
+                haystack = f"{row[1]} {row[2]}".lower()
+                return sum(1 for term in terms if term in haystack)
+
+            rows = sorted(
+                candidates,
+                key=lambda row: (_match_count(row), row[0]),
+                reverse=True,
+            )[:limit]
         else:
             sql = (
                 "SELECT id, user_text, assistant_text, source, intent, metadata, timestamp "
                 "FROM conversation_turns ORDER BY id DESC LIMIT ?"
             )
-            params = [limit]
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
+            rows = conn.execute(sql, [limit]).fetchall()
+            conn.close()
         return [
             ConversationTurnRecord(
                 id=row[0],
