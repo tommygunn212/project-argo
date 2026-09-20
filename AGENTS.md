@@ -185,6 +185,19 @@ the contact viseme (sibilants/stops) is unmapped. Per-face landmarks are the
 **Commit atomically.** Every time you write something, commit it — do not batch.
 This is Tommy's standing instruction and it has been ignored before.
 
+**The dashboard's restart button does not restart the voice worker.** `main.py`
+and `livekit_realtime_agent.py` are separate processes. A "Server restart
+requested" from the dashboard reloads the backend only - the worker keeps
+serving jobs from whatever it imported at startup, so edits to
+`livekit_realtime_agent.py` appear to do nothing at all. The entrypoint runs
+once per room session, which makes it look like fresh code is running when it
+is not. Observed 2026-09-20: the worker registered once at 20:58 and was still
+handling sessions at 21:38, straight through a backend restart at 21:37,
+running pre-edit code the whole time. Confirm a real worker restart by looking
+for a NEW `registered worker` banner in `runtime/logs/worker.out.log` - if the
+only one is old, the worker never came back. Use `RESTART_ARGO.bat` (or
+`scripts/start_argo_stack.ps1`), which drains and restarts both.
+
 **Verify from disk, never from the write.** File syncs into this repo have
 silently written stale bytes while reporting success. After any patch, read the
 file back and assert on markers. `tools/fixups*.py` (32 of them) are the
