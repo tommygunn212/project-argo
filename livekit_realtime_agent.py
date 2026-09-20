@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import contextlib
+import ipaddress
 import json
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from dataclasses import replace
@@ -1315,6 +1318,36 @@ async def _maybe_start_hedra_avatar(session: AgentSession, room):
         return None
 
 
+def _avatar_start_timeout() -> float:
+    """Seconds to wait for an avatar participant before giving ARGO its voice back."""
+    try:
+        return max(1.0, float(os.getenv("ARGO_AVATAR_START_TIMEOUT", "15")))
+    except ValueError:
+        return 15.0
+
+
+def _url_reachable_from_cloud(url: str) -> bool:
+    """Can a cloud-hosted avatar provider dial this LiveKit URL?
+
+    Simli is handed ARGO's LIVEKIT_URL plus a room token and then joins the
+    room from Simli's own infrastructure. A loopback or RFC1918 address
+    resolves to *their* machine, not ARGO's, so the avatar participant can
+    never arrive and the wait hangs forever.
+    See AGENTS.md > External LiveKit Participants.
+    """
+    if _env_enabled("ARGO_AVATAR_ALLOW_LOCAL_URL", False):
+        return True  # escape hatch: tunnels, port-forwards, odd topologies
+    if not url:
+        return False
+    host = (urlsplit(url).hostname or "").strip("[]").lower()
+    if host in {"", "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_private
+    except ValueError:
+        return True  # a DNS name; assume it resolves publicly
+
+
 async def _maybe_start_simli_avatar(session: AgentSession, room):
     """Start a Simli LiveKit avatar when explicitly enabled.
 
@@ -1348,7 +1381,21 @@ async def _maybe_start_simli_avatar(session: AgentSession, room):
         )
         return None
 
+    livekit_url = (os.getenv("LIVEKIT_URL") or "").strip()
+    if not _url_reachable_from_cloud(livekit_url):
+        logger.error(
+            "[Simli] refusing to start: LIVEKIT_URL=%s is not reachable from the public "
+            "internet. Simli joins the room from its own servers, so this address points "
+            "at Simli's machine and the avatar can never arrive. Use LiveKit Cloud, or a "
+            "publicly reachable self-hosted deployment (signalling AND WebRTC media). "
+            "Override with ARGO_AVATAR_ALLOW_LOCAL_URL=1. "
+            "See AGENTS.md > External LiveKit Participants.",
+            livekit_url or "<unset>",
+        )
+        return None
+
     logger.info("[Simli] starting live avatar video face_id=%s", face_id)
+    previous_audio_output = session.output.audio
     try:
         avatar = simli_plugin.AvatarSession(
             simli_config=simli_plugin.SimliConfig(
@@ -1357,11 +1404,41 @@ async def _maybe_start_simli_avatar(session: AgentSession, room):
             ),
         )
         await avatar.start(session, room=room)
-        logger.info("[Simli] live avatar session started; waiting for remote video track")
-        return avatar
     except Exception:
+        session.output.audio = previous_audio_output
         logger.exception("[Simli] avatar session failed; continuing without avatar video")
         return None
+
+    if session.output.audio is previous_audio_output:
+        # start() logs its own API errors and returns without rerouting audio.
+        # Nothing to unwind - ARGO keeps speaking into the room directly.
+        logger.warning("[Simli] avatar did not attach; continuing without avatar video")
+        return None
+
+    # From here ARGO's speech is routed through the avatar worker, so ARGO is
+    # MUTE until the avatar participant joins. That wait must never be
+    # unbounded: an avatar is an enhancement, never a single point of failure.
+    timeout = _avatar_start_timeout()
+    try:
+        from livekit.agents import utils as lk_utils
+
+        await asyncio.wait_for(
+            lk_utils.wait_for_participant(room=room, identity=avatar.avatar_identity),
+            timeout=timeout,
+        )
+    except Exception:
+        session.output.audio = previous_audio_output
+        logger.error(
+            "[Simli] avatar participant did not join within %ss - restored direct room "
+            "audio so ARGO keeps its voice; avatar video is off for this session.",
+            timeout,
+        )
+        with contextlib.suppress(Exception):
+            await avatar.aclose()
+        return None
+
+    logger.info("[Simli] avatar participant joined; live avatar video active")
+    return avatar
 
 
 if __name__ == "__main__":
