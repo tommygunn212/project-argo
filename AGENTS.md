@@ -122,6 +122,15 @@ An HTTP/WebSocket tunnel to 7880 alone is **not** sufficient: it carries
 signalling, not the media path. `livekit-server/livekit.yaml` uses TCP 7881 and
 UDP 7882.
 
+Epistemic note: Simli's docs do not state this requirement in words. What is
+established is (a) the plugin source POSTs your `LIVEKIT_URL` to
+`api.simli.ai`, (b) their own example comment reads "the agent will join the
+room and wait for the avatar to join", (c) every example in their docs uses a
+public `wss://` URL, and (d) the observed 2026-09-20 failure. The conclusion
+that a loopback URL is the cause follows from (a) plus how loopback addressing
+works, but it has not been confirmed by Simli directly. If you ever see a
+Simli avatar join a localhost room, this section is wrong - correct it.
+
 Never expose the development `devkey` / `devsecret...` pair in
 `livekit-server/livekit.yaml` to the public internet. Rotate it first.
 
