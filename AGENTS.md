@@ -97,6 +97,80 @@ single-instance PID lock, orphan detection), `core/voice_active.py`,
 
 ---
 
+## External LiveKit Participants
+
+ARGO's LiveKit server is local: `config.json` -> `livekit.url`, default
+`ws://127.0.0.1:7880`, exported as `LIVEKIT_URL` by `livekit_realtime_agent.py`.
+
+Cloud-hosted avatar providers are **not** sent video frames by ARGO. They are
+sent ARGO's `LIVEKIT_URL` plus a room token, and then join the room from their
+own infrastructure - `livekit/plugins/simli/avatar.py` POSTs exactly that to
+`https://api.simli.ai/integrations/livekit/agents`.
+
+So a loopback or RFC1918 URL resolves to *the provider's* machine. Their
+participant never arrives and the agent waits forever. Observed 2026-09-20:
+`[Simli] live avatar session started; waiting for remote video track`, then
+silence, plus `RuntimeError: room disconnected while waiting for participant`.
+
+Simli therefore requires one of:
+
+- LiveKit Cloud with a public `wss://` endpoint, or
+- a genuinely internet-reachable self-hosted deployment - signalling **and**
+  WebRTC media (ICE over the configured TCP/UDP ports, or TURN).
+
+An HTTP/WebSocket tunnel to 7880 alone is **not** sufficient: it carries
+signalling, not the media path. `livekit-server/livekit.yaml` uses TCP 7881 and
+UDP 7882.
+
+Never expose the development `devkey` / `devsecret...` pair in
+`livekit-server/livekit.yaml` to the public internet. Rotate it first.
+
+`_url_reachable_from_cloud()` enforces this and refuses to start the avatar
+with an explanatory error. Override: `ARGO_AVATAR_ALLOW_LOCAL_URL=1`.
+
+### Failure behaviour - an avatar must never cost ARGO its voice
+
+`AvatarSession.start()` reassigns `session.output.audio` to a
+`DataStreamAudioOutput` aimed at the avatar participant. **ARGO is mute from
+that moment until the avatar joins.** On 2026-09-20 this took the voice down
+completely: every word was transcribed, zero spoken replies.
+
+Avatar rendering is optional. Audio is not. Any avatar path must bound its wait
+and restore the previous `session.output.audio` on failure. Degrade forward,
+never to silence:
+
+    Simli  ->  local viseme renderer  ->  static portrait
+
+ARGO owns speech; avatars subscribe to it.
+
+---
+
+## Local Viseme Prototype
+
+`frontend-v2/assets/cortana-avatar.js` carries per-viseme mouth shaping
+(`shapeWide` / `shapeRound` uniforms, optional 4th `shape` arg to
+`Portrait.draw()`), driven by `avatar-portrait-preview.html`.
+
+History, facts only: added in `b9bc600` (2026-09-19 04:06), reverted 76 minutes
+later in `9ddd654`, restored in `2cf1743`. The revert carried only git's default
+message, so **its reasoning is recorded nowhere**. Simli work began roughly 50
+minutes after it.
+
+What is verifiable: the patch is additive and preview-only.
+`frontend-v2/index.html` never passes the 4th argument, so `shapeWide` and
+`shapeRound` stay 0 and the live dashboard renders identically. There is no
+recorded evidence it caused a regression.
+
+Do not treat that revert as evidence that local visemes are architecturally
+incompatible with ARGO. If they are dropped again, record why.
+
+Still open: the coefficients are a rough first pass, uncalibrated per face, and
+the contact viseme (sibilants/stops) is unmapped. Per-face landmarks are the
+`eyeLandmarks` / `mouthLandmark` uniforms in `Portrait.draw()`, selected by
+`halo` / `male` / default - adding a new portrait means adding a landmark set.
+
+---
+
 ## How to work here
 
 **Commit atomically.** Every time you write something, commit it — do not batch.
