@@ -59,7 +59,7 @@
 <header>
   <h1>ARGO Avatar Motion Rig &mdash; Portrait Preview</h1>
   <p class="sub">The new 5-layer rig (avatar-motion.js) driving the real portrait art through the live, unmodified Portrait renderer (cortana-avatar.js).</p>
-  <p class="flag">Honest limit of this first pass: only the rig's <b>aperture</b> curve (open/close timing, attack/release, per-state onset) is being fed into the photo, exactly the way index.html already feeds its envelope value in. The six-viseme <b>shape</b> blend (open/wide/rounded/contact/closed) is real and visible in the meters below, but the portrait shader only exposes one continuous "mouth" scalar today - it does not yet warp differently per viseme. Making the photo's mouth actually change SHAPE (not just openness) needs calibrated per-viseme landmark work in cortana-avatar.js's shader, which is the "final art not started" item AGENTS.md flags. This page is safe to leave running: it only reads cortana-avatar.js, nothing about the live dashboard is touched.</p>
+  <p class="flag">Update: cortana-avatar.js's shader now takes two extra uniforms (shapeWide, shapeRound), driven here by the rig's wide/rounded viseme weights, so the mouth genuinely narrows/widens and the vertical stretch changes with vowel shape - not just aperture. This is a first calibration pass (rough coefficients, not yet tuned per-face) and additive/backward-compatible: existing callers of Portrait.draw() that don't pass a 4th "shape" argument get shapeWide=shapeRound=0, i.e. byte-identical old behaviour - verified against the live /v2 dashboard with no console errors. Contact viseme (sibilants/stops) still isn't reflected in shape yet. Treat the exact coefficients as a starting point to tune by eye, not final.</p>
 </header>
 
 <div class="stages">
@@ -275,7 +275,7 @@
     var features = usingSynth ? syntheticFeatures(dt) : liveFeatures();
     var pose = rig.update(dt, features);
 
-    portrait.draw(now, pose.aperture, false);
+    portrait.draw(now, pose.aperture, false, { wide: pose.visemes.wide, round: pose.visemes.rounded });
 
     meterEls.aperture.bar.style.width = (pose.aperture * 100).toFixed(1) + '%';
     meterEls.aperture.val.textContent = pose.aperture.toFixed(2);
