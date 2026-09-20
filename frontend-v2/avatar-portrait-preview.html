@@ -75,6 +75,7 @@
     <label class="lbl">Portrait</label>
     <button id="btnCortana" aria-pressed="true">Cortana</button>
     <button id="btnCyberMale" aria-pressed="false">Cyber Male</button>
+    <button id="btnSimliFemale" aria-pressed="false">Simli Female</button>
   </div>
   <div class="row">
     <label class="lbl">State</label>
@@ -162,27 +163,37 @@
 
   var canvas = $('portraitCanvas');
   var portrait = new CA.Portrait(canvas, '/v2-assets/cortana_portrait_smirky.png');
-  var cyberMaleImg = null;
+  var PORTRAITS = {
+    cortana:      { label: 'Cortana',      btn: 'btnCortana',      src: '/v2-assets/cortana_portrait_smirky.png' },
+    cyber_male:   { label: 'Cyber Male',   btn: 'btnCyberMale',    src: '/v2-assets/argo_cyber_male.png' },
+    simli_female: { label: 'Simli Female', btn: 'btnSimliFemale',  src: '/v2-assets/simli_female.png' }
+  };
+  var portraitCache = {};
 
   function selectPortrait(which) {
-    $('btnCortana').setAttribute('aria-pressed', String(which === 'cortana'));
-    $('btnCyberMale').setAttribute('aria-pressed', String(which === 'cyber_male'));
-    $('portraitLabel').textContent = which === 'cyber_male' ? 'Cyber Male' : 'Cortana';
+    var entry = PORTRAITS[which] || PORTRAITS.cortana;
+    Object.keys(PORTRAITS).forEach(function (key) {
+      var b = $(PORTRAITS[key].btn);
+      if (b) b.setAttribute('aria-pressed', String(key === which));
+    });
+    $('portraitLabel').textContent = entry.label;
     if (which === 'cortana') {
-      portrait.setImageSource('/v2-assets/cortana_portrait_smirky.png');
+      // unchanged path: the original string-source load for the default face
+      portrait.setImageSource(entry.src);
       return;
     }
-    if (cyberMaleImg) { portrait.setMediaSource(cyberMaleImg, 'cyber_male'); return; }
+    if (portraitCache[which]) { portrait.setMediaSource(portraitCache[which], which); return; }
     var img = new Image();
     img.onload = function () {
-      cyberMaleImg = img;
-      portrait.setMediaSource(img, 'cyber_male');
+      portraitCache[which] = img;
+      portrait.setMediaSource(img, which);
     };
-    img.src = '/v2-assets/argo_cyber_male.png';
+    img.src = entry.src;
   }
 
-  $('btnCortana').addEventListener('click', function () { selectPortrait('cortana'); });
-  $('btnCyberMale').addEventListener('click', function () { selectPortrait('cyber_male'); });
+  Object.keys(PORTRAITS).forEach(function (key) {
+    $(PORTRAITS[key].btn).addEventListener('click', function () { selectPortrait(key); });
+  });
 
   // ------------------------------------------------------------------
   // Rig + controls

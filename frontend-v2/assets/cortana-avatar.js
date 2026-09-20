@@ -215,9 +215,12 @@
       gl.uniform2f(u.imageSize,this.image.videoWidth || this.image.naturalWidth,this.image.videoHeight || this.image.naturalHeight);
       const halo = this.profile === 'halo';
       const male = this.profile === 'cyber_male';
+      // simli_female: landmarks measured off a normalised grid of the portrait,
+      // not yet tuned by eye. See AGENTS.md > Local Viseme Prototype.
+      const simli = this.profile === 'simli_female';
       gl.uniform1f(u.frameZoom,halo?1.10:1.014);
-      gl.uniform3f(u.mouthLandmark,halo?0.488:male?0.491:0.512,halo?0.609:male?0.613:0.543,halo?0.076:male?0.082:0.052);
-      gl.uniform4f(u.eyeLandmarks,halo?0.377:male?0.397:0.447,halo?0.270:male?0.400:0.344,halo?0.596:male?0.589:0.577,halo?0.267:male?0.398:0.344);
+      gl.uniform3f(u.mouthLandmark,simli?0.505:halo?0.488:male?0.491:0.512,simli?0.625:halo?0.609:male?0.613:0.543,simli?0.045:halo?0.076:male?0.082:0.052);
+      gl.uniform4f(u.eyeLandmarks,simli?0.445:halo?0.377:male?0.397:0.447,simli?0.487:halo?0.270:male?0.400:0.344,simli?0.558:halo?0.596:male?0.589:0.577,simli?0.487:halo?0.267:male?0.398:0.344);
       gl.uniform2f(u.screenSize,w,h);
       gl.uniform2f(u.gaze,gazeX,gazeY);
       const shapeWide=(shape&&shape.wide)||0, shapeRound=(shape&&shape.round)||0;
