@@ -16,36 +16,18 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
-import contextlib
-import ipaddress
 import json
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from dataclasses import replace
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io, function_tool
 
-try:
-    from livekit.plugins import hedra as hedra_plugin
-except Exception as exc:  # pragma: no cover - optional avatar dependency
-    hedra_plugin = None
-    HEDRA_PLUGIN_IMPORT_ERROR = exc
-else:
-    HEDRA_PLUGIN_IMPORT_ERROR = None
-
-try:
-    from livekit.plugins import simli as simli_plugin
-except Exception as exc:  # pragma: no cover - optional avatar dependency
-    simli_plugin = None
-    SIMLI_PLUGIN_IMPORT_ERROR = exc
-else:
-    SIMLI_PLUGIN_IMPORT_ERROR = None
-
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
-from core.livekit_config import speaker_identity_status, HEDRA_REALTIME_RETIRED, HEDRA_REALTIME_NOTICE
+from core.livekit_config import speaker_identity_status
+from core.voice.avatars import start_avatar
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 
@@ -744,10 +726,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         user_away_timeout=None,
     )
 
-    hedra_avatar = await _maybe_start_hedra_avatar(session, ctx.room)
-    simli_avatar = None
-    if hedra_avatar is None:
-        simli_avatar = await _maybe_start_simli_avatar(session, ctx.room)
+    avatar = await start_avatar(session, ctx.room)
 
     noise_filter = build_noise_filter(cfg)
 
@@ -815,8 +794,11 @@ async def _run_realtime_session(ctx: JobContext) -> None:
     if cfg.greeting:
         session.generate_reply(instructions=cfg.greeting, allow_interruptions=True)
 
-    # Keep the optional avatar session strongly referenced for the room lifetime.
-    _ = hedra_avatar, simli_avatar
+    if avatar is not None:
+        # The entrypoint returns long before the room closes, so a local
+        # variable does not keep the avatar alive. The shutdown callback
+        # holds the reference for the room lifetime and closes it cleanly.
+        ctx.add_shutdown_callback(avatar.aclose)
 
 
 def _log_session_activity(session: AgentSession, memory=None) -> None:
@@ -904,209 +886,6 @@ def _apply_livekit_env(cfg: LiveKitRealtimeConfig) -> None:
     os.environ.setdefault("LIVEKIT_API_SECRET", cfg.api_secret)
     if cfg.agent_name:
         os.environ.setdefault("LIVEKIT_AGENT_NAME", cfg.agent_name)
-
-
-def _env_enabled(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-async def _maybe_start_hedra_avatar(session: AgentSession, room):
-    """Start a Hedra LiveKit avatar when explicitly enabled."""
-
-    # Do not retry the retired endpoint or redirect working voice to a dead avatar.
-    if HEDRA_REALTIME_RETIRED:
-        logger.info("[Avatar] %s", HEDRA_REALTIME_NOTICE)
-        return None
-
-    if not _env_enabled("ARGO_HEDRA_AVATAR_ENABLED", False):
-        logger.info("[Hedra] avatar disabled; using local portrait fallback")
-        return None
-
-    hedra_api_key = (os.getenv("HEDRA_API_KEY") or "").strip()
-    if not hedra_api_key:
-        logger.warning("[Hedra] ARGO_HEDRA_AVATAR_ENABLED is true but HEDRA_API_KEY is missing")
-        return None
-
-    avatar_id = (os.getenv("HEDRA_AVATAR_ID") or "").strip()
-    avatar_image_path = (os.getenv("HEDRA_AVATAR_IMAGE") or "").strip()
-    if not avatar_id and not avatar_image_path:
-        logger.warning("[Hedra] Set HEDRA_AVATAR_ID or HEDRA_AVATAR_IMAGE to start a Hedra avatar")
-        return None
-
-    if hedra_plugin is None:
-        logger.warning(
-            "[Hedra] livekit.plugins.hedra is not available; the core realtime voice path will continue: %s",
-            HEDRA_PLUGIN_IMPORT_ERROR,
-        )
-        return None
-
-    kwargs = {"api_key": hedra_api_key}
-    api_url = (os.getenv("HEDRA_API_URL") or "").strip()
-    if api_url:
-        kwargs["api_url"] = api_url
-
-    participant_identity = (os.getenv("HEDRA_AVATAR_PARTICIPANT_IDENTITY") or "").strip()
-    if participant_identity:
-        kwargs["avatar_participant_identity"] = participant_identity
-
-    participant_name = (os.getenv("HEDRA_AVATAR_PARTICIPANT_NAME") or "").strip()
-    if participant_name:
-        kwargs["avatar_participant_name"] = participant_name
-
-    if avatar_id:
-        kwargs["avatar_id"] = avatar_id
-    else:
-        from PIL import Image
-
-        image_path = Path(avatar_image_path).expanduser()
-        if not image_path.is_absolute():
-            image_path = ROOT / image_path
-        if not image_path.exists():
-            logger.warning("[Hedra] avatar image not found: %s", image_path)
-            return None
-        with Image.open(image_path) as img:
-            kwargs["avatar_image"] = img.convert("RGB").copy()
-
-    logger.info(
-        "[Hedra] starting live avatar video source=%s participant=%s api_url=%s",
-        "asset_id" if avatar_id else "local_image",
-        participant_identity or "hedra-avatar-agent",
-        api_url or "default",
-    )
-    try:
-        avatar = hedra_plugin.AvatarSession(**kwargs)
-        await avatar.start(session, room=room)
-        logger.info("[Hedra] live avatar session started; waiting for remote video track")
-        return avatar
-    except Exception:
-        logger.exception("[Hedra] avatar session failed; continuing without avatar video")
-        return None
-
-
-def _avatar_start_timeout() -> float:
-    """Seconds to wait for an avatar participant before giving ARGO its voice back."""
-    try:
-        return max(1.0, float(os.getenv("ARGO_AVATAR_START_TIMEOUT", "15")))
-    except ValueError:
-        return 15.0
-
-
-def _url_reachable_from_cloud(url: str) -> bool:
-    """Can a cloud-hosted avatar provider dial this LiveKit URL?
-
-    Simli is handed ARGO's LIVEKIT_URL plus a room token and then joins the
-    room from Simli's own infrastructure. A loopback or RFC1918 address
-    resolves to *their* machine, not ARGO's, so the avatar participant can
-    never arrive and the wait hangs forever.
-    See AGENTS.md > External LiveKit Participants.
-    """
-    if _env_enabled("ARGO_AVATAR_ALLOW_LOCAL_URL", False):
-        return True  # escape hatch: tunnels, port-forwards, odd topologies
-    if not url:
-        return False
-    host = (urlsplit(url).hostname or "").strip("[]").lower()
-    if host in {"", "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-        return False
-    try:
-        return not ipaddress.ip_address(host).is_private
-    except ValueError:
-        return True  # a DNS name; assume it resolves publicly
-
-
-async def _maybe_start_simli_avatar(session: AgentSession, room):
-    """Start a Simli LiveKit avatar when explicitly enabled.
-
-    Prototype path (avatar-simli-prototype branch): Simli animates a single
-    still portrait (works with the AI-generated Cortana/Cyber Male art,
-    unlike providers that require filming a real human), so this is the
-    replacement candidate for the dead Hedra realtime avatar.
-    """
-
-    if not _env_enabled("ARGO_SIMLI_AVATAR_ENABLED", False):
-        logger.info("[Simli] avatar disabled; using local portrait fallback")
-        return None
-
-    simli_api_key = (os.getenv("SIMLI_API_KEY") or "").strip()
-    if not simli_api_key:
-        logger.warning("[Simli] ARGO_SIMLI_AVATAR_ENABLED is true but SIMLI_API_KEY is missing")
-        return None
-
-    face_id = (os.getenv("SIMLI_FACE_ID") or "").strip()
-    if not face_id:
-        logger.warning(
-            "[Simli] SIMLI_FACE_ID is missing; create/upload a face at "
-            "https://app.simli.com/faces and set SIMLI_FACE_ID"
-        )
-        return None
-
-    if simli_plugin is None:
-        logger.warning(
-            "[Simli] livekit.plugins.simli is not available; the core realtime voice path will continue: %s",
-            SIMLI_PLUGIN_IMPORT_ERROR,
-        )
-        return None
-
-    livekit_url = (os.getenv("LIVEKIT_URL") or "").strip()
-    if not _url_reachable_from_cloud(livekit_url):
-        logger.error(
-            "[Simli] refusing to start: LIVEKIT_URL=%s is not reachable from the public "
-            "internet. Simli joins the room from its own servers, so this address points "
-            "at Simli's machine and the avatar can never arrive. Use LiveKit Cloud, or a "
-            "publicly reachable self-hosted deployment (signalling AND WebRTC media). "
-            "Override with ARGO_AVATAR_ALLOW_LOCAL_URL=1. "
-            "See AGENTS.md > External LiveKit Participants.",
-            livekit_url or "<unset>",
-        )
-        return None
-
-    logger.info("[Simli] starting live avatar video face_id=%s", face_id)
-    previous_audio_output = session.output.audio
-    try:
-        avatar = simli_plugin.AvatarSession(
-            simli_config=simli_plugin.SimliConfig(
-                api_key=simli_api_key,
-                face_id=face_id,
-            ),
-        )
-        await avatar.start(session, room=room)
-    except Exception:
-        session.output.audio = previous_audio_output
-        logger.exception("[Simli] avatar session failed; continuing without avatar video")
-        return None
-
-    if session.output.audio is previous_audio_output:
-        # start() logs its own API errors and returns without rerouting audio.
-        # Nothing to unwind - ARGO keeps speaking into the room directly.
-        logger.warning("[Simli] avatar did not attach; continuing without avatar video")
-        return None
-
-    # From here ARGO's speech is routed through the avatar worker, so ARGO is
-    # MUTE until the avatar participant joins. That wait must never be
-    # unbounded: an avatar is an enhancement, never a single point of failure.
-    timeout = _avatar_start_timeout()
-    try:
-        from livekit.agents import utils as lk_utils
-
-        await asyncio.wait_for(
-            lk_utils.wait_for_participant(room=room, identity=avatar.avatar_identity),
-            timeout=timeout,
-        )
-    except Exception:
-        session.output.audio = previous_audio_output
-        logger.error(
-            "[Simli] avatar participant did not join within %ss - restored direct room "
-            "audio so ARGO keeps its voice; avatar video is off for this session.",
-            timeout,
-        )
-        with contextlib.suppress(Exception):
-            await avatar.aclose()
-        return None
-
-    logger.info("[Simli] avatar participant joined; live avatar video active")
-    return avatar
 
 
 if __name__ == "__main__":
