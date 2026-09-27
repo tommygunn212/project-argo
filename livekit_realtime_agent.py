@@ -47,6 +47,7 @@ else:
 
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
 from core.livekit_config import speaker_identity_status, HEDRA_REALTIME_RETIRED, HEDRA_REALTIME_NOTICE
+from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 
 
 ROOT = Path(__file__).resolve().parent
@@ -791,8 +792,8 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         logger.warning("[LiveKit] running on fallback model %s", fallback)
 
     _log_session_activity(session, voice_memory)
-    _wire_urgent_interrupts(session, cfg)
-    _wire_wake_sleep_gate(session, cfg)
+    wire_urgent_interrupts(session, cfg)
+    wire_wake_sleep_gate(session, cfg)
 
     # The one line that answers "what is she running right now", and the
     # record the dashboard's 'Active now' is filled from.
@@ -816,188 +817,6 @@ async def _run_realtime_session(ctx: JobContext) -> None:
 
     # Keep the optional avatar session strongly referenced for the room lifetime.
     _ = hedra_avatar, simli_avatar
-
-
-_PUNCTUATION = str.maketrans("", "", ".,!?;:\"'")
-
-
-def matches_urgent_phrase(transcript: str, phrases) -> str | None:
-    """Is this the start of someone saying "stop"?
-
-    Matched at the START of the utterance only. "Stop" and "stop talking"
-    fire; "don't stop the music" and "wait for the render to finish" do not,
-    because in those the phrase is not what the sentence opens with. That
-    distinction is the whole safety margin here - a fast path that fires on
-    any occurrence of the word "wait" would cut ARGO off constantly.
-    """
-    text = (transcript or "").strip().lower().translate(_PUNCTUATION)
-    if not text:
-        return None
-    for phrase in phrases:
-        if text == phrase or text.startswith(phrase + " "):
-            return phrase
-    return None
-
-
-def _wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) -> None:
-    """Let a clear "stop" cut in without waiting for the sustained threshold.
-
-    min_interruption_words keeps a cough, a chair creak and the AC from
-    barging in - but it also means a single decisive word would sit waiting
-    for a second one. So generic speech keeps the stronger threshold and
-    these get their own door: interim transcripts are watched, and the first
-    one that opens with an urgent phrase interrupts at once.
-
-    Only while ARGO is actually speaking, and only once per utterance.
-    """
-    phrases = tuple(cfg.urgent_interrupt_phrases or ())
-    if not phrases:
-        logger.info("[Interrupt] no urgent phrases configured")
-        return
-
-    state = {"fired_for": ""}
-
-    def on_transcript(event):
-        transcript = getattr(event, "transcript", "") or ""
-        if not transcript.strip():
-            return
-        if getattr(event, "is_final", False):
-            state["fired_for"] = ""       # utterance over; re-arm
-            return
-        if state["fired_for"] and transcript.startswith(state["fired_for"]):
-            return                        # already interrupted on this one
-
-        phrase = matches_urgent_phrase(transcript, phrases)
-        if not phrase:
-            return
-        if str(getattr(session, "agent_state", "")) != "speaking":
-            return                        # nothing to interrupt
-
-        state["fired_for"] = transcript
-        logger.info("[Interrupt] urgent phrase %r -> interrupting now (heard %r)",
-                    phrase, transcript[:80])
-        from core import voice_events as _ve
-        _ve.emit("urgent_interrupt", phrase=phrase, transcript=transcript[:120])
-        try:
-            session.interrupt()
-        except Exception:
-            logger.warning("[Interrupt] session.interrupt() failed", exc_info=True)
-
-    try:
-        session.on("user_input_transcribed", on_transcript)
-        logger.info("[Interrupt] urgent phrases armed: %s", ", ".join(phrases))
-    except Exception:
-        logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
-
-
-def _wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> None:
-    """Optional sleep-word / wake-word gate. Off unless cfg says otherwise.
-
-    Off by default (cfg.wake_sleep_gate_enabled) - this function is a no-op
-    call until that is deliberately turned on, so nothing about how ARGO
-    behaves changes on its own.
-
-    What "asleep" means here: ARGO keeps transcribing (the realtime model
-    owns turn-taking and there is no hook to stop it hearing without also
-    stopping it from ever waking back up), but every reply is gated. A
-    sleep phrase recognised at the start of an utterance, same rule as the
-    urgent-interrupt phrases above, cuts her off immediately if she is
-    speaking - no confirmation - and marks her asleep. While asleep, if the
-    model starts a reply anyway (it still runs its own server-side turn
-    detection on everything it hears), that reply is interrupted the
-    instant it starts, before more than a word or two can play. A wake
-    phrase clears the flag; wake_ack_enabled controls whether that also
-    gets a short spoken acknowledgement (default: none, same as sleep).
-
-    This is a reactive gate, not a preventative one - the model still
-    "thinks" about things said while asleep, it just is not allowed to
-    finish saying anything back. Good enough to stop ARGO talking over a
-    sleeping house; not a substitute for a local, pre-network wake-word
-    detector if the priority is ever "never send audio upstream at all"
-    rather than "never let it come out of the speaker."
-    """
-    if not cfg.wake_sleep_gate_enabled:
-        logger.info("[WakeSleep] gate disabled (wake_sleep_gate_enabled=False)")
-        return
-
-    sleep_phrases = tuple(cfg.sleep_phrases or ())
-    wake_phrases = tuple(cfg.wake_phrases or ())
-    if not sleep_phrases and not wake_phrases:
-        logger.info("[WakeSleep] gate enabled but no phrases configured; not arming")
-        return
-
-    from core import voice_events as _ve
-
-    state = {"asleep": False, "fired_for": ""}
-
-    def on_transcript(event):
-        transcript = getattr(event, "transcript", "") or ""
-        if not transcript.strip():
-            return
-        if getattr(event, "is_final", False):
-            state["fired_for"] = ""       # utterance over; re-arm
-            return
-        if state["fired_for"] and transcript.startswith(state["fired_for"]):
-            return                        # already acted on this one
-
-        if not state["asleep"]:
-            phrase = matches_urgent_phrase(transcript, sleep_phrases)
-            if not phrase:
-                return
-            state["fired_for"] = transcript
-            state["asleep"] = True
-            logger.info("[WakeSleep] sleep phrase %r -> going quiet (heard %r)",
-                        phrase, transcript[:80])
-            _ve.emit("sleep_word_triggered", phrase=phrase, transcript=transcript[:120])
-            if str(getattr(session, "agent_state", "")) == "speaking":
-                try:
-                    session.interrupt()
-                except Exception:
-                    logger.warning("[WakeSleep] session.interrupt() failed", exc_info=True)
-            return
-
-        phrase = matches_urgent_phrase(transcript, wake_phrases)
-        if not phrase:
-            return
-        state["fired_for"] = transcript
-        state["asleep"] = False
-        logger.info("[WakeSleep] wake phrase %r -> listening again (heard %r)",
-                    phrase, transcript[:80])
-        _ve.emit("wake_word_triggered", phrase=phrase, transcript=transcript[:120])
-        if cfg.wake_ack_enabled:
-            try:
-                session.generate_reply(
-                    instructions="Acknowledge you are listening again, one or two words only, nothing more.",
-                    allow_interruptions=True,
-                )
-            except Exception:
-                logger.warning("[WakeSleep] wake acknowledgement failed", exc_info=True)
-
-    def on_agent_state(event):
-        if not state["asleep"]:
-            return
-        new = str(getattr(event, "new_state", ""))
-        if new != "speaking":
-            return
-        # She started a reply while asleep - the model ran its own turn
-        # detection on something said while "asleep" and decided to answer.
-        # Cut it off at once; the sleep flag itself is not affected.
-        logger.info("[WakeSleep] reply started while asleep -> interrupting")
-        _ve.emit("wake_sleep_suppressed_reply")
-        try:
-            session.interrupt()
-        except Exception:
-            logger.warning("[WakeSleep] session.interrupt() failed", exc_info=True)
-
-    try:
-        session.on("user_input_transcribed", on_transcript)
-        session.on("agent_state_changed", on_agent_state)
-        logger.info(
-            "[WakeSleep] gate armed: %d sleep phrase(s), %d wake phrase(s), wake_ack=%s",
-            len(sleep_phrases), len(wake_phrases), cfg.wake_ack_enabled,
-        )
-    except Exception:
-        logger.warning("[WakeSleep] could not arm gate", exc_info=True)
 
 
 def _log_session_activity(session: AgentSession, memory=None) -> None:

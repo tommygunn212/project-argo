@@ -1,9 +1,9 @@
 """
-Tests for the wake/sleep gate in livekit_realtime_agent.py.
+Tests for the phrase gates in core/voice/phrase_gates.py.
 
 No LiveKit connection involved - AgentSession is faked with a minimal
 double that supports .on(name, cb), .interrupt(), .generate_reply(), and a
-settable .agent_state, which is all _wire_wake_sleep_gate touches. The real
+settable .agent_state, which is all the gates touch. The real
 module is imported for real (not reimplemented here), so these exercise the
 actual gate logic that will run live.
 """
@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import livekit_realtime_agent as agent_mod
+from core.voice import phrase_gates as gates
 from core.livekit_config import LiveKitRealtimeConfig
 
 
@@ -66,7 +66,7 @@ class TestWakeSleepGateDisabledByDefault(unittest.TestCase):
     def test_default_config_has_gate_off(self):
         cfg = make_cfg(wake_sleep_gate_enabled=False)
         session = FakeSession()
-        agent_mod._wire_wake_sleep_gate(session, cfg)
+        gates.wire_wake_sleep_gate(session, cfg)
         self.assertEqual(session._handlers, {}, "disabled gate must register no handlers")
 
 
@@ -75,7 +75,7 @@ class TestWakeSleepGateBehavior(unittest.TestCase):
         self.cfg = make_cfg()
         self.session = FakeSession()
         with patch("core.voice_events.emit"):
-            agent_mod._wire_wake_sleep_gate(self.session, self.cfg)
+            gates.wire_wake_sleep_gate(self.session, self.cfg)
 
     def _interim(self, text):
         self.session.fire("user_input_transcribed", FakeEvent(transcript=text, is_final=False))
@@ -146,11 +146,53 @@ class TestWakeAckConfigurable(unittest.TestCase):
         cfg = make_cfg(wake_ack_enabled=True)
         session = FakeSession()
         with patch("core.voice_events.emit"):
-            agent_mod._wire_wake_sleep_gate(session, cfg)
+            gates.wire_wake_sleep_gate(session, cfg)
             session.fire("user_input_transcribed", FakeEvent(transcript="go to sleep", is_final=False))
             session.fire("user_input_transcribed", FakeEvent(transcript="", is_final=True))
             session.fire("user_input_transcribed", FakeEvent(transcript="hey argo", is_final=False))
         session.generate_reply.assert_called_once()
+
+
+class TestOpeningPhrase(unittest.TestCase):
+    def test_phrase_must_open_the_utterance(self):
+        self.assertEqual(gates.opening_phrase("Stop!", ("stop",)), "stop")
+        self.assertEqual(gates.opening_phrase("stop talking", ("stop",)), "stop")
+        self.assertIsNone(gates.opening_phrase("don't stop the music", ("stop",)))
+        self.assertIsNone(gates.opening_phrase("stopwatch", ("stop",)))
+        self.assertIsNone(gates.opening_phrase("", ("stop",)))
+
+
+class TestUrgentInterrupts(unittest.TestCase):
+    def setUp(self):
+        self.session = FakeSession()
+        gates.wire_urgent_interrupts(self.session, make_cfg(urgent_interrupt_phrases=("stop",)))
+
+    def _interim(self, text):
+        self.session.fire("user_input_transcribed", FakeEvent(transcript=text, is_final=False))
+
+    def test_interrupts_only_while_speaking(self):
+        with patch("core.voice_events.emit"):
+            self._interim("stop")
+        self.session.interrupt.assert_not_called()
+        self.session.agent_state = "speaking"
+        with patch("core.voice_events.emit"):
+            self._interim("stop")
+        self.session.interrupt.assert_called_once()
+
+    def test_acts_once_per_utterance_and_rearms_on_final(self):
+        self.session.agent_state = "speaking"
+        with patch("core.voice_events.emit"):
+            self._interim("stop")
+            self._interim("stop talking")
+            self.assertEqual(self.session.interrupt.call_count, 1)
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="stop talking", is_final=True))
+            self._interim("stop")
+        self.assertEqual(self.session.interrupt.call_count, 2)
+
+    def test_no_phrases_registers_nothing(self):
+        session = FakeSession()
+        gates.wire_urgent_interrupts(session, make_cfg(urgent_interrupt_phrases=()))
+        self.assertEqual(session._handlers, {})
 
 
 if __name__ == "__main__":
