@@ -1,8 +1,9 @@
 # ARGO — map for coding agents
 
 Read this before touching anything. It exists because agents keep rebuilding
-things ARGO already has. 74 modules in `core/`, 43 voice tools, 113 Python test
-files. Almost everything you are about to propose probably exists.
+things ARGO already has: `core/` (with the `core/voice/` and
+`core/realtime_tools/` packages), 50 voice tools, 118 Python test files.
+Almost everything you are about to propose probably exists.
 
 **Owner:** Tommy. Windows, repo at `I:\argo`, venv at `I:\argo\.venv`.
 
@@ -14,11 +15,11 @@ files. Almost everything you are about to propose probably exists.
 
 | | Classic | Smooth Voice |
 |---|---|---|
-| Entry | `core/pipeline.py` (340 KB) | `livekit_realtime_agent.py` |
+| Entry | `core/pipeline.py` (340 KB) | `livekit_realtime_agent.py` -> `core/voice/` |
 | Brain | local STT → LLM → TTS | OpenAI realtime model over LiveKit |
 | Status | fallback / offline only | **canonical, this is the live one** |
 | Memory | fully wired | wired via `core/voice_memory.py` |
-| Tools | its own path | 43 `@function_tool` methods |
+| Tools | its own path | 50 `@function_tool` methods |
 
 When Smooth Voice became canonical it inherited the voice and *not* the rest of
 the stack. Anything that "looks missing" from Smooth Voice may simply be wired
@@ -34,11 +35,29 @@ layer, currently disabled), `conversation_buffer.py` (short-term), `brain.py`
 (3-layer facts/state/last-exchange), `session_memory.py`, `voice_memory.py`
 (the Smooth Voice adapter).
 
-**Voice tools** — 43 of them on the realtime agent, including `repair_argo`,
+**Voice tools** — 50 of them on the realtime agent, including `repair_argo`,
 `run_self_diagnostics`, `open_app` / `close_app` / `focus_app`,
 `play_music_from_era(era, genre, artist)`, `write_file` / `move_file` /
 `remove_file`, `write_in_app`, `set_volume`, `search_drives`, `think_deeply`,
 `recall`. Grep `@function_tool` before adding one.
+
+Where they live: `recall`, `repair_argo` and `think_deeply` are in
+`core/voice/agent.py` (they need the agent's state); the other 47 are
+one-line doors in `core/voice/tools.py`, grouped by domain, onto bodies in
+`core/realtime_tools/` (a package: machine, files, music, apps, video,
+writing, home, knowledge). A new capability is a `@capability` function in
+the right `realtime_tools` module plus a one-line tool - its docstring is
+what the model reads. `@capability` turns any exception into `ok: false`.
+Tests that monkeypatch a `realtime_tools` global must patch the submodule
+(`realtime_tools.music.ROOT`), not the package.
+
+**Smooth Voice layout** — `livekit_realtime_agent.py` is a 26-line launcher
+kept at the root because scripts find the worker by that path. The code is
+`core/voice/`: `worker.py` (process, lock, drain, stale agents),
+`session.py` (one room, start to finish, model fallback), `agent.py`,
+`tools.py`, `model.py` (realtime model, turn detection, BVC),
+`phrase_gates.py` ("stop" + sleep/wake), `activity.py` (log + events),
+`avatars.py` (Simli; Hedra is retired and its code is gone).
 
 **Personality** — `core/persona_briefs.py` is the single source of truth.
 Seven personas, each producing a distinct instruction set with a
@@ -201,7 +220,9 @@ only one is old, the worker never came back. Use `RESTART_ARGO.bat` (or
 **Verify from disk, never from the write.** File syncs into this repo have
 silently written stale bytes while reporting success. After any patch, read the
 file back and assert on markers. `tools/fixups*.py` (32 of them) are the
-on-box patch pattern, each with a read-back audit.
+on-box patch pattern, each with a read-back audit. They are history: the
+ones that patch `livekit_realtime_agent.py` or `core/realtime_tools.py` target
+a layout that no longer exists (2026-09-27 cleanup). Do not re-run them.
 
 **`py_compile` is not proof.** It catches syntax, not imports. A bad regex or a
 missing symbol passes compilation and fails at runtime. Import the module.
@@ -236,6 +257,16 @@ Dashboard: `http://localhost:8000/v2` — **not** `/`, which is the retired one.
 ---
 
 ## Open work
+
+- **Code cleanup, 2026-09-27.** The Smooth Voice path (`core/voice/`,
+  `core/realtime_tools/`, `core/voice_memory.py`) was restructured and its
+  bugs fixed in atomic commits: see `git log --oneline 1faa6c0..`. That was
+  verified on a Linux mirror of the suite (no new failures against the
+  baseline). The Windows suite and a live voice session have NOT been run
+  since. Do both first, after `RESTART_ARGO.bat`. Next cleanup candidates,
+  in order: `core/livekit_config.py` (901 lines, shared with the dashboard),
+  then the repo root (stale `*_COMPLETE.md` reports, loose logs, three
+  frontends), then `core/pipeline.py`.
 
 - Memory round trip unproven live: say a decision, stop Smooth Voice, reconnect,
   ask. `recall` is a tool the model *chooses* to call; if she answers from thin
