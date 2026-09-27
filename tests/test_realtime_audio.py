@@ -12,7 +12,7 @@ import pytest
 # longer builds a server, so nothing needs it - and setting it leaks into the
 # whole pytest process and breaks test_livekit_config's URL defaults.
 from core.livekit_config import get_livekit_realtime_config
-import livekit_realtime_agent as agent_mod
+from core.voice import model as voice_model
 
 
 def test_noise_cancellation_is_off_by_default():
@@ -23,14 +23,14 @@ def test_noise_cancellation_is_off_by_default():
 
 
 def test_no_filter_is_built_when_disabled():
-    assert agent_mod._build_noise_filter(get_livekit_realtime_config()) is None
+    assert voice_model.build_noise_filter(get_livekit_realtime_config()) is None
 
 
 def test_the_filter_still_builds_when_explicitly_enabled():
     """Off by default, not removed - this runs against Cloud one day."""
     cfg = get_livekit_realtime_config()
     on = type(cfg)(**{**cfg.__dict__, "noise_cancellation": True})
-    assert agent_mod._build_noise_filter(on) is not None
+    assert voice_model.build_noise_filter(on) is not None
 
 
 
@@ -45,7 +45,7 @@ def test_a_broken_plugin_degrades_to_raw_audio(monkeypatch):
     monkeypatch.setattr(noise_cancellation, "BVC", boom)
     cfg = get_livekit_realtime_config()
     on = type(cfg)(**{**cfg.__dict__, "noise_cancellation": True})
-    assert agent_mod._build_noise_filter(on) is None
+    assert voice_model.build_noise_filter(on) is None
 
 
 def test_room_input_options_accept_the_filter():
@@ -55,3 +55,27 @@ def test_room_input_options_accept_the_filter():
     from livekit.agents import room_io
 
     assert "noise_cancellation" in inspect.signature(room_io.RoomInputOptions).parameters
+
+
+def _with(**overrides):
+    cfg = get_livekit_realtime_config()
+    return type(cfg)(**{**cfg.__dict__, **overrides})
+
+
+def test_default_turn_detection_omits_the_kwarg_rather_than_disabling_it():
+    """None means "do not pass turn_detection" - passing None would turn it off."""
+    assert voice_model.build_turn_detection(_with(turn_detection="default")) is None
+    assert voice_model.build_turn_detection(_with(turn_detection="nonsense")) is None
+
+
+@pytest.mark.parametrize("mode", ["semantic_vad", "server_vad"])
+def test_turn_detection_reaches_the_session_with_responses_on(mode):
+    td = voice_model.build_turn_detection(_with(turn_detection=mode, turn_eagerness="low"))
+    get = td.get if isinstance(td, dict) else lambda k: getattr(td, k)
+    assert get("type") == mode
+    assert get("create_response") is True and get("interrupt_response") is True
+
+
+def test_unknown_eagerness_falls_back_to_auto():
+    td = voice_model.build_turn_detection(_with(turn_detection="semantic_vad", turn_eagerness="eager!"))
+    assert (td["eagerness"] if isinstance(td, dict) else td.eagerness) == "auto"

@@ -27,7 +27,6 @@ from dotenv import load_dotenv
 from dataclasses import replace
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExecutorType, cli, room_io, function_tool
-from livekit.plugins import openai
 
 try:
     from livekit.plugins import hedra as hedra_plugin
@@ -47,6 +46,7 @@ else:
 
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
 from core.livekit_config import speaker_identity_status, HEDRA_REALTIME_RETIRED, HEDRA_REALTIME_NOTICE
+from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 
 
@@ -726,7 +726,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
     await ctx.connect()
 
     try:
-        realtime_llm = _build_realtime_model(cfg)
+        realtime_llm = build_realtime_model(cfg)
     except Exception as exc:
         _ve.emit("model_build_failed", model=cfg.model, error=_safe_error(exc))
         raise
@@ -749,7 +749,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
     if hedra_avatar is None:
         simli_avatar = await _maybe_start_simli_avatar(session, ctx.room)
 
-    noise_filter = _build_noise_filter(cfg)
+    noise_filter = build_noise_filter(cfg)
 
     input_options = room_io.RoomInputOptions(
         audio_enabled=True,
@@ -782,7 +782,7 @@ async def _run_realtime_session(ctx: JobContext) -> None:
             "[LiveKit] %s would not start; falling back to %s for this session",
             cfg.model, fallback,
         )
-        session.llm = _build_realtime_model(replace(cfg, model=fallback))
+        session.llm = build_realtime_model(replace(cfg, model=fallback))
         await session.start(
             agent=ArgoRealtimeAgent(cfg, memory=voice_memory),
             room=ctx.room,
@@ -896,157 +896,6 @@ def _log_session_activity(session: AgentSession, memory=None) -> None:
             session.on(name, _safe(name, handler))
         except Exception:
             logger.debug("[Session] could not subscribe to %s", name, exc_info=True)
-
-
-def _build_noise_filter(cfg: LiveKitRealtimeConfig):
-    """Background voice cancellation on the inbound mic track, or None.
-
-    The classic path has no echo cancellation at all - the mic hears the
-    speaker - and the realtime path had the plugin installed but unused. A
-    missing or broken plugin must never take voice down with it, so every
-    failure here degrades to raw audio and says so in the log.
-    """
-    if not cfg.noise_cancellation:
-        logger.info("[Audio] noise cancellation disabled by config")
-        return None
-    try:
-        from livekit.plugins import noise_cancellation
-
-        filt = noise_cancellation.BVC()
-    except Exception:
-        logger.exception("[Audio] noise cancellation unavailable; continuing with raw mic audio")
-        return None
-    logger.info("[Audio] noise cancellation enabled (BVC)")
-    return filt
-
-
-def _build_turn_detection(cfg: LiveKitRealtimeConfig):
-    """How the model decides Tommy has finished a thought.
-
-    This was never configured, so the session ran on the Realtime API's plain
-    silence timer: stop making noise for long enough and it answers, whether
-    or not the sentence was finished. Semantic VAD reads the words as well as
-    the silence, and "low" eagerness is the setting that waits longest.
-
-    Returns a value for the `turn_detection` kwarg, or None meaning "do not
-    pass the kwarg at all" - passing turn_detection=None would switch server
-    turn detection OFF, which is not the same thing and would be much worse.
-    """
-    mode = (cfg.turn_detection or "").strip().lower()
-    if mode in ("", "default", "auto_default"):
-        return None
-    eagerness = (cfg.turn_eagerness or "auto").strip().lower()
-    if eagerness not in ("low", "medium", "high", "auto"):
-        logger.warning("[Turn] unknown eagerness %r; using 'auto'", eagerness)
-        eagerness = "auto"
-
-    if mode == "semantic_vad":
-        payload = {
-            "type": "semantic_vad",
-            "eagerness": eagerness,
-            "create_response": True,
-            "interrupt_response": True,
-        }
-    elif mode == "server_vad":
-        payload = {
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            # Long on purpose: a normal thinking pause is ~600ms and the old
-            # default cut in under it.
-            "silence_duration_ms": 900,
-            "create_response": True,
-            "interrupt_response": True,
-        }
-    else:
-        logger.warning("[Turn] unknown turn_detection %r; leaving the API default", mode)
-        return None
-
-    # Prefer the SDK's typed object when this openai version exposes it, and
-    # fall back to the plain dict the API accepts. Which one was used is
-    # logged, because "turn detection is configured" and "turn detection
-    # actually reached the session" are different claims.
-    try:
-        from openai.types import realtime as _realtime_types
-
-        typed = _realtime_types.realtime_audio_input_turn_detection.SemanticVad(**payload) \
-            if mode == "semantic_vad" else None
-        if typed is not None:
-            logger.info("[Turn] %s eagerness=%s (typed)", mode, eagerness)
-            return typed
-    except Exception:
-        logger.debug("[Turn] typed turn-detection unavailable; sending a dict", exc_info=True)
-
-    logger.info("[Turn] %s eagerness=%s (dict)", mode, eagerness)
-    return payload
-
-
-def _build_realtime_model(cfg: LiveKitRealtimeConfig) -> openai.realtime.RealtimeModel:
-    from core.runtime_guard import ensure_openai_key
-
-    ensure_openai_key()
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required for OpenAI Realtime voice, and it was "
-            "not found in this process, in .env, or in the Windows User "
-            "environment. ARGO will have accepted this job and then failed "
-            "inside it, which from the room looks like no agent ever arrived."
-        )
-
-    kwargs = dict(
-        model=cfg.model,
-        voice=cfg.voice,
-        modalities=["text", "audio"],
-        api_key=api_key,
-        temperature=cfg.temperature,
-        speed=cfg.speed,
-    )
-
-    turn_detection = _build_turn_detection(cfg)
-    if turn_detection is not None:
-        kwargs["turn_detection"] = turn_detection
-
-    # Pin the input transcription language. Without it, two of thirty turns in
-    # the first real mic run came back as Chinese characters (the AC was on)
-    # and ARGO answered one. Typed object first, dict fallback, logged either
-    # way - same pattern as turn detection.
-    try:
-        from openai.types import realtime as _rt
-
-        transcription = _rt.AudioTranscription(model="gpt-4o-mini-transcribe", language="en")
-        logger.info("[Audio] input transcription: gpt-4o-mini-transcribe language=en (typed)")
-    except Exception:
-        transcription = {"model": "gpt-4o-mini-transcribe", "language": "en"}
-        logger.info("[Audio] input transcription: gpt-4o-mini-transcribe language=en (dict)")
-    kwargs["input_audio_transcription"] = transcription
-
-    reduction = (cfg.input_noise_reduction or "").strip().lower()
-    if reduction in ("near_field", "far_field"):
-        kwargs["input_audio_noise_reduction"] = reduction
-        logger.info("[Audio] server-side input noise reduction: %s", reduction)
-    elif reduction not in ("", "off", "none"):
-        logger.warning("[Audio] unknown input_noise_reduction %r; leaving it off", reduction)
-
-    logger.info(
-        "[LiveKit] realtime model=%s voice=%s temp=%.2f speed=%.2f turn_detection=%s",
-        cfg.model, cfg.voice, cfg.temperature, cfg.speed,
-        (turn_detection if isinstance(turn_detection, dict) else type(turn_detection).__name__)
-        if turn_detection is not None else "api-default",
-    )
-
-    try:
-        return openai.realtime.RealtimeModel(**kwargs)
-    except TypeError:
-        # An older plugin that does not know one of these kwargs must not take
-        # voice down - drop the optional ones and say so, loudly.
-        logger.exception(
-            "[LiveKit] realtime model rejected the tuning kwargs; retrying without "
-            "turn_detection/noise-reduction. Turn-taking will be the API default."
-        )
-        for optional in ("turn_detection", "input_audio_noise_reduction", "input_audio_transcription"):
-            kwargs.pop(optional, None)
-        return openai.realtime.RealtimeModel(**kwargs)
 
 
 def _apply_livekit_env(cfg: LiveKitRealtimeConfig) -> None:
