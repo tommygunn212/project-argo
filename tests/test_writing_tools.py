@@ -124,6 +124,15 @@ def test_verified_write_says_so(monkeypatch):
     assert d["ok"] is True and d["verified"] is True
 
 
+def test_multi_line_write_verifies_despite_windows_line_breaks(monkeypatch):
+    """UI Automation reads Notepad and Word back with \r breaks; the pasted
+    text had \n, so every multi-line write was reported as not arriving."""
+    _pretend_paste_succeeded(monkeypatch)
+    monkeypatch.setattr(T.apps, "read_app_text", lambda key: "Dear Kitty,\r\rSee you at six.\r")
+    d = T.app_write("notepad", "Dear Kitty,\n\nSee you at six.")
+    assert d["ok"] is True and d["verified"] is True
+
+
 def test_unreadable_window_is_not_counted_as_proof_either_way(monkeypatch):
     _pretend_paste_succeeded(monkeypatch)
     monkeypatch.setattr(T.apps, "read_app_text", lambda key: None)

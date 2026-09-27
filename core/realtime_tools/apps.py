@@ -161,6 +161,11 @@ def read_app_text(app_key: str) -> Optional[str]:
     return result.stdout or ""
 
 
+def _normalise_newlines(text: str) -> str:
+    """UI Automation hands back Word and Notepad text with \r line breaks."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 @capability
 def app_write(name: str, text: str) -> dict:
     """Type text into a running app window (Notepad or Word).
@@ -203,7 +208,7 @@ def app_write(name: str, text: str) -> dict:
         return {"ok": True, "verified": False, "app": key, "requested": name,
                 "characters": len(payload),
                 "message": f"{message} I couldn't check the window to confirm it."}
-    if payload not in seen:
+    if _normalise_newlines(payload) not in _normalise_newlines(seen):
         return {
             "ok": False,
             "error": "not_verified",
