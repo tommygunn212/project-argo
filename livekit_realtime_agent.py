@@ -27,6 +27,7 @@ from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobExec
 
 from core.livekit_config import LiveKitRealtimeConfig, get_livekit_realtime_config
 from core.livekit_config import speaker_identity_status
+from core.voice.activity import log_session_activity
 from core.voice.avatars import start_avatar
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
@@ -770,7 +771,8 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         )
         logger.warning("[LiveKit] running on fallback model %s", fallback)
 
-    _log_session_activity(session, voice_memory)
+    room_name = str(getattr(getattr(ctx, "room", None), "name", "") or "")
+    log_session_activity(session, room=room_name, memory=voice_memory)
     wire_urgent_interrupts(session, cfg)
     wire_wake_sleep_gate(session, cfg)
 
@@ -778,7 +780,6 @@ async def _run_realtime_session(ctx: JobContext) -> None:
     # record the dashboard's 'Active now' is filled from.
     from core.voice_active import write_active
 
-    room_name = str(getattr(getattr(ctx, "room", None), "name", "") or "")
     logger.info(
         "[LiveKit] Active now: %s / %s / personality %s (instructions %s)",
         cfg.model, cfg.voice, cfg.personality, cfg.instruction_fingerprint,
@@ -799,85 +800,6 @@ async def _run_realtime_session(ctx: JobContext) -> None:
         # variable does not keep the avatar alive. The shutdown callback
         # holds the reference for the room lifetime and closes it cleanly.
         ctx.add_shutdown_callback(avatar.aclose)
-
-
-def _log_session_activity(session: AgentSession, memory=None) -> None:
-    """Say, in the log, whether ARGO heard anything and whether it answered.
-
-    Without this a silent session and a deaf session look identical: one
-    "starting ARGO realtime session" line and nothing after it. Every handler
-    swallows its own errors - diagnostics must never be what breaks voice.
-    """
-
-    from core import voice_events
-
-    voice_events.emit(
-        "session_start",
-        room=str(getattr(getattr(session, "_room", None), "name", "") or ""),
-    )
-
-    def _safe(name, handler):
-        def wrapped(event):
-            try:
-                handler(event)
-            except Exception:
-                logger.debug("[Session] %s handler failed", name, exc_info=True)
-        return wrapped
-
-    def on_user_input(event):
-        transcript = getattr(getattr(event, "transcript", None), "text", None)
-        if transcript is None:
-            transcript = getattr(event, "transcript", "")
-        logger.info("[Session] heard: %r", transcript)
-        voice_events.emit("heard", text=transcript,
-                          final=bool(getattr(event, "is_final", False)))
-
-    def on_user_state(event):
-        old = getattr(event, "old_state", "?")
-        new = getattr(event, "new_state", "?")
-        logger.info("[Session] user %s -> %s", old, new)
-        voice_events.emit("user_state", old=str(old), new=str(new))
-        # The moment he starts talking again, any deep request in flight is
-        # answering a question he has moved on from. Killing it here is the
-        # difference between ARGO listening and ARGO talking over him with a
-        # paragraph about something else.
-        if str(new) == "speaking":
-            from core import deep_think
-
-            killed = deep_think.cancel_all(reason="user_started_speaking")
-            if killed:
-                voice_events.emit("deep_think_cancelled", count=killed)
-
-    def on_agent_state(event):
-        old = getattr(event, "old_state", "?")
-        new = getattr(event, "new_state", "?")
-        logger.info("[Session] agent %s -> %s", old, new)
-        voice_events.emit("agent_state", old=str(old), new=str(new))
-
-    def on_conversation_item(event):
-        item = getattr(event, "item", None)
-        logger.info("[Session] %s said: %r",
-                    getattr(item, "role", "?"), (getattr(item, "text_content", "") or "")[:200])
-        voice_events.emit("said", role=str(getattr(item, "role", "?")),
-                          text=(getattr(item, "text_content", "") or "")[:600])
-        if memory is not None:
-            memory.note(str(getattr(item, "role", "")), getattr(item, "text_content", "") or "")
-
-    def on_error(event):
-        logger.error("[Session] error: %s", getattr(event, "error", event))
-        voice_events.emit("error", detail=str(getattr(event, "error", event))[:400])
-
-    for name, handler in (
-        ("user_input_transcribed", on_user_input),
-        ("user_state_changed", on_user_state),
-        ("agent_state_changed", on_agent_state),
-        ("conversation_item_added", on_conversation_item),
-        ("error", on_error),
-    ):
-        try:
-            session.on(name, _safe(name, handler))
-        except Exception:
-            logger.debug("[Session] could not subscribe to %s", name, exc_info=True)
 
 
 def _apply_livekit_env(cfg: LiveKitRealtimeConfig) -> None:
