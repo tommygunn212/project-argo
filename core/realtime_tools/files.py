@@ -78,6 +78,26 @@ def _resolve(raw: str) -> Path:
     return candidate.resolve()
 
 
+def _quarantine(target: Path) -> Path:
+    """Move ``target`` into the dated quarantine folder and return where it went.
+
+    Every name is unique: two removals of the same name within one second
+    used to share a destination, and shutil.move onto an existing folder
+    nests the second item inside the first.
+    """
+    from core.filesystem_access import quarantine_dir
+
+    folder = quarantine_dir()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    destination = folder / f"{stamp}_{target.name}"
+    copy = 2
+    while destination.exists():
+        destination = folder / f"{stamp}-{copy}_{target.name}"
+        copy += 1
+    shutil.move(str(target), str(destination))
+    return destination
+
+
 @capability
 def list_folder(path: str = "") -> dict:
     """List a folder ARGO is allowed to read.
@@ -248,10 +268,18 @@ def move_item(source: str, destination: str, overwrite: bool = False) -> dict:
         return {"ok": False, "error": "exists", "path": str(dst),
                 "message": f"{dst.name} is already there. Say overwrite to replace it."}
 
+    # Overwriting never destroys: whatever was at the destination goes to
+    # quarantine first. (shutil.move onto an existing file also fails
+    # outright on Windows, so overwrite=True never worked there.)
+    replaced = _quarantine(dst) if dst.exists() else None
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
-    return {"ok": True, "from": str(src), "to": str(dst),
-            "message": f"Moved {src.name} to {dst.parent}."}
+    result = {"ok": True, "from": str(src), "to": str(dst),
+              "message": f"Moved {src.name} to {dst.parent}."}
+    if replaced is not None:
+        result["replaced_moved_to"] = str(replaced)
+        result["message"] += f" The {dst.name} that was there is in quarantine, not deleted."
+    return result
 
 
 @capability
@@ -291,7 +319,7 @@ def remove_item(path: str) -> dict:
     reversible by design: everything lands in a dated quarantine folder that
     Tommy empties himself.
     """
-    from core.filesystem_access import check_write, quarantine_dir
+    from core.filesystem_access import check_write
 
     target = _resolve(path)
     refusal = check_write(target)
@@ -301,9 +329,7 @@ def remove_item(path: str) -> dict:
         return {"ok": False, "error": "not_found", "path": str(target),
                 "message": f"There is nothing at {target}."}
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    destination = quarantine_dir() / f"{stamp}_{target.name}"
-    shutil.move(str(target), str(destination))
+    destination = _quarantine(target)
     return {
         "ok": True,
         "moved_to": str(destination),

@@ -157,6 +157,32 @@ def test_removing_something_that_is_not_there(sandbox):
     assert T.remove_item(str(sandbox / "ghost.txt"))["error"] == "not_found"
 
 
+
+def test_two_removals_of_the_same_name_never_collide(sandbox):
+    """Same name, same second: the second used to land INSIDE the first."""
+    for folder in ("one", "two"):
+        (sandbox / folder / "build").mkdir(parents=True)
+        (sandbox / folder / "build" / "marker.txt").write_text(folder)
+
+    first = T.remove_item(str(sandbox / "one" / "build"))
+    second = T.remove_item(str(sandbox / "two" / "build"))
+
+    assert first["ok"] and second["ok"]
+    assert first["moved_to"] != second["moved_to"]
+    assert (Path(first["moved_to"]) / "marker.txt").read_text() == "one"
+    assert (Path(second["moved_to"]) / "marker.txt").read_text() == "two"
+
+
+def test_move_with_overwrite_quarantines_what_it_replaces(sandbox):
+    (sandbox / "new.txt").write_text("new")
+    (sandbox / "target.txt").write_text("old")
+
+    result = T.move_item(str(sandbox / "new.txt"), str(sandbox / "target.txt"), overwrite=True)
+
+    assert result["ok"]
+    assert (sandbox / "target.txt").read_text() == "new"
+    assert Path(result["replaced_moved_to"]).read_text() == "old"
+
 # --- the report he can ask for --------------------------------------------
 
 def test_the_policy_is_reportable():
