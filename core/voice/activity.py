@@ -17,6 +17,20 @@ from core import voice_events
 logger = logging.getLogger("ARGO.LiveKit")
 
 
+def ensure_logging() -> None:
+    """Make ARGO's own log lines survive LiveKit's logging setup.
+
+    ``cli.run_app`` configures logging after this package is imported, and
+    loggers that already exist at that point can be disabled. That is why not
+    one "[LiveKit] starting ARGO realtime session" line once appeared in the
+    worker log while sessions were demonstrably running. Called at worker
+    build and again at the top of every session.
+    """
+    logger.disabled = False
+    logger.propagate = True
+    logger.setLevel(logging.INFO)
+
+
 def _item_text(item) -> str:
     return getattr(item, "text_content", "") or ""
 

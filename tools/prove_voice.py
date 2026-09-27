@@ -179,11 +179,11 @@ def check_live_config(rep: Report) -> dict:
 
 def check_urgent_interrupts(rep: Report) -> None:
     """A decisive "stop" must not wait for the two-word threshold."""
-    import livekit_realtime_agent as agent_mod
     from core.livekit_config import get_livekit_realtime_config
+    from core.voice.phrase_gates import opening_phrase
 
     phrases = get_livekit_realtime_config().urgent_interrupt_phrases
-    match = agent_mod.matches_urgent_phrase
+    match = opening_phrase
 
     fires = ["stop", "Stop!", "wait", "hold on", "stop talking", "wait, wait"]
     holds = ["don't stop the music", "we should wait for the render",
@@ -418,7 +418,10 @@ def check_classic_is_gated(rep: Report) -> None:
     rep.step("a captured classic turn is dropped, not answered", answer_gated,
              "dropped before pipeline.run_interaction" if answer_gated else "gate NOT FOUND")
 
-    agent_source = (ROOT / "livekit_realtime_agent.py").read_text(encoding="utf-8", errors="replace")
+    agent_source = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in [ROOT / "livekit_realtime_agent.py", *sorted((ROOT / "core" / "voice").glob("*.py"))]
+    )
     deep_source = (ROOT / "core" / "deep_think.py").read_text(encoding="utf-8", errors="replace")
     touches_ollama = any(
         token in text.lower()
