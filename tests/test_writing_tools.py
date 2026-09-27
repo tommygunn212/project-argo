@@ -112,21 +112,21 @@ def test_paste_that_never_arrived_is_reported_as_failure(monkeypatch):
     """The real bug: AppActivate can match the wrong window and the
     keystroke goes nowhere, but write_text_to_app still reported success."""
     _pretend_paste_succeeded(monkeypatch)
-    monkeypatch.setattr(T, "read_app_text", lambda key: "something else entirely")
+    monkeypatch.setattr(T.apps, "read_app_text", lambda key: "something else entirely")
     d = T.app_write("notepad", "the payload")
     assert d["ok"] is False and d["error"] == "not_verified"
 
 
 def test_verified_write_says_so(monkeypatch):
     _pretend_paste_succeeded(monkeypatch)
-    monkeypatch.setattr(T, "read_app_text", lambda key: "before the payload after")
+    monkeypatch.setattr(T.apps, "read_app_text", lambda key: "before the payload after")
     d = T.app_write("notepad", "the payload")
     assert d["ok"] is True and d["verified"] is True
 
 
 def test_unreadable_window_is_not_counted_as_proof_either_way(monkeypatch):
     _pretend_paste_succeeded(monkeypatch)
-    monkeypatch.setattr(T, "read_app_text", lambda key: None)
+    monkeypatch.setattr(T.apps, "read_app_text", lambda key: None)
     d = T.app_write("notepad", "the payload")
     assert d["ok"] is True and d["verified"] is False
 

@@ -29,7 +29,7 @@ def build(tmp_path, rows, meta=None):
 def library(tmp_path, monkeypatch):
     def _make(rows, meta=None):
         db = build(tmp_path, rows, meta)
-        monkeypatch.setattr(T, "ROOT", tmp_path)
+        monkeypatch.setattr(T.music, "ROOT", tmp_path)
         monkeypatch.setattr("core.music_player.MUSIC_DB_PATH", "music.db")
         return db
     return _make
@@ -77,7 +77,7 @@ def test_server_streams_are_flagged_as_the_risk_they_are(library, tmp_path):
 
 
 def test_no_library_at_all_is_reported_plainly(tmp_path, monkeypatch):
-    monkeypatch.setattr(T, "ROOT", tmp_path)
+    monkeypatch.setattr(T.music, "ROOT", tmp_path)
     monkeypatch.setattr("core.music_player.MUSIC_DB_PATH", "absent.db")
 
     d = T.music_library_status()

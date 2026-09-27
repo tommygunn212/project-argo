@@ -41,7 +41,7 @@ class Player:
 @pytest.fixture(autouse=True)
 def instant_settle(monkeypatch):
     """Don't make the suite wait out the real settle delay."""
-    monkeypatch.setattr(T, "PLAYBACK_SETTLE_SECONDS", 0.01)
+    monkeypatch.setattr(T.music, "PLAYBACK_SETTLE_SECONDS", 0.01)
 
 
 def _use(monkeypatch, player):
