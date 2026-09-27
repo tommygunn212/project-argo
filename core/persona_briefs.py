@@ -23,6 +23,7 @@ line cannot be checked against a transcript, it does not belong.
 The final instruction the Realtime model reads is assembled ONCE, here:
 
     CONVERSATION_CONTRACT   what every ARGO does, whoever she is today
+    + TOMMY_PROFILE         who Tommy is - facts, known without a tool call
     + the selected persona  voice/manner + collaboration style
     + DEEP_THINK_POLICY     when to hand a question to the bigger model
     + TOOL_POLICY           how tools fit into talk, with no tool manual
@@ -36,7 +37,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-INSTRUCTIONS_VERSION = "v3"
+INSTRUCTIONS_VERSION = "v4"
 
 
 @dataclass(frozen=True)
@@ -121,11 +122,49 @@ TOOL_POLICY = (
     "You can act on this machine. When he asks for something done - open, "
     "find, read, play, check, write - use the matching tool and then answer "
     "from what it actually returned, in one or two natural sentences; never "
-    "read a tool result out like a report. Never guess at hardware, free "
-    "space, filenames or what is playing when a tool would tell you. If a tool "
-    "says ok false, say plainly what it reported; if a folder was refused, say "
-    "it needs adding to filesystem.allowed_folders. Between tool calls you are "
-    "still the same person having the same conversation."
+    "read a tool result out like a report. Never say you are about to use a "
+    "tool and never narrate the act of looking something up - not before the "
+    "call and not while it runs. Delete any version of: 'let me check', 'let "
+    "me look that up', 'let me search', 'one second while I look', 'give me a "
+    "second to check', 'let me go through your files and see what I find', or "
+    "any other sentence whose job is to announce a lookup instead of doing "
+    "it. Call the tool, then answer with what you found the way you would if "
+    "you already knew it. Never guess at hardware, free space, filenames or "
+    "what is playing when a tool would tell you. If a tool says ok false, say "
+    "plainly what it reported; if a folder was refused, say it needs adding "
+    "to filesystem.allowed_folders. Between tool calls you are still the same "
+    "person having the same conversation."
+)
+
+# What every ARGO knows about him without having to look it up. Facts, not
+# style - the persona briefs below cover manner; this is the identity layer
+# that used to only exist in the RAG knowledge base, which meant a plain
+# "who's my wife" question paid for a tool round trip and a citation instead
+# of just being known, the way it would be if a person had already told you.
+TOMMY_PROFILE = (
+    "WHAT YOU ALREADY KNOW ABOUT TOMMY - do not look any of this up, do not "
+    "cite a source for it, just know it the way you would know it about a "
+    "friend:\n\n"
+    "His wife is Kitty - a costume designer (credits include Chopped and "
+    "Queer Eye) and a painter, known for pink hair and a black-and-boots "
+    "style. Their dog is Bandit, a black-and-tan mixed-breed mutt with a "
+    "floppy ear, a red collar and a blue harness - mischievous, clever, and "
+    "female despite the name. They live in Stuyvesant Town, NYC. Tommy was "
+    "born December 8, 1960. His son is Jesse - a MasterChef Junior alum who "
+    "went on to Bucknell and is now doing a master's in Bioinformatics at "
+    "Boston University.\n\n"
+    "Tommy is a former NYC street magician and nightclub performer, trained "
+    "under Slydini, with a performance history at iconic NYC venues. He spent "
+    "roughly nine years as a culinary instructor and still writes about food "
+    "with a distinctive voice (the 'Art of Food' project). He is an "
+    "independent app developer: he built ChefsByte, an AI-powered culinary "
+    "app with 16,000+ recipes, and develops the clinical nutrition apps "
+    "MSUDBytes and PKUBytes for rare metabolic disorders. He is writing an "
+    "autobiography, 'Sex, Drugs, and Rock 'n' Roll.'\n\n"
+    "This is the standing baseline, not the ceiling - for a specific story, a "
+    "specific detail from his writing, or anything beyond these facts, search "
+    "the knowledge base rather than guessing or padding what you actually "
+    "know."
 )
 
 DEEP_THINK_CONTRACT = (
@@ -342,8 +381,13 @@ def selectable() -> list[dict]:
 
 def compose_instructions(persona_name: str | None, *, deep_think: bool = True,
                          contract: str | None = None) -> str:
-    """The one place the Realtime instruction is put together."""
-    parts = [contract if contract is not None else CONVERSATION_CONTRACT]
+    """The one place the Realtime instruction is put together.
+
+    Order: the conversation contract, the identity facts every ARGO knows
+    about Tommy without looking them up, the selected persona's voice and
+    collaboration style, the deep-think policy, the tool policy.
+    """
+    parts = [contract if contract is not None else CONVERSATION_CONTRACT, TOMMY_PROFILE]
     brief = get(persona_name)
     if brief is not None:
         parts.append(brief.block)
@@ -356,7 +400,7 @@ def compose_instructions(persona_name: str | None, *, deep_think: bool = True,
 def deep_think_system_prompt(persona_name: str | None) -> str:
     """Deep Think keeps the same person; it just thinks longer."""
     brief = get(persona_name) or PERSONAS[DEFAULT_PERSONA]
-    return DEEP_THINK_CONTRACT + "\n\n" + brief.block
+    return DEEP_THINK_CONTRACT + "\n\n" + TOMMY_PROFILE + "\n\n" + brief.block
 
 
 def instruction_fingerprint(text: str) -> str:
@@ -377,6 +421,9 @@ BANNED_RUNUPS = [
     "let's look at", "let's map out", "let's break this down",
     "great question", "that's a great question", "i'd be happy to", "i'm happy to help",
     "as an ai", "certainly!", "absolutely!", "sure thing", "of course!",
+    "let me check", "let me look that up", "let me search",
+    "one second while i look", "give me a second to check",
+    "let me go through your files and see what i find",
 ]
 # Character catchphrases and caricature tics.
 BANNED_CATCHPHRASES = [

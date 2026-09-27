@@ -56,11 +56,13 @@ def test_the_contract_leads_and_the_persona_follows():
 
 
 def test_nothing_else_is_stacked_on_top():
-    """Contract + persona + deep-think policy + tool policy. Four parts, no more."""
+    """Contract + Tommy profile + persona + deep-think policy + tool policy.
+
+    Five parts, no more."""
     text = P.compose_instructions("argo")
     # Checked by reconstruction rather than by counting blank lines: the
     # contract has paragraphs of its own now.
-    expected = "\n\n".join([P.CONVERSATION_CONTRACT, P.get("argo").block,
+    expected = "\n\n".join([P.CONVERSATION_CONTRACT, P.TOMMY_PROFILE, P.get("argo").block,
                              P.DEEP_THINK_POLICY, P.TOOL_POLICY])
     assert text == expected
     assert "get_pc_specs" not in text and "list_folder" not in text, "tool manual leaked into the brief"
@@ -120,6 +122,29 @@ def test_the_contract_bans_the_runups_the_first_mic_run_produced():
 def test_find_banned_exempts_prohibitions_only():
     assert P.find_banned("Never say 'great question'.") == []
     assert P.find_banned("Open with: great question!") == ["great question"]
+
+
+def test_tool_policy_bans_narrating_the_lookup():
+    """Tommy's own complaint, word for word: ARGO should just know things,
+    not announce it's going rummaging for them."""
+    t = P.TOOL_POLICY.lower()
+    for phrase in ("let me check", "let me look that up", "let me search",
+                   "let me go through your files and see what i find"):
+        assert phrase in t
+    assert "never narrate the act of looking something up" in t
+
+
+def test_tommy_profile_carries_the_facts_that_should_never_need_a_tool_call():
+    p = P.TOMMY_PROFILE.lower()
+    for fact in ("kitty", "costume designer", "bandit", "stuyvesant town",
+                 "december 8, 1960", "jesse", "chefsbyte", "msudbytes", "pkubytes"):
+        assert fact in p, f"TOMMY_PROFILE missing '{fact}'"
+    assert "do not look any of this up" in p
+
+
+@pytest.mark.parametrize("name", P.SELECTABLE)
+def test_tommy_profile_is_in_every_composed_instruction_set(name):
+    assert P.TOMMY_PROFILE in P.compose_instructions(name)
 
 
 # --- deep think keeps the same person ---------------------------------------------------
