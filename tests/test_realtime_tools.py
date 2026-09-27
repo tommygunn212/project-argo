@@ -106,10 +106,9 @@ def test_read_text_file_reads_inside_the_install():
     assert d["ok"] and d["content"].strip()
 
 
-def test_granted_folder_is_honoured_without_restart(tmp_path, monkeypatch):
+def test_granted_folder_is_honoured_without_restart(tmp_path):
     """A folder granted in config must become readable on the next call."""
     (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
-    monkeypatch.setattr(T.files, "allowed_roots", lambda: [T.ROOT, tmp_path.resolve()])
     d = T.list_folder(str(tmp_path))
     assert d["ok"] and "note.txt" in d["files"]
 

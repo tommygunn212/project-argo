@@ -16,8 +16,6 @@ from core.realtime_tools._base import capability, ROOT
 
 __all__ = [
     "LIST_CAP",
-    "allowed_roots",
-    "writable_roots",
     "PathRefused",
     "list_folder",
     "read_text_file",
@@ -36,30 +34,6 @@ __all__ = [
 # alphabetical list makes the model report that a file is absent when it is
 # merely past the cut-off, so truncation is always reported.
 LIST_CAP = 200
-
-
-def allowed_roots() -> list[Path]:
-    """Everywhere ARGO may read. Defaults to every fixed drive on the machine.
-
-    This used to be the ARGO install and nothing else, which is why she kept
-    telling Tommy she could not search beyond her own folder.
-    """
-    from core.filesystem_access import read_roots
-
-    return read_roots()
-
-
-def writable_roots() -> list[Path]:
-    """Everywhere ARGO may change things."""
-    from core.filesystem_access import write_roots
-
-    return write_roots()
-
-
-def _within_allowed(target: Path, raw: str | None = None) -> bool:
-    from core.filesystem_access import check_read
-
-    return check_read(target, raw) is None
 
 
 class PathRefused(Exception):
@@ -89,13 +63,18 @@ def _refuse_bad_shape(raw: str) -> None:
         })
 
 
-def _resolve(raw: str, base: Path | None = None) -> Path:
-    """Interpret a spoken path. Relative means inside the ARGO install."""
+def _resolve(raw: str) -> Path:
+    """Interpret a spoken path. Empty or relative means inside the ARGO install.
+
+    The shape check runs on ``raw`` exactly as it arrived, because resolve()
+    hides a ".." traversal. Raises PathRefused, which @capability turns into
+    an ordinary ok:false result.
+    """
     _refuse_bad_shape(raw)
     text = (raw or "").strip().strip('"').strip("'")
-    candidate = Path(text).expanduser() if text else (base or ROOT)
+    candidate = Path(text).expanduser() if text else ROOT
     if not candidate.is_absolute():
-        candidate = (base or ROOT) / text
+        candidate = ROOT / candidate
     return candidate.resolve()
 
 
@@ -106,15 +85,10 @@ def list_folder(path: str = "") -> dict:
     "" or a relative path means inside the ARGO install. An absolute path must
     fall inside a granted folder.
     """
-    raw = (path or "").strip().strip('"')
-    _refuse_bad_shape(raw)
-    candidate = Path(raw).expanduser() if raw else ROOT
-    target = candidate if candidate.is_absolute() else (ROOT / raw)
-    target = target.resolve()
-
     from core.filesystem_access import check_read
 
-    refusal = check_read(target, raw)
+    target = _resolve(path)
+    refusal = check_read(target, path)
     if refusal:
         return refusal
     if not target.is_dir():
@@ -138,13 +112,10 @@ def list_folder(path: str = "") -> dict:
 @capability
 def read_text_file(path: str, max_chars: int = 4000) -> dict:
     """Read a text file inside an allowed folder."""
-    raw = (path or "").strip().strip('"')
-    _refuse_bad_shape(raw)
-    candidate = Path(raw).expanduser()
-    target = (candidate if candidate.is_absolute() else (ROOT / raw)).resolve()
     from core.filesystem_access import check_read
 
-    refusal = check_read(target, raw)
+    target = _resolve(path)
+    refusal = check_read(target, path)
     if refusal:
         return refusal
     if not target.is_file():
