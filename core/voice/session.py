@@ -10,6 +10,7 @@ tell "the entrypoint ran" from "the model built" from "the session started"
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -113,7 +114,7 @@ def _register_shutdown(ctx: JobContext, ids: JobIds, memory) -> None:
             voice_active.mark_ended(reason)
         if memory is not None:
             try:
-                memory.flush()
+                await asyncio.to_thread(memory.flush)
                 logger.info("[Memory] %s", memory.stats())
             except Exception:
                 logger.debug("[Memory] flush failed", exc_info=True)

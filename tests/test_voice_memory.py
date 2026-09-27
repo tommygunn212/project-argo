@@ -160,6 +160,23 @@ def test_flush_discards_a_dangling_half_turn(store):
     assert store.turns_added == []
 
 
+def test_flush_waits_for_the_last_write(store, monkeypatch):
+    """The final exchange must be stored before the session is reported ended."""
+    slow_add = store.add_turn
+
+    def add_turn(**kwargs):
+        time.sleep(0.2)
+        return slow_add(**kwargs)
+
+    monkeypatch.setattr(store, "add_turn", add_turn)
+    mem = vm.VoiceMemory()
+    mem.note("user", "remember the blue one")
+    mem.note("assistant", "the blue one, got it")
+    mem.flush()
+    assert len(store.turns_added) == 1
+    assert mem.stats()["turns_written"] == 1
+
+
 def test_disabled_memory_stores_nothing(store):
     mem = vm.VoiceMemory(enabled=False)
     mem.note("user", "remember this")

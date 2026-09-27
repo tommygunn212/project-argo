@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -137,6 +138,7 @@ class VoiceMemory:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _writes: int = 0
     _failures: int = 0
+    _inflight: list = field(default_factory=list, repr=False)
 
     # ------------------------------------------------------------------
     # Write path
@@ -187,6 +189,9 @@ class VoiceMemory:
             name="voice-memory-write",
             daemon=True,
         )
+        with self._lock:
+            self._inflight = [t for t in self._inflight if t.is_alive()]
+            self._inflight.append(thread)
         thread.start()
 
     def _persist(self, user_text: str, assistant_text: str) -> None:
@@ -203,10 +208,12 @@ class VoiceMemory:
                         metadata={"session_id": self.session_id} if self.session_id else None,
                     )
                     if turn_id and int(turn_id) > 0:
-                        self._writes += 1
+                        with self._lock:
+                            self._writes += 1
                         logger.info("[VoiceMemory] turn_stored id=%s", turn_id)
             except Exception:
-                self._failures += 1
+                with self._lock:
+                    self._failures += 1
                 logger.warning("[VoiceMemory] durable turn store failed", exc_info=True)
 
         layer = _mem0()
@@ -218,10 +225,20 @@ class VoiceMemory:
             except Exception:
                 logger.warning("[VoiceMemory] mem0 turn store failed", exc_info=True)
 
-    def flush(self) -> None:
-        """Drop any half-turn left over when the session ends."""
+    def flush(self, timeout: float = 5.0) -> None:
+        """End the session: drop any half-turn, and wait for writes in flight.
+
+        Writes run on daemon threads, so without the wait the last exchange of
+        a session could be lost when the worker drains right after it, and
+        stats() would report it as never written. Blocking - call it off the
+        event loop.
+        """
         with self._lock:
             self._pending_user = None
+            inflight, self._inflight = self._inflight, []
+        deadline = time.monotonic() + max(0.0, timeout)
+        for thread in inflight:
+            thread.join(max(0.0, deadline - time.monotonic()))
 
     # ------------------------------------------------------------------
     # Read path
