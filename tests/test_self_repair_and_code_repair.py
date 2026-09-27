@@ -309,7 +309,8 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path):
         runtime = tmp_path / "runtime"
         runtime.mkdir()
         (runtime / "repair_bridge.token").write_text("test-local-token")
-        monkeypatch.setattr(realtime, "ROOT", tmp_path)
+        from core.voice import agent as voice_agent
+        monkeypatch.setattr(voice_agent, "REPAIR_TOKEN_FILE", runtime / "repair_bridge.token")
         monkeypatch.setenv("ARGO_HTTP_PORT", str(server.server_port))
         # Call the same registered tool the LiveKit session uses, over real HTTP.
         result = json.loads(asyncio.run(realtime.ArgoRealtimeAgent.repair_argo(None, "approve repair")))
