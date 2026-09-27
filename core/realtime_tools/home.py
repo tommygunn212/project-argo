@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 
 from core.realtime_tools._base import capability
@@ -50,6 +51,9 @@ _AC_NOT_CONFIGURED = {
 }
 
 
+_POWER = {"on": True, "off": False}
+
+
 def _ac_unit_dict(unit) -> dict:
     d = asdict(unit)
     d.pop("raw", None)  # internal SDK payload, not for the model
@@ -57,32 +61,36 @@ def _ac_unit_dict(unit) -> dict:
     return d
 
 
-@capability
-def ac_list(include_all: bool = False) -> dict:
-    """List the GE SmartHQ air conditioners and their current state."""
-    from core.smart_home import SmartHomeError, credentials_present, discover
+def _smarthq(action: Callable[[], dict]) -> dict:
+    """Run a SmartHQ call, answering plainly when it is unconfigured or refuses."""
+    from core.smart_home import SmartHomeError, credentials_present
 
     if not credentials_present():
         return dict(_AC_NOT_CONFIGURED)
     try:
+        return action()
+    except SmartHomeError as exc:  # already redacted by core.smart_home
+        return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+
+
+@capability
+def ac_list(include_all: bool = False) -> dict:
+    """List the GE SmartHQ air conditioners and their current state."""
+    from core.smart_home import discover
+
+    def listing() -> dict:
         units = discover(include_all=include_all)
         return {"ok": True, "count": len(units), "units": [_ac_unit_dict(u) for u in units]}
-    except SmartHomeError as exc:
-        return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+
+    return _smarthq(listing)
 
 
 @capability
 def ac_status(name: str) -> dict:
     """Current state of one air conditioner by name (power, temperature, mode)."""
-    from core.smart_home import SmartHomeError, ac_state, credentials_present
+    from core.smart_home import ac_state
 
-    if not credentials_present():
-        return dict(_AC_NOT_CONFIGURED)
-    try:
-        unit = ac_state(name)
-        return {"ok": True, **_ac_unit_dict(unit)}
-    except SmartHomeError as exc:
-        return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+    return _smarthq(lambda: {"ok": True, **_ac_unit_dict(ac_state(name))})
 
 
 @capability
@@ -96,20 +104,18 @@ def ac_control(name: str, power: str = "", temperature_f: int = 0,
     lookup is fuzzy. Returns the unit's real state after the change, not
     just an acknowledgement.
     """
-    from core.smart_home import SmartHomeError, ac_set, credentials_present
+    from core.smart_home import ac_set
 
-    if not credentials_present():
-        return dict(_AC_NOT_CONFIGURED)
-    try:
-        power_val = {"on": True, "off": False}.get((power or "").strip().lower())
-        temp_val = int(temperature_f) if temperature_f else None
-        unit = ac_set(
-            name,
-            power=power_val,
-            temperature_f=temp_val,
-            mode=mode or None,
-            fan=fan or None,
-        )
-        return {"ok": True, **_ac_unit_dict(unit)}
-    except SmartHomeError as exc:
-        return {"ok": False, "error": "smart_home_error", "message": str(exc)}
+    power_word = (power or "").strip().lower()
+    if power_word and power_word not in _POWER:
+        # Silently ignoring it would report success for a change never made.
+        return {"ok": False, "error": "unknown_power", "requested": power,
+                "message": f"I can turn it on or off, but not {power!r}."}
+
+    return _smarthq(lambda: {"ok": True, **_ac_unit_dict(ac_set(
+        name,
+        power=_POWER.get(power_word),
+        temperature_f=int(temperature_f) if temperature_f else None,
+        mode=mode or None,
+        fan=fan or None,
+    ))})
