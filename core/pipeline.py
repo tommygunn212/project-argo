@@ -96,6 +96,7 @@ from core.pipeline_ambiguity import (
     ambiguous_short_question_prompt,
     is_non_propositional_utterance,
 )
+from core.pipeline_reset import PipelineResetDependencies, hard_reset_pipeline
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -2157,58 +2158,32 @@ class ArgoPipeline:
         "System busy". Stopping the server did not clear that, so ARGO looked
         permanently deaf until it was killed.
         """
-        actions, failures = [], []
-
-        def attempt(label, fn):
-            try:
-                fn()
-                actions.append(label)
-            except Exception as exc:
-                failures.append(f"{label}: {type(exc).__name__}")
-
-        attempt("stop_signal", self.stop_signal.set)
-        attempt("tts_stopped", self.stop_tts)
-
-        def _quiet_music():
+        def stop_music() -> None:
             from core.music_player import get_music_player
 
             get_music_player().stop()
 
-        attempt("music_stopped", _quiet_music)
-        attempt("audio_released", lambda: self.audio.force_release_audio(reason))
-        attempt("playback_stopped", self.audio.stop_playback)
-        attempt("buffers_cleared", self.audio.clear_buffers)
-
-        def _clear_flags():
+        def clear_speaking_flags() -> None:
             self.is_speaking = False
             self.tts_finished_at = time.time()
 
-        attempt("flags_cleared", _clear_flags)
-
-        # Break the lock last, once nothing else can still be using the device.
-        # run_interaction's finally tolerates an already-released lock.
-        lock_broken = False
-        if self.processing_lock.locked():
-            try:
-                self.processing_lock.release()
-                lock_broken = True
-                actions.append("processing_lock_broken")
-            except RuntimeError:
-                failures.append("processing_lock: not held by this thread")
-
-        attempt("state_idle", lambda: self.force_state("IDLE", source=reason))
-
-        self.logger.warning(
-            "[HARD_RESET] reason=%s actions=%s failures=%s", reason, actions, failures
+        return hard_reset_pipeline(
+            PipelineResetDependencies(
+                set_stop_signal=self.stop_signal.set,
+                stop_tts=self.stop_tts,
+                stop_music=stop_music,
+                force_release_audio=self.audio.force_release_audio,
+                stop_playback=self.audio.stop_playback,
+                clear_buffers=self.audio.clear_buffers,
+                clear_speaking_flags=clear_speaking_flags,
+                processing_lock_is_held=self.processing_lock.locked,
+                release_processing_lock=self.processing_lock.release,
+                force_idle=lambda: self.force_state("IDLE", source=reason),
+                logger=self.logger,
+                record_event=log_event,
+            ),
+            reason,
         )
-        log_event(f"HARD_RESET reason={reason} lock_broken={lock_broken}", stage="control")
-        return {
-            "ok": True,
-            "reason": reason,
-            "actions": actions,
-            "failures": failures,
-            "processing_lock_broken": lock_broken,
-        }
 
     def _recover_failed_turn(self, interaction_id):
         """Restore a failed/empty turn without overriding pause or a newer turn."""
