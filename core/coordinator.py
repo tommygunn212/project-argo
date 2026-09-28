@@ -1,58 +1,7 @@
-"""
-COORDINATOR v4: INTERACTION LOOP + SESSION MEMORY (BOUNDED & CONTROLLED)
+"""Classic voice interaction coordinator.
 
-Orchestration layer that loops for multiple interactions with short-term working memory.
-
-Pipeline (repeats per iteration):
-1. InputTrigger: Wait for wake word
-2. Audio Capture: Record user speech
-3. SpeechToText: Transcribe to text
-4. IntentParser: Classify text to intent
-5. ResponseGenerator: Generate response via LLM (with optional memory reference)
-6. OutputSink: Speak response
-7. SessionMemory: Store interaction (utterance, intent, response)
-8. Check stop condition (user said "stop" OR max interactions reached)
-
-Loop continues UNTIL:
-- User says a stop command ("stop", "goodbye", etc.)
-- OR max interactions reached (hardcoded: e.g., 3)
-- Then exit cleanly
-
-This is pure orchestration. Coordinator does NOT know or care that ResponseGenerator uses an LLM.
-
-Core concept:
-- InputTrigger: Detects wake word, fires callback
-- SpeechToText: Transcribes audio to text
-- IntentParser: Classifies text into intent
-- ResponseGenerator: Generates response text (LLM-based, isolated)
-- OutputSink: Generates audio from text, publishes it
-- SessionMemory: Stores recent interactions (bounded ring buffer)
-- Coordinator: Orchestrates them in correct order, loops until stop condition
-
-SessionMemory:
-- Stores last N interactions (default 3)
-- Cleared on program exit (not persistent)
-- Read-only for ResponseGenerator (can reference but not modify)
-- Automatically evicts oldest when full
-- NOT learning, NOT embeddings, NOT personality
-
-Changes from v3:
-- Add SessionMemory instantiation at startup
-- Append to memory after each iteration
-- Pass SessionMemory to ResponseGenerator (read-only)
-- Clear memory on exit
-- Everything else identical to v3
-
-What Coordinator is NOT:
-- Not a brain (no logic beyond routing)
-- Not intelligent (purely orchestration)
-- Not knowledgeable (ResponseGenerator is isolated)
-- Not configurable (hardcoded everything)
-- Not persistent (SessionMemory cleared on exit)
-- Not fault-tolerant (no retries)
-- Not a full chatbot (short-term working memory only, not personality)
-
-This is controlled, bounded orchestration with short-term scratchpad memory.
+Owns bounded interaction sequencing and delegates capture, parsing, generation,
+delivery, memory, and audio-authority work to focused services.
 """
 
 # ============================================================================
@@ -957,43 +906,7 @@ class Coordinator(CoordinatorResponseMixin):
             self._is_processing.clear()
     
     def run(self) -> None:
-        """
-        Run bounded interaction loop with session memory.
-        
-        Behavior (v4 — differs from v3):
-        - Loop until stop condition or max interactions
-        - Each iteration: wake → record → transcribe → parse → generate → speak → store
-        - After each iteration: check for stop keyword or max reached
-        - SessionMemory passed to ResponseGenerator (read-only)
-        - SessionMemory cleared on exit
-        - If no stop → loop back to waiting for wake word
-        - If stop → exit cleanly
-        
-        Stop conditions:
-        1. Response text contains stop keyword ("stop", "goodbye", "quit", "exit")
-        2. Max interactions reached (hardcoded: MAX_INTERACTIONS)
-        
-        Each iteration:
-        1. Wait for wake word (blocking)
-        2. Record audio (3-5 seconds)
-        3. Transcribe to text (Whisper)
-        4. Parse to intent (rules-based)
-        5. Generate response (LLM, with SessionMemory available)
-        6. Speak response (TTS)
-        7. Store in SessionMemory (utterance, intent, response)
-        8. Check stop condition
-        9. If no stop → continue loop
-        10. If stop → break loop
-        
-        SessionMemory behavior:
-        - Append each interaction (utterance, intent, response)
-        - Only recent N interactions stored (default 3)
-        - Oldest entries automatically evicted when full
-        - Cleared on exit (not persistent)
-        - ResponseGenerator can read but not modify
-        
-        This is a blocking call. It loops until stop condition, then returns.
-        """
+        """Run bounded interactions until stop, sleep, or the configured limit."""
         self.logger.info("[run] Starting Coordinator v4 (interaction loop + session memory)...")
         self.logger.info(f"[run] Max interactions: {self.MAX_INTERACTIONS}")
         self.logger.info(f"[run] Stop keywords: {self.STOP_KEYWORDS}")
