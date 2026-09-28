@@ -100,7 +100,11 @@ from core.pipeline_response_delivery import (
     deliver_canonical_response,
 )
 from core.pipeline_response_controls import resolve_spoken_response_controls
-from core.pipeline_clarification import get_clarification_prompt
+from core.pipeline_clarification import (
+    ClarificationDeliveryDependencies,
+    deliver_clarification,
+    get_clarification_prompt,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -829,31 +833,27 @@ class ArgoPipeline:
             candidates: Possible targets to present as choices
             prompt: Optional explicit prompt to use
         """
-        # Phase 5: Clarification resets session context (error-like state)
-        self._conversation_buffer.clear(reason="clarification/error")
-        
-        # Use provided prompt, or generate context-aware one
-        if prompt:
-            response = prompt
-        else:
-            response = self._get_clarification_prompt(intent, candidates)
-        
-        # Apply persona formatting - CLARIFICATION type enforces neutral persona
-        persona_name = self._resolve_personality_mode()
-        response = apply_persona(response, ResponseType.CLARIFICATION, persona_name)
-        
-        self.logger.info(f"[CLARIFY] {response}")
-        self.broadcast("log", f"Argo: {response}")
-        self._append_convo_ledger("argo", response)
-        if not self.stop_signal.is_set() and not replay_mode:
-            tts_text = self._sanitize_tts_text(response, enforce_confidence=False)
-            tts_override = (overrides or {}).get("suppress_tts", False)
-            if not tts_override and tts_text:
-                self.speak(tts_text, interaction_id=interaction_id)
-        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-        self.logger.info("--- Interaction Complete ---")
-        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-        return True
+        response = prompt or self._get_clarification_prompt(intent, candidates)
+        return deliver_clarification(
+            ClarificationDeliveryDependencies(
+                clear_conversation=self._conversation_buffer.clear,
+                logger=self.logger,
+                broadcast=self.broadcast,
+                append_conversation=self._append_convo_ledger,
+                sanitize_tts_text=self._sanitize_tts_text,
+                speak=self.speak,
+                transition_state=self.transition_state,
+                record_timeline=self._record_timeline,
+                apply_persona=apply_persona,
+            ),
+            response=response,
+            interaction_id=interaction_id,
+            replay_mode=replay_mode,
+            overrides=overrides,
+            persona_name=self._resolve_personality_mode(),
+            response_type=ResponseType.CLARIFICATION,
+            stop_requested=self.stop_signal.is_set(),
+        )
 
     # =========================================================================
     # PHASE 3: CONVERSATIONAL PRESENCE - Response Style & Acknowledgments
