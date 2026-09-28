@@ -467,22 +467,6 @@ class ArgoPipeline:
         affirmatives = {"yes", "yeah", "yep", "correct", "right", "do it", "confirm", "ok", "okay"}
         return lower_text in affirmatives or any(a == lower_text[:len(a)] for a in affirmatives)
 
-    def _is_negative_response(self, text: str) -> bool:
-        """Check if response is negative (no, nope, never, skip, forget)."""
-        lower_text = text.lower().strip()
-        negatives = {"no", "nope", "never", "skip", "don't", "dont", "forget", "cancel"}
-        return lower_text in negatives or any(n == lower_text[:len(n)] for n in negatives)
-
-    def _is_identity_phrase(self, text: str) -> bool:
-        lower = (text or "").lower()
-        phrases = [
-            "my name is",
-            "call me",
-            "you can call me",
-            "i am",
-        ]
-        return any(phrase in lower for phrase in phrases)
-
     def _is_non_propositional_utterance(self, text: str, request_kind: str) -> bool:
         return is_non_propositional_utterance(
             text,
