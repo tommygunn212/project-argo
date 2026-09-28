@@ -2225,9 +2225,11 @@ class ArgoPipeline:
         self.stop_signal.clear()
         self.is_speaking = True
         self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
+        audio_acquired = False
         try:
             try:
                 self.audio.acquire_audio("TTS", interaction_id=interaction_id)
+                audio_acquired = True
             except Exception as e:
                 self.logger.error(f"[TTS] Audio ownership error: {e}")
                 log_event("TTS_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
@@ -2271,10 +2273,11 @@ class ArgoPipeline:
             self.logger.error(f"[TTS] Error: {e}")
             self._play_sound_cue("error", interaction_id=interaction_id)
         finally:
-            try:
-                self.audio.release_audio("TTS", interaction_id=interaction_id)
-            except Exception as e:
-                self.logger.error(f"[TTS] Exception during audio.release_audio: {e}")
+            if audio_acquired:
+                try:
+                    self.audio.release_audio("TTS", interaction_id=interaction_id)
+                except Exception as e:
+                    self.logger.error(f"[TTS] Exception during audio.release_audio: {e}")
             self.is_speaking = False
             self.tts_finished_at = time.time()
             self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)

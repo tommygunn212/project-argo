@@ -4,8 +4,6 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
-
 from core.pipeline import ArgoPipeline
 
 
@@ -67,10 +65,6 @@ def test_edge_speech_acquires_plays_and_releases_audio():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="speak currently releases TTS audio even when acquisition failed",
-)
 def test_contested_speech_does_not_release_unowned_audio():
     pipeline = _pipeline()
     pipeline.audio.acquire_audio.side_effect = RuntimeError("owned elsewhere")
