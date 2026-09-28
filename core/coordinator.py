@@ -42,6 +42,10 @@ from core.coordinator_text import (
 from core.coordinator_loop import run_coordinator_loop
 from core.coordinator_interaction import run_coordinator_interaction
 from core.coordinator_wake import WakeEventDependencies, handle_wake_event
+from core.coordinator_speech import (
+    CoordinatorSpeechDependencies,
+    speak_without_interrupt_detection,
+)
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -936,51 +940,16 @@ class Coordinator:
         Args:
             response_text: Text to speak
         """
-        tts_paused = False
-        try:
-            self.logger.info("[TTS] Speaking response (interrupts disabled during playback)...")
-            
-            # CRITICAL: Pause input BEFORE starting TTS to prevent feedback loop
-            # where speaker output is picked up by microphone
-            try:
-                self._pause_trigger_for_tts()
-                tts_paused = True
-            except Exception as e:
-                self.logger.warning(f"[TTS] Failed to pause input: {e}")
-            
-            try:
-                # Speak in main thread (blocking, event loop-safe)
-                # IMPORTANT: Do NOT monitor for interrupts while Argo is speaking
-                # This prevents Argo from interrupting itself with its own audio
-                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                try:
-                    self.acquire_audio("TTS")
-                except Exception as e:
-                    self.logger.warning(f"[TTS] Audio ownership denied: {e}")
-                    return
-                try:
-                    self.sink.speak(response_text, interaction_id=self.interaction_id)
-                finally:
-                    self.release_audio("TTS")
-                
-                self.logger.info("[TTS] Response finished")
-            except Exception as e:
-                self.logger.error(f"[TTS] Error during sink.speak(): {e}")
-                raise
-            finally:
-                # Resume input immediately after TTS completes
-                if tts_paused:
-                    try:
-                        self._resume_trigger_after_tts()
-                    except Exception as e:
-                        self.logger.warning(f"[TTS] Failed to resume input: {e}")
-        
-        except Exception as e:
-            self.logger.error(f"[TTS] Fatal error during speech: {e}", exc_info=True)
-        
-        finally:
-            # Ensure speaking flag is cleared even if exception occurred
-            try:
-                self._is_speaking.clear()
-            except Exception:
-                pass
+        speak_without_interrupt_detection(
+            CoordinatorSpeechDependencies(
+                logger=self.logger,
+                pause_input=self._pause_trigger_for_tts,
+                resume_input=self._resume_trigger_after_tts,
+                acquire_audio=self.acquire_audio,
+                release_audio=self.release_audio,
+                speak=self.sink.speak,
+                get_interaction_id=lambda: self.interaction_id,
+                clear_speaking=self._is_speaking.clear,
+            ),
+            response_text,
+        )
