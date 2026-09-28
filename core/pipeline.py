@@ -79,9 +79,9 @@ from core.pipeline_canonical_stage import run_canonical_stage
 from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
 from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
-from core.knowledge_answer_guard import enforce_knowledge_answer
 from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
 from core.pipeline_streaming_response import PipelineStreamingResponseService
+from core.pipeline_response_generation import PipelineResponseGenerationService
 from core.pipeline_bluetooth import PipelineBluetoothService
 from core.pipeline_audio_routing import PipelineAudioRoutingService
 from core.pipeline_system_volume import PipelineSystemVolumeService
@@ -143,6 +143,7 @@ class ArgoPipeline:
         self._apps = PipelineAppService(self)
         self._time_responses = PipelineTimeService(self)
         self._streaming_responses = PipelineStreamingResponseService(self)
+        self._response_generation = PipelineResponseGenerationService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -1618,106 +1619,19 @@ class ArgoPipeline:
 
     def generate_response(self, text, interaction_id: str = "", rag_context: str = "", memory_context: str = "", use_convo_buffer: bool = True, intent_type: Optional[str] = None, confidence: float = 1.0):
         """Generate a response and enforce structured knowledge answers."""
-        if not self.llm_enabled:
-            self.logger.info("LLM offline: skipping generation")
-            return ""
-        mode = self._resolve_personality_mode()
-        serious_mode = self._is_serious(text)
-        convo_messages = self._conversation_buffer.as_messages() if use_convo_buffer else []
-        prompt = self._build_llm_prompt(text, mode, serious_mode, rag_context, memory_context, convo_context="")
-        self.logger.info(f"[LLM] Prompt: '{text}'")
-        self.logger.debug(f"[LLM] Full prompt (first 500 chars): {prompt[:500]}")
-        full_response = ""
-        try:
-            self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
-            start = time.perf_counter()
-            first_token_ms = None
-            sys_msg = self._get_system_message(mode, serious_mode)
-            for part in self._stream_llm_text(
-                prompt=prompt,
-                system_message=sys_msg,
-                convo_messages=convo_messages,
-                temperature=0.7,
-                max_tokens=1024,
-                interaction_id=interaction_id,
-            ):
-                if self.stop_signal.is_set():
-                    break
-                if part and first_token_ms is None:
-                    first_token_ms = (time.perf_counter() - start) * 1000
-                    self._record_timeline(
-                        f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                        stage="llm",
-                        interaction_id=interaction_id,
-                    )
-                full_response += part
-
-            total_ms = (time.perf_counter() - start) * 1000
-            self._record_timeline(f"LLM_DONE {total_ms:.0f}ms", stage="llm", interaction_id=interaction_id)
-            self.broadcast("llm_metrics", {
-                "interaction_id": interaction_id,
-                "first_token_ms": first_token_ms,
-                "total_ms": total_ms,
-            })
-            full_response = self._strip_prompt_artifacts(full_response)
-            default_model = self._llm_router.last_model or self.llm_model_name
-
-            def retry_knowledge_answer(schema_instruction: str, model_override: str | None) -> str:
-                retry_prompt = self._build_llm_prompt(
-                    text + "\n\n" + schema_instruction,
-                    mode,
-                    serious_mode,
-                    rag_context,
-                    memory_context,
-                    convo_context="",
-                )
-                retry_response = ""
-                try:
-                    for chunk in self._stream_llm_text(
-                        prompt=retry_prompt,
-                        system_message=self._get_system_message(mode, serious_mode),
-                        convo_messages=convo_messages,
-                        temperature=0.7,
-                        max_tokens=1024,
-                        interaction_id=interaction_id,
-                        model_override=model_override,
-                    ):
-                        if self.stop_signal.is_set():
-                            break
-                        retry_response += chunk
-                    return self._strip_prompt_artifacts(retry_response)
-                except Exception as error:
-                    self.logger.error(f"[LLM] Retry Error: {error}")
-                    return full_response
-
-            guarded = enforce_knowledge_answer(
-                initial_response=full_response,
-                user_text=text,
-                intent_type=intent_type,
-                confidence=confidence,
-                must_pass_phrases=getattr(self, "must_pass_phrases", None),
-                retry=retry_knowledge_answer,
-                default_model=default_model,
-            )
-            if guarded.outcome == "retry_pass":
-                self.logger.info("[KNOWLEDGE GUARD] Principle section and domain keyword found on retry.")
-            elif guarded.outcome == "must_pass_fallback":
-                self.logger.warning(
-                    f"[KNOWLEDGE GUARD] LLM failed schema for MUST_PASS {intent_type}. Using deterministic fallback."
-                )
-                self.logger.info("[KNOWLEDGE GUARD] knowledge_fallback_used = true")
-            elif guarded.outcome == "retry_weak":
-                self.logger.warning(
-                    "[KNOWLEDGE GUARD] Principle section or domain keyword still missing after retry. "
-                    "Downgrading confidence."
-                )
-            else:
-                self.logger.info(f"[LLM] Response: '{guarded.text[:60]}...'")
-            return guarded.text
-        except Exception as error:
-            self.logger.error(f"[LLM] Error: {error}")
-            self._record_timeline("LLM_ERROR", stage="llm", interaction_id=interaction_id)
-            return "[Error connecting to LLM]"
+        service = getattr(self, "_response_generation", None)
+        if service is None:
+            service = PipelineResponseGenerationService(self)
+            self._response_generation = service
+        return service.generate(
+            text,
+            interaction_id=interaction_id,
+            rag_context=rag_context,
+            memory_context=memory_context,
+            use_convo_buffer=use_convo_buffer,
+            intent_type=intent_type,
+            confidence=confidence,
+        )
 
     def set_llm_enabled(self, enabled: bool) -> None:
         self.llm_enabled = bool(enabled)
