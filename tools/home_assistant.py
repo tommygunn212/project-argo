@@ -99,6 +99,17 @@ DOMAIN_FRIENDLY = {
 
 # Domains we expose to voice control
 CONTROLLABLE_DOMAINS = {"light", "switch", "climate", "media_player", "fan", "cover", "lock", "scene"}
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
+def _validate_entity_id(entity_id: str, *, controllable: bool = False) -> str:
+    """Reject malformed or out-of-scope entity IDs before building API paths."""
+    if not isinstance(entity_id, str) or not _ENTITY_ID_RE.fullmatch(entity_id):
+        raise ValueError(f"Invalid Home Assistant entity ID: {entity_id!r}")
+    domain = entity_id.split(".", 1)[0]
+    if controllable and domain not in CONTROLLABLE_DOMAINS:
+        raise ValueError(f"Home Assistant domain is not controllable: {domain}")
+    return entity_id
 
 
 def get_all_states() -> list:
@@ -111,6 +122,7 @@ def get_all_states() -> list:
 
 def get_entity_state(entity_id: str) -> dict:
     """Return state dict for one entity."""
+    _validate_entity_id(entity_id)
     return _ha_request("GET", f"states/{entity_id}")
 
 
@@ -121,13 +133,22 @@ def list_devices(domain: Optional[str] = None) -> List[Dict]:
         return []
     devices = []
     for entity in states:
+        if not isinstance(entity, dict):
+            continue
         eid = entity.get("entity_id", "")
+        if not isinstance(eid, str) or not _ENTITY_ID_RE.fullmatch(eid):
+            continue
         d = eid.split(".")[0] if "." in eid else ""
         if d not in CONTROLLABLE_DOMAINS:
             continue
         if domain and d != domain:
             continue
-        friendly = entity.get("attributes", {}).get("friendly_name", eid)
+        attributes = entity.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        friendly = attributes.get("friendly_name", eid)
+        if not isinstance(friendly, str) or not friendly.strip():
+            friendly = eid
         devices.append({
             "entity_id": eid,
             "domain": d,
@@ -141,6 +162,7 @@ def list_devices(domain: Optional[str] = None) -> List[Dict]:
 
 def turn_on(entity_id: str) -> str:
     """Turn on a device."""
+    _validate_entity_id(entity_id, controllable=True)
     domain = entity_id.split(".")[0]
     _ha_post(f"services/{domain}/turn_on", {"entity_id": entity_id})
     friendly = _get_friendly_name(entity_id)
@@ -149,6 +171,7 @@ def turn_on(entity_id: str) -> str:
 
 def turn_off(entity_id: str) -> str:
     """Turn off a device."""
+    _validate_entity_id(entity_id, controllable=True)
     domain = entity_id.split(".")[0]
     _ha_post(f"services/{domain}/turn_off", {"entity_id": entity_id})
     friendly = _get_friendly_name(entity_id)
@@ -157,6 +180,7 @@ def turn_off(entity_id: str) -> str:
 
 def toggle(entity_id: str) -> str:
     """Toggle a device."""
+    _validate_entity_id(entity_id, controllable=True)
     domain = entity_id.split(".")[0]
     _ha_post(f"services/{domain}/toggle", {"entity_id": entity_id})
     friendly = _get_friendly_name(entity_id)
@@ -165,6 +189,9 @@ def toggle(entity_id: str) -> str:
 
 def set_brightness(entity_id: str, brightness_pct: int) -> str:
     """Set light brightness (0-100)."""
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("light."):
+        raise ValueError("Brightness can only be set on a light entity")
     brightness_pct = max(0, min(100, brightness_pct))
     brightness_val = int(brightness_pct * 255 / 100)
     _ha_post("services/light/turn_on", {
@@ -177,6 +204,9 @@ def set_brightness(entity_id: str, brightness_pct: int) -> str:
 
 def set_color(entity_id: str, color_name: str) -> str:
     """Set light color by name."""
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("light."):
+        raise ValueError("Color can only be set on a light entity")
     colors = {
         "red": [255, 0, 0], "green": [0, 255, 0], "blue": [0, 0, 255],
         "white": [255, 255, 255], "warm white": [255, 200, 150],
@@ -197,6 +227,9 @@ def set_color(entity_id: str, color_name: str) -> str:
 
 def set_temperature(entity_id: str, temp: float, mode: Optional[str] = None) -> str:
     """Set thermostat temperature."""
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("climate."):
+        raise ValueError("Temperature can only be set on a climate entity")
     body = {"entity_id": entity_id, "temperature": temp}
     if mode:
         _ha_post("services/climate/set_hvac_mode", {"entity_id": entity_id, "hvac_mode": mode})
@@ -210,17 +243,26 @@ def set_temperature(entity_id: str, temp: float, mode: Optional[str] = None) -> 
 
 def activate_scene(entity_id: str) -> str:
     """Activate a Home Assistant scene."""
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("scene."):
+        raise ValueError("Only a scene entity can be activated as a scene")
     _ha_post("services/scene/turn_on", {"entity_id": entity_id})
     friendly = _get_friendly_name(entity_id)
     return f"Scene '{friendly}' activated."
 
 
 def lock_device(entity_id: str) -> str:
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("lock."):
+        raise ValueError("Lock actions require a lock entity")
     _ha_post("services/lock/lock", {"entity_id": entity_id})
     return f"{_get_friendly_name(entity_id)} locked."
 
 
 def unlock_device(entity_id: str) -> str:
+    _validate_entity_id(entity_id, controllable=True)
+    if not entity_id.startswith("lock."):
+        raise ValueError("Lock actions require a lock entity")
     _ha_post("services/lock/unlock", {"entity_id": entity_id})
     return f"{_get_friendly_name(entity_id)} unlocked."
 
@@ -246,24 +288,30 @@ def resolve_entity(name: str, domain: Optional[str] = None) -> Optional[str]:
         return None
 
     devices = list_devices(domain)
-    # Exact match on friendly name
-    for d in devices:
-        if d["name"].lower() == name_lower:
-            return d["entity_id"]
-    # Substring match
-    for d in devices:
-        if name_lower in d["name"].lower():
-            return d["entity_id"]
+    # Exact and substring matches are safe only when they identify one entity.
+    exact = [d["entity_id"] for d in devices if d["name"].lower() == name_lower]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+    substring = [d["entity_id"] for d in devices if name_lower in d["name"].lower()]
+    if len(substring) == 1:
+        return substring[0]
+    if len(substring) > 1:
+        return None
     # Word overlap match
     name_words = set(name_lower.split())
-    best, best_score = None, 0
+    best: List[str] = []
+    best_score = 0
     for d in devices:
         dev_words = set(d["name"].lower().split())
         overlap = len(name_words & dev_words)
         if overlap > best_score:
             best_score = overlap
-            best = d["entity_id"]
-    return best if best_score > 0 else None
+            best = [d["entity_id"]]
+        elif overlap == best_score and overlap > 0:
+            best.append(d["entity_id"])
+    return best[0] if best_score > 0 and len(best) == 1 else None
 
 
 # ── Voice command parser ──────────────────────────────────────────────

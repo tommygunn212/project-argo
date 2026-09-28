@@ -27,6 +27,8 @@ from tools.home_assistant import (
     parse_smart_home_command,
     resolve_entity,
     _infer_domain,
+    _validate_entity_id,
+    list_devices,
     is_home_assistant_configured,
 )
 
@@ -180,6 +182,46 @@ class TestHAConfig:
             "token": "abc123",
         }):
             assert is_home_assistant_configured() is True
+
+
+class TestHABoundaries:
+    def test_ambiguous_device_name_is_not_silently_selected(self):
+        devices = [
+            {"entity_id": "light.kitchen_main", "name": "Kitchen light"},
+            {"entity_id": "light.kitchen_sink", "name": "Kitchen sink light"},
+        ]
+        with patch("tools.home_assistant.list_devices", return_value=devices):
+            assert resolve_entity("kitchen", "light") is None
+
+    def test_unique_exact_name_wins_even_with_other_partial_matches(self):
+        devices = [
+            {"entity_id": "light.kitchen", "name": "Kitchen"},
+            {"entity_id": "light.kitchen_sink", "name": "Kitchen sink light"},
+        ]
+        with patch("tools.home_assistant.list_devices", return_value=devices):
+            assert resolve_entity("kitchen", "light") == "light.kitchen"
+
+    def test_malformed_external_states_are_skipped(self):
+        states = [
+            None,
+            {"entity_id": "../../services/light/turn_on", "attributes": {}},
+            {"entity_id": "light.kitchen", "attributes": None, "state": "on"},
+        ]
+        with patch("tools.home_assistant.get_all_states", return_value=states):
+            assert list_devices() == [{
+                "entity_id": "light.kitchen",
+                "domain": "light",
+                "name": "light.kitchen",
+                "state": "on",
+            }]
+
+    def test_entity_ids_cannot_escape_the_api_path(self):
+        with pytest.raises(ValueError, match="Invalid Home Assistant entity ID"):
+            _validate_entity_id("light.kitchen/../../config")
+
+    def test_non_device_domains_cannot_be_controlled(self):
+        with pytest.raises(ValueError, match="not controllable"):
+            _validate_entity_id("sensor.outdoor_temperature", controllable=True)
 
 
 # ====================================================================
