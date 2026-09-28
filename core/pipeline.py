@@ -32,8 +32,6 @@ from core.sound_cues import get_sound_cue_player
 from core.config import (
     get_runtime_overrides,
     get_config,
-    ResponseStyle,
-    ActionRisk,
 )
 from core.intent_parser import RuleBasedIntentParser, Intent, IntentType, normalize_system_text, is_system_keyword
 from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
@@ -104,6 +102,11 @@ from core.pipeline_clarification import (
     ClarificationDeliveryDependencies,
     deliver_clarification,
     get_clarification_prompt,
+)
+from core.pipeline_conversation_policy import (
+    get_action_risk,
+    get_response_style,
+    minimal_ack,
 )
 
 # Persona module - text transformers gated by response type
@@ -867,22 +870,7 @@ class ArgoPipeline:
             ResponseStyle.NEUTRAL - for informational responses
             ResponseStyle.SNARK - for identity/meta questions (personality allowed)
         """
-        if not intent:
-            return ResponseStyle.NEUTRAL
-        
-        # Identity/meta questions get personality
-        if intent.intent_type in {IntentType.ARGO_IDENTITY, IntentType.ARGO_GOVERNANCE}:
-            return ResponseStyle.SNARK
-        
-        # Reversible actions get minimal responses
-        if intent.intent_type in {
-            IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT,
-            IntentType.APP_CONTROL, IntentType.APP_LAUNCH,
-            IntentType.VOLUME_CONTROL, IntentType.BLUETOOTH_CONTROL,
-        }:
-            return ResponseStyle.DRY
-        
-        return ResponseStyle.NEUTRAL
+        return get_response_style(intent)
     
     def _get_action_risk(self, intent: Intent | None, user_text: str = "") -> str:
         """Classify action risk level for act-vs-clarify decisions.
@@ -892,23 +880,7 @@ class ArgoPipeline:
             ActionRisk.DESTRUCTIVE - needs confirmation
             ActionRisk.AMBIGUOUS - needs clarification
         """
-        if not intent:
-            return ActionRisk.AMBIGUOUS
-        
-        # Destructive patterns
-        text_lower = (user_text or "").lower()
-        if re.search(r"\b(delete|remove|erase|wipe|kill everything|shutdown|restart|reboot)\b", text_lower):
-            return ActionRisk.DESTRUCTIVE
-        
-        # Reversible actions
-        if intent.intent_type in {
-            IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT, IntentType.MUSIC,
-            IntentType.APP_CONTROL, IntentType.APP_LAUNCH,
-            IntentType.VOLUME_CONTROL, IntentType.BLUETOOTH_CONTROL,
-        }:
-            return ActionRisk.REVERSIBLE
-        
-        return ActionRisk.AMBIGUOUS
+        return get_action_risk(intent, user_text)
     
     def _minimal_ack(self, action_result: bool, context: str = "") -> str | None:
         """Generate minimal acknowledgment or None for silence.
@@ -924,26 +896,7 @@ class ArgoPipeline:
         Returns:
             Minimal acknowledgment string, or None for silence
         """
-        # Music started = silence (the music IS the acknowledgment)
-        if context == "music_started":
-            return None
-        
-        # Already in desired state = minimal
-        if context == "already_open":
-            return None  # silence - they can see it's open
-        if context == "already_closed":
-            return None  # silence - they can see it's closed
-        
-        # Success = minimal or silence
-        if action_result:
-            # Some actions deserve acknowledgment
-            if context in {"closed", "stopped", "muted", "unmuted"}:
-                return "Done."
-            # Default success = silence
-            return None
-        
-        # Failure = brief error
-        return "That didn't work."
+        return minimal_ack(action_result, context)
     
     def _get_clarification_prompt(self, intent: Intent | None = None, candidates: list[str] | None = None) -> str:
         """Generate context-aware clarification prompt.
