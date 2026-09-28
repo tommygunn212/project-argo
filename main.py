@@ -50,6 +50,7 @@ from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture import finish_classic_capture
+from core.classic_barge_in import ClassicBargeInGate
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
@@ -897,9 +898,7 @@ def main_loop():
     barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
 
     # --- AMBIENT NOISE CALIBRATION ---
-    # A single hot audio frame is often speaker echo or a click, not a person
-    # trying to interrupt. Require a short, continuous voice signal instead.
-    barge_in_started_at = None
+    barge_in_gate = ClassicBargeInGate()
     vad_threshold = config_vad_threshold
 
     def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
@@ -1018,38 +1017,32 @@ def main_loop():
         # Echo-aware: Raise barge-in threshold during TTS to prevent self-hearing triggers.
         # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
         barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
-        effective_barge_threshold = active_barge_in_threshold * 3.5 if pipeline.is_speaking else active_barge_in_threshold
-        barge_candidate = (
-            pipeline.is_speaking
-            and volume >= effective_barge_threshold
-            and RUNTIME_OVERRIDES.get("barge_in_enabled", True)
-            and not barge_in_suppressed
+        barge_in = barge_in_gate.evaluate(
+            now=time.time(),
+            is_speaking=pipeline.is_speaking,
+            volume=volume,
+            threshold=active_barge_in_threshold,
+            enabled=RUNTIME_OVERRIDES.get("barge_in_enabled", True),
+            suppressed=barge_in_suppressed,
         )
-        if barge_candidate:
-            if barge_in_started_at is None:
-                barge_in_started_at = time.time()
-            # Preserve natural barge-in, but reject a one-frame echo/click.
-            if time.time() - barge_in_started_at < 0.18:
-                continue
-        else:
-            barge_in_started_at = None
-        if barge_candidate:
+        if barge_in.pending:
+            continue
+        if barge_in.triggered:
             allowed = pipeline.current_state == "SPEAKING"
-            logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={effective_barge_threshold:.2f}) !!!")
+            logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={barge_in.effective_threshold:.2f}) !!!")
             log_event(
-                f"BARGE_IN rms={volume:.2f} threshold={effective_barge_threshold:.2f} stage={pipeline.current_state} allowed={allowed}",
+                f"BARGE_IN rms={volume:.2f} threshold={barge_in.effective_threshold:.2f} stage={pipeline.current_state} allowed={allowed}",
                 stage="audio",
                 interaction_id=pipeline.current_interaction_id,
             )
             broadcast_msg("barge_in", {
                 "interaction_id": pipeline.current_interaction_id,
                 "rms": float(volume),
-                "threshold": float(effective_barge_threshold),
+                "threshold": float(barge_in.effective_threshold),
                 "stage": str(pipeline.current_state),
                 "allowed": bool(allowed),
             })
             _interrupt_current_response("BARGE_IN", target_state="LISTENING")
-            barge_in_started_at = None
             
             # Reset state to listen to new command
             silence_counter = 0
