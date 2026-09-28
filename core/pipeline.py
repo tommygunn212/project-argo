@@ -122,6 +122,7 @@ from system_profile import get_system_profile, get_gpu_profile
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryMixin
 from core.pipeline_domain_dispatch import dispatch_domain_intent
+from core.pipeline_platform_dispatch import dispatch_platform_intent
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5545,57 +5546,16 @@ class ArgoPipeline(PipelineMemoryMixin):
             self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
             return
 
-        if intent and intent.intent_type == IntentType.BLUETOOTH_STATUS:
-            if self._respond_with_bluetooth_status(user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.BLUETOOTH_CONTROL:
-            if self._respond_with_bluetooth_control(intent, user_text, stt_conf, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.AUDIO_ROUTING_STATUS:
-            if self._respond_with_audio_routing_status(user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.AUDIO_ROUTING_CONTROL:
-            if self._respond_with_audio_routing_control(intent, user_text, stt_conf, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.APP_STATUS:
-            if self._respond_with_app_status(user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.APP_FOCUS_STATUS:
-            if self._respond_with_focus_status(intent, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.APP_FOCUS_CONTROL:
-            if self._respond_with_focus_control(intent, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.APP_LAUNCH:
-            if self._respond_with_app_launch(intent, user_text, stt_conf, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.APP_CONTROL:
-            if self._respond_with_app_control(intent, user_text, stt_conf, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.VOLUME_STATUS:
-            if self._respond_with_system_volume_status(interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.VOLUME_CONTROL:
-            if self._respond_with_system_volume_control(user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.TIME_STATUS:
-            if self._respond_with_time_status(intent, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.WORLD_TIME:
-            if self._respond_with_world_time(intent, interaction_id, replay_mode, overrides):
-                return
+        if dispatch_platform_intent(
+            self,
+            intent,
+            user_text,
+            stt_conf,
+            interaction_id,
+            replay_mode,
+            overrides,
+        ):
+            return
 
         # SILENCE_OVERRIDE: "shut up" - one joke, then quiet mode
         if intent and intent.intent_type == IntentType.SILENCE_OVERRIDE:
