@@ -84,6 +84,14 @@ import queue
 from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
+
+# When executed as ``python wrapper/argo.py``, Python puts ``wrapper/`` rather
+# than the repository root on sys.path. Bootstrap the package root before any
+# ``wrapper.*`` imports; module execution already has it and remains unchanged.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
@@ -127,9 +135,6 @@ try:
     load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 except ImportError:
     pass  # dotenv optional; use system environment variables if not installed
-
-# Preserve direct-script imports of project-level packages.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Import Argo Memory (RAG-based interaction recall)
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1515,254 +1520,6 @@ def _run_argo_internal(
 # ============================================================================
 
 if __name__ == "__main__":
-    # ________________________________________________________________________
-    # Argument Parsing & Interactive Mode Detection
-    # ________________________________________________________________________
-    
-    session_name: str | None = None
-    mode_value: str | None = None
-    persona_value: str = "neutral"
-    replay_n: int | None = None
-    replay_session: bool = False
-    strict_mode: bool = True
-    interactive_mode: bool = False
-    user_message: str = ""
-    transcribe_file: str | None = None
-    
-    args = sys.argv[1:]
+    from wrapper.cli import run_cli
 
-    # Parse --transcribe flag (transcribe audio file and get confirmation)
-    if len(args) >= 2 and args[0] == "--transcribe":
-        transcribe_file = args[1]
-        args = args[2:]
-
-    # Parse flags FIRST (works for both interactive and non-interactive)
-    if len(args) >= 2 and args[0] == "--session":
-        session_name = args[1]
-        args = args[2:]
-
-    if len(args) >= 2 and args[0] == "--mode":
-        mode_value = args[1]
-        args = args[2:]
-
-    if len(args) >= 2 and args[0] == "--persona":
-        persona_value = args[1]
-        args = args[2:]
-
-    if len(args) >= 1 and args[0] == "--strict":
-        args = args[1:]
-        if len(args) >= 1 and args[0] in ("off", "false", "0"):
-            strict_mode = False
-            args = args[1:]
-
-    if len(args) >= 2 and args[0] == "--replay":
-        value = args[1]
-        if value == "session":
-            replay_session = True
-        elif value.startswith("last:"):
-            try:
-                replay_n = int(value.split(":", 1)[1])
-            except ValueError:
-                print("Invalid replay value. Use last:N or session", file=sys.stderr)
-                sys.exit(1)
-        else:
-            print("Invalid replay value. Use last:N or session", file=sys.stderr)
-            sys.exit(1)
-        args = args[2:]
-
-    # Parse --voice flag (enable audio output)
-    if len(args) >= 1 and args[0] == "--voice":
-        os.environ["VOICE_ENABLED"] = "true"
-        os.environ["PIPER_ENABLED"] = "true"
-        args = args[1:]
-    
-    # Parse --no-voice flag (disable audio output)
-    if len(args) >= 1 and args[0] == "--no-voice":
-        os.environ["VOICE_ENABLED"] = "false"
-        os.environ["PIPER_ENABLED"] = "false"
-        args = args[1:]
-
-    # ________________________________________________________________________
-    # Handle Transcription (if --transcribe flag provided)
-    # ________________________________________________________________________
-    
-    if transcribe_file:
-        # Transcribe audio and get user confirmation
-        confirmed, transcript, artifact = transcribe_and_confirm(transcribe_file)
-        
-        if not confirmed:
-            sys.exit(1)
-        
-        # Use transcribed text as the message
-        user_message = transcript
-        interactive_mode = False
-    else:
-        # NOW check if interactive mode (after flags consumed, if anything remains, it's the message)
-        user_message = " ".join(args)
-        if not user_message:
-            interactive_mode = True
-        else:
-            interactive_mode = False
-
-    # ________________________________________________________________________
-    # Resolve Session ID (shared across all turns in interactive mode)
-    # ________________________________________________________________________
-    
-    if session_name:
-        SESSION_ID = resolve_session_id(session_name)
-    else:
-        SESSION_ID = str(uuid.uuid4())
-
-    # ________________________________________________________________________
-    # Main Execution Loop
-    # ________________________________________________________________________
-    
-    if interactive_mode:
-        # Interactive mode: continuous prompt loop
-        print("\n📌 Interactive Mode (Voice PTT - Hold SPACEBAR to speak)\n", file=sys.stderr)
-        
-        # [CRITICAL] Start continuous audio stream for wake-word detection
-        # This enables hands-free "Argo" to work
-        try:
-            from voice_input import start_continuous_audio_stream, stop_continuous_audio_stream
-            if not start_continuous_audio_stream():
-                logger.warning("Failed to start continuous audio stream (wake-word will not work)")
-        except Exception as e:
-            logger.warning(f"Error starting audio stream: {e}")
-        
-        # Try to load voice input module
-        voice_input_available = False
-        try:
-            # Add parent directory to path to import voice_input.py
-            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            if parent_dir not in sys.path:
-                sys.path.insert(0, parent_dir)
-            
-            # Test if keyboard module is available (required for PTT)
-            # Note: On Windows, keyboard module requires administrator privileges
-            try:
-                import keyboard
-                logger.debug("✓ keyboard module imported successfully")
-                # Successfully imported - keyboard module is available
-                from voice_input import get_voice_input_ptt
-                logger.debug("✓ voice_input module imported successfully")
-                voice_input_available = True
-            except ImportError as e:
-                logger.debug(f"✗ keyboard/voice_input import failed: {e}")
-                print(f"⚠️  Voice input not available (ImportError: {e}), falling back to text input", file=sys.stderr)
-                print("    To enable PTT: pip install keyboard", file=sys.stderr)
-        except Exception as e:
-            logger.debug(f"✗ Unexpected error in voice_input init: {e}")
-            print(f"⚠️  Voice input not available ({e}), falling back to text input", file=sys.stderr)
-        
-        try:
-            while True:
-                try:
-                    # Track whether THIS specific input came from voice
-                    input_was_from_voice = False
-                    
-                    # Use voice input if available AND stdin is a TTY (interactive terminal)
-                    # When stdin is piped, skip PTT and use text input instead
-                    is_interactive = sys.stdin.isatty()
-                    
-                    if voice_input_available and is_interactive:
-                        print("\n🎤 Hold SPACEBAR to record (or type 'exit' to quit):", file=sys.stderr)
-                        
-                        # Pause wake-word detector during PTT (PTT always overrides wake-word)
-                        pause_wake_word_detector()
-                        
-                        try:
-                            user_input = get_voice_input_ptt().strip()
-                        finally:
-                            # Resume detector after PTT completes
-                            resume_wake_word_detector()
-                        
-                        input_was_from_voice = True  # CRITICAL: Mark that this input came from voice
-                        if not user_input:
-                            continue
-                    else:
-                        user_input = input("argo > ").strip()
-                        input_was_from_voice = False  # Text input from keyboard
-                    
-                    # Check for exit commands
-                    if user_input.lower() in ("exit", "quit"):
-                        print("\nGoodbye.", file=sys.stderr)
-                        break
-                    
-                    # Skip empty input
-                    if not user_input:
-                        continue
-                    
-                    # Check for conversation browser commands
-                    if user_input.lower().startswith("list conversations"):
-                        print(list_conversations())
-                        continue
-                    
-                    if user_input.lower().startswith("show yesterday"):
-                        print(show_by_date("yesterday"))
-                        continue
-                    
-                    if user_input.lower().startswith("show today"):
-                        print(show_by_date("today"))
-                        continue
-                    
-                    if user_input.lower().startswith("show ") and user_input.lower().count("-") == 2:
-                        # Date format: show YYYY-MM-DD
-                        date_part = user_input[5:].strip()
-                        print(show_by_date(date_part))
-                        continue
-                    
-                    if user_input.lower().startswith("show topic "):
-                        topic = user_input[11:].strip()
-                        print(show_by_topic(topic))
-                        continue
-                    
-                    if user_input.lower().startswith("open "):
-                        topic_or_idx = user_input[5:].strip()
-                        success, msg, context = get_conversation_context(topic_or_idx)
-                        print(msg)
-                        if success and context:
-                            # Load context into memory for continuation
-                            # Inject context as preamble for next query
-                            print("(Ready to continue. Type your next question.)", file=sys.stderr)
-                        continue
-                    
-                    if user_input.lower().startswith("summarize "):
-                        topic_or_idx = user_input[10:].strip()
-                        print(summarize_conversation(topic_or_idx))
-                        continue
-                    
-                    if user_input.lower().startswith("summarize last"):
-                        # Summarize most recent conversation
-                        print(summarize_conversation("last"))
-                        continue
-                    
-                    # Regular query (non-browser command)
-                    run_argo(
-                        user_input,
-                        active_mode=mode_value,
-                        replay_n=replay_n,
-                        replay_session=replay_session,
-                        strict_mode=strict_mode,
-                        persona=persona_value,
-                        voice_mode=input_was_from_voice  # CRITICAL: Only True if THIS input came from voice PTT
-                    )
-                    print()  # Blank line between turns
-                    
-                except KeyboardInterrupt:
-                    # Ctrl+C: interrupt current response but stay in loop
-                    print("\n[Interrupted. Type your next question or 'exit' to quit]\n", file=sys.stderr)
-                    continue
-        except EOFError:
-            # Ctrl+D or piped input ends loop gracefully
-            print("\nSession ended.", file=sys.stderr)
-    else:
-        # Single-shot mode: execute once and exit
-        run_argo(
-            user_message,
-            active_mode=mode_value,
-            replay_n=replay_n,
-            replay_session=replay_session,
-            strict_mode=strict_mode,
-            persona=persona_value
-        )
+    raise SystemExit(run_cli(sys.modules[__name__]))
