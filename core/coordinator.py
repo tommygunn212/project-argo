@@ -55,6 +55,7 @@ from core.coordinator_speech_start import (
     SpeechStartDependencies,
     wait_for_speech_start,
 )
+from core.coordinator_vad import SpeechGateDependencies, get_speech_gate
 from core.coordinator_trigger_contract import assert_trigger_state
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
@@ -775,27 +776,20 @@ class Coordinator:
         created on first use and kept. A failure is cached as None so we do
         not retry on every single recording.
         """
-        gate = getattr(self, "_silero_gate", None)
-        if gate is not None:
-            return gate
-        if getattr(self, "_silero_gate_failed", False):
-            return None
-        try:
-            from core.vad_silero import SileroGate
+        from core.vad_silero import SileroGate
 
-            gate = SileroGate(
+        return get_speech_gate(
+            SpeechGateDependencies(
                 sample_rate=self.AUDIO_SAMPLE_RATE,
                 threshold=self.VAD_SPEECH_PROBABILITY,
+                get_cached_gate=lambda: getattr(self, "_silero_gate", None),
+                cache_gate=lambda gate: setattr(self, "_silero_gate", gate),
+                has_failed=lambda: getattr(self, "_silero_gate_failed", False),
+                mark_failed=lambda: setattr(self, "_silero_gate_failed", True),
+                gate_factory=SileroGate,
+                logger=self.logger,
             )
-        except Exception:
-            self.logger.exception("[Record] Silero gate could not be created; using energy detection")
-            self._silero_gate_failed = True
-            return None
-        if not gate.available:
-            self._silero_gate_failed = True
-            return None
-        self._silero_gate = gate
-        return gate
+        )
 
     def _record_with_silence_detection(self, initial_frames: Optional[list] = None) -> np.ndarray:
         """Record one utterance with pre-roll, VAD, and bounded silence detection."""
