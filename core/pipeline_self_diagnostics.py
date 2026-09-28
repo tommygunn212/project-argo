@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from core.self_diagnostics import AssistedRecovery, SystemDiagnostics
 
 
+class SelfDiagnosticsPipeline(Protocol):
+    """Minimal pipeline surface required by self-diagnostics routing."""
+
+    logger: Any
+    recovery_manager: Any
+
+    def broadcast(self, event: str, payload: Any) -> None: ...
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+
 def respond_with_self_diagnostics(
-    pipeline: Any, interaction_id: str, replay_mode: bool, overrides: dict | None
+    pipeline: SelfDiagnosticsPipeline,
+    interaction_id: str,
+    replay_mode: bool,
+    overrides: dict | None,
 ) -> bool:
     """Phase 1 & 2: ARGO checks itself and reports status.
     

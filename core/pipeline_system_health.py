@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Protocol
 
 from core.intent_parser import IntentType
 from system_health import (
@@ -15,8 +15,34 @@ from system_health import (
 from system_profile import get_gpu_profile, get_system_profile
 
 
+class SystemHealthPipeline(Protocol):
+    """Minimal pipeline surface required by system-health routing."""
+
+    logger: Any
+
+    def _evaluate_gates(self, *args: Any) -> tuple[bool, str]: ...
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+    def _format_system_full_report(self, report: Any) -> str: ...
+
+    def _format_subsystem_summary(self) -> str: ...
+
+    def _format_gate_summary(self, *args: Any) -> str: ...
+
+    def _format_governance_summary(self) -> str: ...
+
+    def _format_ports_summary(self, ports: Any) -> str: ...
+
+    def _format_irq_summary(self, irqs: Any) -> str: ...
+
+    def _format_temperature_response(self, temperatures: Any) -> str: ...
+
+    def _format_system_health(self, health: Any) -> str: ...
+
+
 def respond_with_system_health(
-    pipeline: Any,
+    pipeline: SystemHealthPipeline,
     user_text,
     intent,
     interaction_id,
