@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import core.pipeline_draft_responses as responses
+from core.pipeline import ArgoPipeline
 
 
 class _Logger:
@@ -39,6 +40,34 @@ def _draft(**overrides):
 
 def _call(pipeline, method, text):
     return getattr(pipeline, method)(None, text, "interaction-1", False, {})
+
+
+def test_pipeline_composes_draft_service_and_preserves_public_facade():
+    assert not issubclass(ArgoPipeline, responses.PipelineDraftResponseMixin)
+    pipeline = object.__new__(ArgoPipeline)
+    calls = []
+    names = (
+        "_respond_with_list_drafts",
+        "_respond_with_read_draft",
+        "_respond_with_send_email",
+        "_respond_with_search_docs",
+        "_respond_with_export_data",
+    )
+    pipeline._draft_responses = type(
+        "DraftDouble",
+        (),
+        {
+            name: (lambda method_name: lambda _self, *args, **kwargs: calls.append(
+                (method_name, args, kwargs)
+            ) or True)(name)
+            for name in names
+        },
+    )()
+
+    for name in names:
+        assert getattr(pipeline, name)(None, "text", "id", False, {}) is True
+
+    assert [name for name, _args, _kwargs in calls] == list(names)
 
 
 def test_list_drafts_preserves_category_filter(monkeypatch):

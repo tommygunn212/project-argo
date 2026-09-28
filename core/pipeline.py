@@ -87,7 +87,7 @@ from core.pipeline_system_info import dispatch_system_info
 from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
-from core.pipeline_draft_responses import PipelineDraftResponseMixin
+from core.pipeline_draft_responses import PipelineDraftResponseService
 from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningService
@@ -111,7 +111,6 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 # ============================================================================
 class ArgoPipeline(
     PipelineWritingResponseMixin,
-    PipelineDraftResponseMixin,
     PipelineMemoryMixin,
 ):
     def __init__(self, audio_manager, websocket_broadcast):
@@ -145,6 +144,7 @@ class ArgoPipeline(
         self._inspection_responses = PipelineInspectionService(self)
         self._scheduling_responses = PipelineSchedulingService(self)
         self._task_planning = PipelineTaskPlanningService(self)
+        self._draft_responses = PipelineDraftResponseService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -333,6 +333,21 @@ class ArgoPipeline(
 
     def _build_plan_executor(self, *args, **kwargs):
         return self._task_planning._build_plan_executor(*args, **kwargs)
+
+    def _respond_with_list_drafts(self, *args, **kwargs):
+        return self._draft_responses._respond_with_list_drafts(*args, **kwargs)
+
+    def _respond_with_read_draft(self, *args, **kwargs):
+        return self._draft_responses._respond_with_read_draft(*args, **kwargs)
+
+    def _respond_with_send_email(self, *args, **kwargs):
+        return self._draft_responses._respond_with_send_email(*args, **kwargs)
+
+    def _respond_with_search_docs(self, *args, **kwargs):
+        return self._draft_responses._respond_with_search_docs(*args, **kwargs)
+
+    def _respond_with_export_data(self, *args, **kwargs):
+        return self._draft_responses._respond_with_export_data(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""

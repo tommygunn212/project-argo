@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 from tools.email_sender import is_email_configured, send_draft
 from tools.writing import (
     export_brain_facts_to_csv,
@@ -158,4 +160,26 @@ class PipelineDraftResponseMixin:
             response = "Export failed. Check the logs for details."
 
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+
+class DraftResponseHost(Protocol):
+    """Small host contract required by draft and document-library responses."""
+
+    logger: Any
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+
+class PipelineDraftResponseService(PipelineDraftResponseMixin):
+    """Composed draft handlers backed by canonical response delivery."""
+
+    def __init__(self, host: DraftResponseHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool:
+        return self._host._deliver_canonical_response(message, *args, **kwargs)
 
