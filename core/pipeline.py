@@ -129,6 +129,7 @@ from core.pipeline_system_info import dispatch_system_info
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
+from core.pipeline_conversation_gates import dispatch_conversation_gate
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -4755,115 +4756,15 @@ class ArgoPipeline(PipelineMemoryMixin):
             self.strict_lab_mode,
         )
 
-        if not user_text:
-            response = "I didn't catch any words. Try again."
-            self.broadcast("log", f"Argo: {response}")
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        if dispatch_conversation_gate(
+            self, user_text, interaction_id, replay_mode, overrides
+        ):
             return
 
-        filler_match = re.fullmatch(r"(okay\.?\s*)+|\.+", user_text, flags=re.IGNORECASE)
         request_kind = self._classify_request_kind(user_text)
-
-        # IDENTITY STATEMENT CONFIRMATION GATE (before canonical, before LLM)
-        confirm_name_pending = self._session_flags.get("confirm_name", False)
-        if confirm_name_pending:
-            if self._is_affirmative_response(user_text):
-                if self._pending_memory:
-                    try:
-                        pending_key = self._pending_memory.get("key")
-                        pending_value = self._pending_memory.get("value")
-                        if pending_key and pending_value:
-                            self._memory_store.add_memory(
-                                "FACT",
-                                pending_key,
-                                pending_value,
-                                source="explicit_user_request",
-                            )
-                            self._store_mem0_fact(
-                                "fact",
-                                pending_key,
-                                "is",
-                                pending_value,
-                                "explicit_user_request",
-                                interaction_id,
-                            )
-                        else:
-                            self.logger.warning("[MEMORY] Pending memory missing key or value")
-                        self.logger.info(f"[MEMORY] write_confirmed key=name value={self._pending_memory.get('value')}")
-                        response = "Got it. I'll remember that."
-                    except Exception as e:
-                        self.logger.warning(f"[MEMORY] Name write failed: {e}")
-                        response = "Memory store unavailable."
-                else:
-                    response = "No pending memory to write."
-                self._pending_memory = None
-                self._session_flags["confirm_name"] = False
-            else:
-                self.logger.info("[MEMORY] write_aborted user_response_negative_or_topic_change")
-                self._pending_memory = None
-                self._session_flags["confirm_name"] = False
-                response = "Okay."
-
-            self.broadcast("log", f"Argo: {response}")
-            self._append_convo_ledger("argo", response)
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
-        if user_text.lower().strip() == "clear conversation":
-            self._conversation_ledger.clear()
-            self.logger.info("[CONVO] convo_ledger_size=0")
-            response = "Conversation cleared."
-            self.broadcast("log", f"Argo: {response}")
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
-        if not self.strict_lab_mode and self._is_identity_query(user_text):
-            self._respond_with_identity_lookup(interaction_id=interaction_id, replay_mode=replay_mode, overrides=overrides)
-            return
-
-        if not self.strict_lab_mode and filler_match:
-            response = "Okay."
-            self.broadcast("log", f"Argo: {response}")
-            self._append_convo_ledger("argo", response)
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
+        filler_match = re.fullmatch(
+            r"(okay\.?\s*)+|\.+", user_text, flags=re.IGNORECASE
+        )
         if not self.strict_lab_mode:
             compact_len = len(re.sub(r"\s+", "", user_text))
             low_conf_guard = stt_conf < self._personal_mode_min_confidence
