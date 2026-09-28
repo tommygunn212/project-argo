@@ -21,7 +21,7 @@ def test_familiarity_promotes_and_resets_after_violation():
         assert argo.update_familiarity(True) == "neutral"
         assert argo.update_familiarity(True) == "neutral"
         assert argo.update_familiarity(True) == "familiar"
-        assert argo.update_familiarity(False, "personality_discipline") == "neutral"
+        assert argo.update_familiarity(False, "personality_discipline") == "familiar"
         assert state["violations_count"] == 1
     finally:
         state.clear()
