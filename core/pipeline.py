@@ -132,6 +132,7 @@ from core.pipeline_llm_stage import run_llm_stage
 from core.pipeline_conversation_gates import dispatch_conversation_gate
 from core.pipeline_confidence_gate import apply_confidence_gate
 from core.pipeline_canonical_stage import run_canonical_stage
+from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -4782,49 +4783,16 @@ class ArgoPipeline(PipelineMemoryMixin):
             return
         topic = canonical_result.topic
         matched = canonical_result.matched
-        if self._is_non_propositional_utterance(user_text, request_kind):
-            self.logger.info("[LLM] Non-propositional utterance detected; prompting for clarification")
-            self._record_timeline("NON_PROPOSITIONAL_GUARD", stage="pipeline", interaction_id=interaction_id)
-            self._respond_with_clarification(interaction_id, replay_mode, overrides)
+        if dispatch_pre_intent_gate(
+            self,
+            user_text,
+            request_kind,
+            topic,
+            interaction_id,
+            replay_mode,
+            overrides,
+        ):
             return
-
-        allow_llm = topic is None
-        if request_kind == "QUESTION" and not self.strict_lab_mode:
-            assert allow_llm, "Personal mode questions must never be blocked"
-
-        stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
-        user_text_lower = user_text.lower()
-        if any(term in user_text_lower for term in stop_terms):
-            # Phase 5: STOP clears session context
-            self._conversation_buffer.clear(reason="STOP detected")
-            music_player = get_music_player()
-            if music_player.is_playing():
-                self.logger.info("[ARGO] Active music detected")
-                music_player.stop()
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-        if self._handle_memory_command(user_text, interaction_id, replay_mode, overrides):
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
-        contextual_reply = self._handle_contextual_followup(user_text)
-        if contextual_reply:
-            self.broadcast("log", f"Argo: {contextual_reply}")
-            self._append_convo_ledger("argo", contextual_reply)
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(contextual_reply)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
         # Reuse early_intent from fast-path check above (same text, same parser)
         intent = early_intent
 
