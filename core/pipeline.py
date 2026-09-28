@@ -123,6 +123,7 @@ from core.personality import format_response as personality_format_response, get
 from core.pipeline_memory import PipelineMemoryMixin
 from core.pipeline_domain_dispatch import dispatch_domain_intent
 from core.pipeline_platform_dispatch import dispatch_platform_intent
+from core.pipeline_music_volume import dispatch_music_volume
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5253,115 +5254,16 @@ class ArgoPipeline(PipelineMemoryMixin):
                 self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
                 return
 
-        # --- MUSIC VOLUME CONTROL (voice) ---
-        # Recognize patterns like 'music volume 75%', 'set volume to 50%', 'volume up', 'volume down'
-        user_text_lower = user_text.lower().strip()
-        if any(term in user_text_lower for term in {"music", "song", "player"}):
-            from core.music_player import set_volume_percent, adjust_volume_percent, get_volume_percent
-            volume_patterns = [
-                (r"(?:music )?volume (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
-                (r"set volume to (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
-                (r"volume up (\d{1,3})%?", lambda m: adjust_volume_percent(int(m.group(1)))),
-                (r"volume down (\d{1,3})%?", lambda m: adjust_volume_percent(-int(m.group(1)))),
-                (r"volume up", lambda m: adjust_volume_percent(10)),
-                (r"volume down", lambda m: adjust_volume_percent(-10)),
-                (r"what is the volume", lambda m: None),
-                (r"current volume", lambda m: None),
-            ]
-            user_text_clean = re.sub(r"[^\w\s%]", " ", user_text_lower)
-            user_text_clean = re.sub(r"\s+", " ", user_text_clean).strip()
-            is_imperative_volume = bool(re.match(r"^(music\s+)?volume\b", user_text_clean))
-            if user_text_lower.endswith("?"):
-                is_imperative_volume = False
-            if re.search(r"\b(would|could|can|should|might|maybe|perhaps|possibly)\b", user_text_clean):
-                is_imperative_volume = False
-            if re.search(r"\bwhat happens if\b|\bwhat if\b", user_text_clean):
-                is_imperative_volume = False
-            for pat, action in volume_patterns:
-                m = re.fullmatch(pat, user_text_clean)
-                if m:
-                    is_status_query = pat in ["what is the volume", "current volume"]
-                    if is_imperative_volume:
-                        request_kind = "ACTION"
-                    if request_kind != "ACTION" and not is_status_query:
-                        response = "I can adjust volume. Say it as a command to execute."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    if low_confidence_audio and request_kind == "ACTION" and not is_status_query:
-                        response = "I heard that, but the audio was unclear. Please repeat the volume command."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    if not is_status_query and not (self._is_executable_command(user_text) or is_imperative_volume):
-                        response = "I can adjust volume. Say it as a direct command."
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
-                    if not allowed:
-                        response = f"Action blocked by policy ({reason})."
-                        self.logger.info(f"[GATE] {response}")
-                        self.broadcast("log", f"Argo: {response}")
-                        if not self.stop_signal.is_set() and not replay_mode:
-                            tts_text = self._sanitize_tts_text(response)
-                            tts_override = (overrides or {}).get("suppress_tts", False)
-                            if tts_override:
-                                self.logger.info("[TTS] Suppressed for next interaction override")
-                            elif tts_text:
-                                self.speak(tts_text, interaction_id=interaction_id)
-                        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                        self.logger.info("--- Interaction Complete ---")
-                        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                        return
-                    if pat in ["what is the volume", "current volume"]:
-                        vol = get_volume_percent()
-                        response = f"Music volume: {vol}%"
-                    else:
-                        action(m)
-                        vol = get_volume_percent()
-                        response = f"Music volume set to {vol}%"
-                    self.logger.info(f"[ARGO] {response}")
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-
+        if dispatch_music_volume(
+            self,
+            user_text,
+            request_kind,
+            low_confidence_audio,
+            interaction_id,
+            replay_mode,
+            overrides,
+        ):
+            return
         if intent and intent.intent_type in {
             IntentType.MUSIC,
             IntentType.MUSIC_STOP,
