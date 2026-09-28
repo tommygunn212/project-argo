@@ -6,6 +6,7 @@ from scipy.io import wavfile
 
 from core.coordinator_stages import (
     capture_audio_stage,
+    parse_intent_stage,
     process_transcript_stage,
     transcribe_audio_stage,
 )
@@ -18,6 +19,9 @@ class Probe:
     def mark(self, name):
         self.marks.append(name)
 
+    def log_summary(self):
+        self.summary_logged = True
+
 
 class Logger:
     def __init__(self):
@@ -28,6 +32,9 @@ class Logger:
 
     def debug(self, message):
         self.messages.append(("debug", message))
+
+    def warning(self, message):
+        self.messages.append(("warning", message))
 
 
 def make_coordinator():
@@ -202,3 +209,93 @@ def test_script_rerun_is_a_successful_terminal_interaction():
     assert coordinator.last_response_text == "analysis"
     assert coordinator.spoken == [("analysis", {"interaction_id": "interaction-1"})]
     assert coordinator.memory.calls[0]["parsed_intent"] == "develop"
+
+
+def make_parse_coordinator(intent, stt_confidence=0.9, executable=False):
+    coordinator = make_transcript_coordinator(stt_confidence)
+    coordinator.parser = SimpleNamespace(parse=lambda _text: intent)
+    coordinator.executor = SimpleNamespace(can_execute=lambda _text: executable)
+    coordinator.latency_stats = SimpleNamespace(
+        probes=[],
+        add_probe=lambda probe: coordinator.latency_stats.probes.append(probe),
+    )
+    return coordinator
+
+
+def parsed_intent(intent_type, confidence=1.0):
+    return SimpleNamespace(intent_type=intent_type, confidence=confidence)
+
+
+def test_parse_stage_marks_probe_and_exports_intent():
+    from core.intent_parser import IntentType
+
+    intent = parsed_intent(IntentType.QUESTION)
+    coordinator = make_parse_coordinator(intent)
+
+    result = parse_intent_stage(coordinator, "why", lambda *_args, **_kwargs: None)
+
+    assert result.continue_processing is True
+    assert result.intent is intent
+    assert coordinator.current_probe.marks == ["parsing_start", "parsing_end"]
+    assert coordinator._last_intent is intent
+
+
+def test_low_confidence_unknown_intent_decrements_iteration():
+    from core.intent_parser import IntentType
+
+    intent = parsed_intent(IntentType.UNKNOWN, confidence=0.2)
+    coordinator = make_parse_coordinator(intent)
+
+    result = parse_intent_stage(coordinator, "noise", lambda *_args, **_kwargs: None)
+
+    assert result.continue_processing is False
+    assert result.interaction_result is False
+    assert coordinator.interaction_count == 2
+
+
+def test_low_stt_confidence_query_is_suppressed_and_accounted(monkeypatch):
+    from core.intent_parser import IntentType
+
+    intent = parsed_intent(IntentType.QUESTION)
+    coordinator = make_parse_coordinator(intent, stt_confidence=0.1)
+    events = []
+    monkeypatch.setattr(
+        "core.coordinator_stages.get_config",
+        lambda: {"speech_to_text.command_confidence_threshold": 0.35},
+    )
+
+    result = parse_intent_stage(
+        coordinator,
+        "uncertain question",
+        lambda message, **kwargs: events.append((message, kwargs)),
+    )
+
+    assert result.continue_processing is False
+    assert result.interaction_result is True
+    assert coordinator.spoken[-1][0] == "Query suppressed — low STT confidence"
+    assert coordinator.current_probe.marks[-3:] == ["llm_end", "tts_start", "tts_end"]
+    assert coordinator.latency_stats.probes == [coordinator.current_probe]
+    assert events[0][1] == {"stage": "stt"}
+
+
+def test_deterministic_intent_bypasses_low_stt_confidence(monkeypatch):
+    from core.intent_parser import IntentType
+
+    intent = parsed_intent(IntentType.COUNT)
+    coordinator = make_parse_coordinator(intent, stt_confidence=0.1)
+    monkeypatch.setattr(
+        "core.coordinator_stages.get_config",
+        lambda: {"speech_to_text.command_confidence_threshold": 0.35},
+    )
+
+    result = parse_intent_stage(
+        coordinator, "count to five", lambda *_args, **_kwargs: None
+    )
+
+    assert result.continue_processing is True
+    assert coordinator.spoken == []
+    assert any(
+        "DETERMINISTIC_CONFIDENCE_BYPASS" in message
+        for level, message in coordinator.logger.messages
+        if level == "info"
+    )

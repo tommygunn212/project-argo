@@ -10,6 +10,7 @@ import time
 from typing import Any, Optional
 
 from core.intent_parser import Intent, IntentType, is_system_keyword, normalize_system_text
+from core.config import get_config
 
 
 def capture_audio_stage(
@@ -201,3 +202,92 @@ def process_transcript_stage(
             )
 
     return TranscriptStageResult(True, False, text, stt_confidence)
+
+
+@dataclass(frozen=True)
+class IntentParseStageResult:
+    continue_processing: bool
+    interaction_result: bool
+    intent: Any
+
+
+def parse_intent_stage(
+    coordinator: Any,
+    text: str,
+    log_event_fn: Any,
+) -> IntentParseStageResult:
+    """Parse intent and enforce unknown/query confidence policy."""
+    coordinator.logger.info(
+        f"[Iteration {coordinator.interaction_count}] Parsing intent..."
+    )
+    coordinator.current_probe.mark("parsing_start")
+    intent = coordinator.parser.parse(text)
+    coordinator.current_probe.mark("parsing_end")
+    coordinator._last_intent = intent
+    coordinator.logger.info(
+        f"[Iteration {coordinator.interaction_count}] Intent: "
+        f"{intent.intent_type.value} (confidence={intent.confidence:.2f})"
+    )
+
+    if intent.intent_type == IntentType.UNKNOWN and intent.confidence < 0.5:
+        coordinator.logger.info(
+            f"[Iteration {coordinator.interaction_count}] "
+            "Low-confidence unknown intent, ignoring."
+        )
+        coordinator.interaction_count -= 1
+        return IntentParseStageResult(False, False, intent)
+
+    try:
+        stt_metrics = coordinator.stt.get_last_metrics()
+    except Exception:
+        stt_metrics = None
+    confidence_threshold = get_config().get(
+        "speech_to_text.command_confidence_threshold", 0.35
+    )
+    deterministic = intent.intent_type in {
+        IntentType.COMMAND,
+        IntentType.COUNT,
+        IntentType.MUSIC,
+        IntentType.MUSIC_NEXT,
+        IntentType.MUSIC_STOP,
+        IntentType.MUSIC_STATUS,
+        IntentType.SYSTEM_HEALTH,
+        IntentType.SYSTEM_INFO,
+        IntentType.APP_CONTROL,
+        IntentType.ARGO_IDENTITY,
+        IntentType.ARGO_GOVERNANCE,
+    } or coordinator.executor.can_execute(text)
+
+    if stt_metrics:
+        stt_confidence = float(stt_metrics.get("confidence", 0.0))
+        if stt_confidence < confidence_threshold:
+            if deterministic:
+                coordinator.logger.info(
+                    "[TTS] Allowed despite low STT confidence "
+                    "(reason=DETERMINISTIC_CONFIDENCE_BYPASS, "
+                    f"confidence={stt_confidence:.2f}, "
+                    f"intent={intent.intent_type.value})"
+                )
+            else:
+                message = "Query suppressed — low STT confidence"
+                coordinator.logger.warning(
+                    f"[Iteration {coordinator.interaction_count}] {message} "
+                    f"(conf={stt_confidence:.2f} < {confidence_threshold:.2f})"
+                )
+                log_event_fn(
+                    f"QUERY_SUPPRESSED_LOW_STT conf={stt_confidence:.2f} "
+                    f"threshold={confidence_threshold:.2f}",
+                    stage="stt",
+                )
+                if coordinator.runtime_overrides.get("tts_enabled", True):
+                    coordinator._safe_speak(
+                        message, interaction_id=coordinator.interaction_id
+                    )
+                coordinator.current_probe.mark("llm_end")
+                coordinator.current_probe.mark("tts_start")
+                coordinator.current_probe.mark("tts_end")
+                coordinator.current_probe.log_summary()
+                coordinator.latency_stats.add_probe(coordinator.current_probe)
+                return IntentParseStageResult(False, True, intent)
+
+    return IntentParseStageResult(True, False, intent)

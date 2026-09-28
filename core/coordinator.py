@@ -77,6 +77,7 @@ from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 from core.coordinator_stages import (
     capture_audio_stage,
+    parse_intent_stage,
     process_transcript_stage,
     transcribe_audio_stage,
 )
@@ -887,89 +888,10 @@ class Coordinator(CoordinatorResponseMixin):
                 return transcript_result.interaction_result
             text = transcript_result.text
             stt_conf = transcript_result.stt_confidence
-            # 3. Parse intent
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Parsing intent..."
-            )
-
-            # TASK 15: Mark parsing start
-            self.current_probe.mark("parsing_start")
-
-            intent = self.parser.parse(text)
-
-            # TASK 15: Mark parsing end
-            self.current_probe.mark("parsing_end")
-
-            # PHASE 16: Capture for observer snapshot
-            self._last_intent = intent
-
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Intent: {intent.intent_type.value} "
-                f"(confidence={intent.confidence:.2f})"
-            )
-
-            # Ignore low-confidence noise
-            if intent.intent_type == IntentType.UNKNOWN and intent.confidence < 0.5:
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] "
-                    f"Low-confidence unknown intent, ignoring."
-                )
-                self.interaction_count -= 1
-                return False
-
-            # Command confidence gate (STT quality)
-            stt_metrics = None
-            try:
-                stt_metrics = self.stt.get_last_metrics()
-            except Exception:
-                stt_metrics = None
-            confidence_threshold = get_config().get("speech_to_text.command_confidence_threshold", 0.35)
-
-            # Determine if this is a canonical/deterministic or procedural command
-            is_canonical_or_deterministic = intent.intent_type in {
-                IntentType.COMMAND,
-                IntentType.COUNT,
-                IntentType.MUSIC,
-                IntentType.MUSIC_NEXT,
-                IntentType.MUSIC_STOP,
-                IntentType.MUSIC_STATUS,
-                IntentType.SYSTEM_HEALTH,
-                IntentType.SYSTEM_INFO,
-                IntentType.APP_CONTROL,
-                IntentType.ARGO_IDENTITY,
-                IntentType.ARGO_GOVERNANCE,
-            } or self.executor.can_execute(text)
-
-            # TTS bypass reason constant
-            TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
-
-            # Only apply STT confidence gate to LLM queries and unknown intents
-            if stt_metrics:
-                stt_conf = float(stt_metrics.get("confidence", 0.0))
-                if stt_conf < confidence_threshold:
-                    if is_canonical_or_deterministic:
-                        # Log bypass for deterministic commands
-                        self.logger.info(
-                            f"[TTS] Allowed despite low STT confidence "
-                            f"(reason={TTS_ALLOWED_REASON_DETERMINISTIC}, "
-                            f"confidence={stt_conf:.2f}, intent={intent.intent_type.value})"
-                        )
-                    else:
-                        msg = "Query suppressed — low STT confidence"
-                        self.logger.warning(
-                            f"[Iteration {self.interaction_count}] {msg} (conf={stt_conf:.2f} < {confidence_threshold:.2f})"
-                        )
-                        log_event(f"QUERY_SUPPRESSED_LOW_STT conf={stt_conf:.2f} threshold={confidence_threshold:.2f}", stage="stt")
-                        if self.runtime_overrides.get("tts_enabled", True):
-                            self._safe_speak(msg, interaction_id=self.interaction_id)
-                        self.current_probe.mark("llm_end")
-                        self.current_probe.mark("tts_start")
-                        self.current_probe.mark("tts_end")
-                        self.current_probe.log_summary()
-                        self.latency_stats.add_probe(self.current_probe)
-                        return True
-
+            parse_result = parse_intent_stage(self, text, log_event)
+            if not parse_result.continue_processing:
+                return parse_result.interaction_result
+            intent = parse_result.intent
             # 4. Fast-path deterministic commands (before LLM generation)
             # Procedural and deterministic commands must execute immediately without LLM latency
 
