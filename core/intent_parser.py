@@ -45,6 +45,11 @@ from core.intent_rules.core_system import (
     parse_system_health,
 )
 from core.intent_rules.knowledge import parse_knowledge_intent, parse_must_pass_knowledge
+from core.intent_rules.general import (
+    parse_development_or_tech,
+    parse_generic_utterance,
+    parse_performance_intent,
+)
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
@@ -138,7 +143,6 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         prepared = strip_wake_prefix(text_original, text_lower)
         text_original = prepared.original
         text_lower = prepared.normalized
-        text = text_original
         tokens = prepared.tokens
         first_word = prepared.first_word
 
@@ -213,92 +217,33 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if system_health is not None:
             return system_health
 
-        # Rule 0.5: DEVELOP keywords (high priority - developer context)
-        if any(phrase in text_lower for phrase in self.develop_phrases):
-            return Intent(
-                intent_type=IntentType.DEVELOP,
-                confidence=0.98,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Tech keyword override: force QUESTION for hardware/technical queries
-        if any(keyword in text_lower for keyword in self.tech_keywords):
-            return Intent(
-                intent_type=IntentType.QUESTION,
-                confidence=0.9,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
+        contextual_intent = parse_development_or_tech(
+            text_original,
+            text_lower,
+            serious_mode,
+            self.develop_phrases,
+            self.tech_keywords,
+        )
+        if contextual_intent is not None:
+            return contextual_intent
 
         music_intent = self._parse_music_intent(text_original, text_lower, serious_mode)
         if music_intent is not None:
             return music_intent
 
-        # Rule 4.5: COUNT intent (deterministic, no LLM)
-        if "count" in tokens:
-            return Intent(
-                intent_type=IntentType.COUNT,
-                confidence=0.9,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 2: Performance/action words (high priority - overrides questions)
-        # "Can you count to five?" should be COMMAND, not QUESTION
-        performance_words = {"count", "sing", "recite", "spell", "list", "name"}
-        if any(word in tokens for word in performance_words):
-            return Intent(
-                intent_type=IntentType.COMMAND,
-                confidence=0.9,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
+        performance_intent = parse_performance_intent(text_original, tokens, serious_mode)
+        if performance_intent is not None:
+            return performance_intent
 
         knowledge_intent = parse_knowledge_intent(text_original, text_lower, serious_mode)
         if knowledge_intent is not None:
             return knowledge_intent
 
-        # Rule 3: Question mark present (high confidence)
-        if "?" in text:
-            return Intent(
-                intent_type=IntentType.QUESTION,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 4: Starts with question word (medium-high confidence)
-        if first_word in self.question_words:
-            return Intent(
-                intent_type=IntentType.QUESTION,
-                confidence=0.85,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 5: Starts with greeting keyword (high confidence)
-        if first_word in self.greeting_keywords:
-            return Intent(
-                intent_type=IntentType.GREETING,
-                confidence=0.95,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 6: Starts with command word (medium confidence)
-        if first_word in self.command_words:
-            return Intent(
-                intent_type=IntentType.COMMAND,
-                confidence=0.75,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 7: Fallback to unknown (low confidence)
-        return Intent(
-            intent_type=IntentType.UNKNOWN,
-            confidence=0.1,
-            raw_text=text_original,
-            serious_mode=serious_mode,
+        return parse_generic_utterance(
+            text_original,
+            first_word,
+            serious_mode,
+            self.question_words,
+            self.greeting_keywords,
+            self.command_words,
         )
