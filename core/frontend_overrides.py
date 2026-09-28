@@ -67,3 +67,29 @@ def dispatch_frontend_override(
             )
     dependencies.log_event(f"UI_CMD_SET_OVERRIDE {key}={value}", stage="ui")
     dependencies.broadcast("runtime_overrides", dependencies.get_runtime_overrides())
+
+
+def stage_next_override(
+    target: dict,
+    payload: dict,
+    log_event: Callable[..., None],
+) -> None:
+    """Stage one override for the next interaction only."""
+    key = payload.get("key")
+    if not key:
+        return
+    value = payload.get("value")
+    target[key] = value
+    log_event(f"UI_CMD_NEXT_OVERRIDE {key}={value}", stage="ui")
+
+
+def clear_frontend_overrides(
+    clear_runtime_overrides: Callable[[], None],
+    get_runtime_overrides: Callable[[], dict],
+    log_event: Callable[..., None],
+    broadcast: Callable[[str, Any], None],
+) -> None:
+    """Clear live overrides and broadcast the authoritative snapshot."""
+    clear_runtime_overrides()
+    log_event("UI_CMD_CLEAR_OVERRIDES", stage="ui")
+    broadcast("runtime_overrides", get_runtime_overrides())

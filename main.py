@@ -57,7 +57,9 @@ from core.frontend_websocket import (
 )
 from core.frontend_overrides import (
     FrontendOverrideDependencies,
+    clear_frontend_overrides,
     dispatch_frontend_override,
+    stage_next_override,
 )
 from core.frontend_diagnostics import (
     FrontendDiagnosticsDependencies,
@@ -412,18 +414,16 @@ def _handle_override(payload: dict):
 
 
 def _handle_next_override(payload: dict):
-    key = payload.get("key")
-    value = payload.get("value")
-    if not key:
-        return
-    NEXT_INTERACTION_OVERRIDES[key] = value
-    log_event(f"UI_CMD_NEXT_OVERRIDE {key}={value}", stage="ui")
+    stage_next_override(NEXT_INTERACTION_OVERRIDES, payload, log_event)
 
 
 def _handle_clear_overrides():
-    clear_runtime_overrides()
-    log_event("UI_CMD_CLEAR_OVERRIDES", stage="ui")
-    broadcast_msg("runtime_overrides", get_runtime_overrides())
+    clear_frontend_overrides(
+        clear_runtime_overrides,
+        get_runtime_overrides,
+        log_event,
+        broadcast_msg,
+    )
 
 
 def _handle_text_input(payload: dict | str):
