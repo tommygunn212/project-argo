@@ -121,6 +121,7 @@ from wrapper.prompt_composition import compose_prompt
 from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
+from wrapper.session_ids import resolve_session_id as _resolve_session_id
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -505,22 +506,7 @@ def resolve_session_id(name: str) -> str:
         Creates .sessions.json in logs directory if it doesn't exist.
         Updates .sessions.json when a new session name is first seen.
     """
-    os.makedirs(_get_log_dir(), exist_ok=True)
-
-    # Load existing sessions
-    if os.path.exists(SESSION_FILE):
-        with open(SESSION_FILE, "r", encoding="utf-8") as f:
-            sessions = json.load(f)
-    else:
-        sessions = {}
-
-    # Create new session if needed
-    if name not in sessions:
-        sessions[name] = str(uuid.uuid4())
-        with open(SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump(sessions, f, indent=2)
-
-    return sessions[name]
+    return _resolve_session_id(name, SESSION_FILE)
 
 
 # ============================================================================
