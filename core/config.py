@@ -17,6 +17,7 @@ import json
 import os
 import logging
 import hashlib
+from copy import deepcopy
 from typing import Any, Optional
 
 # ============================================================================
@@ -440,7 +441,9 @@ def load_config(config_path: str = "config.json") -> Config:
     """
     global _config_instance
     
-    config_data = _DEFAULT_CONFIG.copy()
+    # A shallow copy shares every nested defaults dictionary. Merging a user
+    # config into it would permanently alter _DEFAULT_CONFIG for later reloads.
+    config_data = deepcopy(_DEFAULT_CONFIG)
     
     if os.path.exists(config_path):
         try:
