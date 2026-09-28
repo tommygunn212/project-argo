@@ -90,6 +90,7 @@ from core.pipeline_interaction_runtime import (
     InteractionDependencies,
     process_interaction_audio,
 )
+from core.pipeline_speech import SpeechDependencies, speak_text
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -2215,72 +2216,49 @@ class ArgoPipeline:
         )
 
     def speak(self, text, interaction_id: str = "", force_tts: bool = False):
-        if not self.runtime_overrides.get("tts_enabled", True) and not force_tts:
-            self.logger.info("[TTS] Disabled by runtime override")
-            return
-        self.logger.info(f"[TTS] Speaking with {self.current_voice_key} (engine={self._tts_engine})...")
-        if self.current_state == "TRANSCRIBING":
-            self.transition_state("THINKING", interaction_id=interaction_id, source="tts")
-        self.transition_state("SPEAKING", interaction_id=interaction_id, source="tts")
-        self.stop_signal.clear()
-        self.is_speaking = True
-        self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
-        audio_acquired = False
-        try:
-            try:
-                self.audio.acquire_audio("TTS", interaction_id=interaction_id)
-                audio_acquired = True
-            except Exception as e:
-                self.logger.error(f"[TTS] Audio ownership error: {e}")
-                log_event("TTS_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
-                self._play_sound_cue("error", interaction_id=interaction_id)
-                return
-
-            if self._tts_engine == "openai":
-                # OpenAI Realtime Speech TTS
-                if self._openai_tts is None:
-                    from core.openai_tts import OpenAIRealtimeTTS
-                    voice = self.openai_voices.get(self.current_voice_key, "nova")
-                    tts_model = self._tts_model
-                    self._openai_tts = OpenAIRealtimeTTS(
-                        voice=voice, model=tts_model,
-                        output_device=getattr(self.audio, "_output_device_index", None),
-                        on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
-                    )
-                    self._openai_tts._instructions = self._TTS_INSTRUCTIONS
-                if self._pending_barge_in_suppression:
-                    try:
-                        self._openai_tts.suppress_interrupt(self._pending_barge_in_suppression)
-                    except Exception:
-                        pass
-                    self._pending_barge_in_suppression = None
-                self._openai_tts.speak(text)
-            else:
-                # Edge TTS (original)
-                if self._edge_tts is None:
-                    from core.output_sink import EdgeTTSOutputSink
-                    self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
-                if self._pending_barge_in_suppression and hasattr(self._edge_tts, "suppress_interrupt"):
-                    try:
-                        self._edge_tts.suppress_interrupt(self._pending_barge_in_suppression)
-                    except Exception:
-                        pass
-                    self._pending_barge_in_suppression = None
-
-                # Edge TTS playback (blocking)
-                self._edge_tts.speak(text)
-        except Exception as e:
-            self.logger.error(f"[TTS] Error: {e}")
-            self._play_sound_cue("error", interaction_id=interaction_id)
-        finally:
-            if audio_acquired:
-                try:
-                    self.audio.release_audio("TTS", interaction_id=interaction_id)
-                except Exception as e:
-                    self.logger.error(f"[TTS] Exception during audio.release_audio: {e}")
-            self.is_speaking = False
-            self.tts_finished_at = time.time()
-            self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
+        speak_text(
+            SpeechDependencies(
+                logger=self.logger,
+                tts_enabled=self.runtime_overrides.get("tts_enabled", True),
+                current_state=self.current_state,
+                current_voice_key=self.current_voice_key,
+                tts_engine=self._tts_engine,
+                tts_model=self._tts_model,
+                tts_instructions=self._TTS_INSTRUCTIONS,
+                edge_voices=self.voices,
+                openai_voices=self.openai_voices,
+                output_device=getattr(self.audio, "_output_device_index", None),
+                stop_signal=self.stop_signal,
+                acquire_audio=self.audio.acquire_audio,
+                release_audio=self.audio.release_audio,
+                transition_state=self.transition_state,
+                record_timeline=self._record_timeline,
+                record_event=log_event,
+                play_error_cue=lambda turn_id: self._play_sound_cue(
+                    "error", interaction_id=turn_id
+                ),
+                broadcast_audio_level=lambda level: self.broadcast(
+                    "tts_audio_level", {"rms": level}
+                ),
+                set_speaking=lambda speaking: setattr(
+                    self, "is_speaking", speaking
+                ),
+                set_finished_at=lambda finished_at: setattr(
+                    self, "tts_finished_at", finished_at
+                ),
+                get_edge_tts=lambda: self._edge_tts,
+                set_edge_tts=lambda tts: setattr(self, "_edge_tts", tts),
+                get_openai_tts=lambda: self._openai_tts,
+                set_openai_tts=lambda tts: setattr(self, "_openai_tts", tts),
+                get_barge_in_suppression=lambda: self._pending_barge_in_suppression,
+                clear_barge_in_suppression=lambda: setattr(
+                    self, "_pending_barge_in_suppression", None
+                ),
+            ),
+            text,
+            interaction_id=interaction_id,
+            force_tts=force_tts,
+        )
 
 
     def _classify_canonical_topic(self, user_text):
