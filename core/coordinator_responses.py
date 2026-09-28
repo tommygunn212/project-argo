@@ -2,21 +2,37 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
-from typing import Optional
+from typing import Any, Callable
 
 from core import system_response_formatter as system_format
 
 
-class CoordinatorResponseMixin:
-    def _build_count_response(self, text: str) -> str:
-        target = self._parse_count_target(text)
+@dataclass(frozen=True)
+class ResponseDeliveryDependencies:
+    tts_enabled: bool
+    interaction_id: Any
+    response_interaction_id: Any
+    response_committed: bool
+    logger: Any
+    acquire_audio: Callable[[str], None]
+    release_audio: Callable[[str], None]
+    speak: Callable[..., None]
+    set_response_guard: Callable[[Any, bool], None]
+
+
+class CoordinatorResponseService:
+    """Deterministic response helpers with explicit delivery dependencies."""
+
+    def build_count_response(self, text: str) -> str:
+        target = self.parse_count_target(text)
         if target < 1:
             target = 1
         target = min(target, 50)
         return ", ".join(str(i) for i in range(1, target + 1))
 
-    def _parse_count_target(self, text: str) -> int:
+    def parse_count_target(self, text: str) -> int:
         if not text:
             return 5
         match = re.search(r"\b(\d+)\b", text)
@@ -52,44 +68,49 @@ class CoordinatorResponseMixin:
                 return value
         return 5
 
-    def _format_system_health(self, health: dict) -> str:
+    def format_system_health(self, health: dict) -> str:
         return system_format.format_system_health(health)
 
-    def _format_system_memory_info(self, total_gb: float, used_pct: float, temps: dict) -> str:
+    def format_system_memory_info(self, total_gb: float, used_pct: float, temps: dict) -> str:
         return system_format.format_system_memory_info(total_gb, used_pct, temps)
 
-    def _format_temperature_response(self, temps: dict) -> str:
+    def format_temperature_response(self, temps: dict) -> str:
         return system_format.format_temperature_response(temps)
 
-    def _format_system_full_report(self, report: dict) -> str:
+    def format_system_full_report(self, report: dict) -> str:
         return system_format.format_system_full_report(report)
 
-    def _format_size_gb(self, gb: float) -> str:
+    def format_size_gb(self, gb: float) -> str:
         return system_format.format_size_gb(gb)
 
-    def _safe_speak(self, text: str, interaction_id: Optional[str] = None) -> None:
+    def safe_speak(
+        self,
+        dependencies: ResponseDeliveryDependencies,
+        text: str,
+    ) -> None:
         if not text or not text.strip():
             return
-        if not self.runtime_overrides.get("tts_enabled", True):
+        if not dependencies.tts_enabled:
             return
-        current_interaction_id = interaction_id or self.interaction_id
-        if self._response_interaction_id != current_interaction_id:
-            self._response_interaction_id = current_interaction_id
-            self._response_committed = False
-        if self._response_committed:
-            self.logger.warning(
+        current_interaction_id = dependencies.interaction_id
+        committed = dependencies.response_committed
+        if dependencies.response_interaction_id != current_interaction_id:
+            dependencies.set_response_guard(current_interaction_id, False)
+            committed = False
+        if committed:
+            dependencies.logger.warning(
                 "[Response] Duplicate response suppressed (interaction_id=%s)",
                 current_interaction_id,
             )
             return
-        self.logger.info(f"Argo: {text}")
-        self._response_committed = True
+        dependencies.logger.info(f"Argo: {text}")
+        dependencies.set_response_guard(current_interaction_id, True)
         try:
-            self.acquire_audio("TTS")
-        except Exception as e:
-            self.logger.warning(f"[TTS] Audio ownership denied: {e}")
+            dependencies.acquire_audio("TTS")
+        except Exception as exc:
+            dependencies.logger.warning(f"[TTS] Audio ownership denied: {exc}")
             return
         try:
-            self.sink.speak(text, interaction_id=interaction_id or self.interaction_id)
+            dependencies.speak(text, interaction_id=current_interaction_id)
         finally:
-            self.release_audio("TTS")
+            dependencies.release_audio("TTS")

@@ -27,7 +27,10 @@ from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
 from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
-from core.coordinator_responses import CoordinatorResponseMixin
+from core.coordinator_responses import (
+    CoordinatorResponseService,
+    ResponseDeliveryDependencies,
+)
 from core.coordinator_recording import RecordingConfig, RecordingHooks, record_with_silence_detection
 from core.coordinator_text import (
     extract_code_block,
@@ -66,7 +69,7 @@ log_event = log_event_impl
 # ============================================================================
 # 2) COORDINATOR
 # ============================================================================
-class Coordinator(CoordinatorResponseMixin):
+class Coordinator:
     """
     End-to-end orchestration with bounded interaction loop + session memory.
     
@@ -210,6 +213,7 @@ class Coordinator(CoordinatorResponseMixin):
         self.sink = output_sink
         self.logger = logger
         self._low_conf_notice_given = False
+        self._response_service = CoordinatorResponseService()
 
         # Runtime overrides (non-persistent)
         self.runtime_overrides = get_runtime_overrides()
@@ -331,6 +335,58 @@ class Coordinator(CoordinatorResponseMixin):
                 self.logger.debug(f"[Coordinator] Failed to set playback hooks: {e}")
 
         self._set_audio_state(self.AUDIO_STATE_LISTENING)
+
+    def _responses(self) -> CoordinatorResponseService:
+        service = getattr(self, "_response_service", None)
+        if service is None:
+            service = CoordinatorResponseService()
+            self._response_service = service
+        return service
+
+    def _build_count_response(self, text: str) -> str:
+        return self._responses().build_count_response(text)
+
+    def _parse_count_target(self, text: str) -> int:
+        return self._responses().parse_count_target(text)
+
+    def _format_system_health(self, health: dict) -> str:
+        return self._responses().format_system_health(health)
+
+    def _format_system_memory_info(
+        self, total_gb: float, used_pct: float, temps: dict
+    ) -> str:
+        return self._responses().format_system_memory_info(total_gb, used_pct, temps)
+
+    def _format_temperature_response(self, temps: dict) -> str:
+        return self._responses().format_temperature_response(temps)
+
+    def _format_system_full_report(self, report: dict) -> str:
+        return self._responses().format_system_full_report(report)
+
+    def _format_size_gb(self, gb: float) -> str:
+        return self._responses().format_size_gb(gb)
+
+    def _safe_speak(self, text: str, interaction_id=None) -> None:
+        current_interaction_id = interaction_id or self.interaction_id
+
+        def set_response_guard(response_id, committed: bool) -> None:
+            self._response_interaction_id = response_id
+            self._response_committed = committed
+
+        self._responses().safe_speak(
+            ResponseDeliveryDependencies(
+                tts_enabled=self.runtime_overrides.get("tts_enabled", True),
+                interaction_id=current_interaction_id,
+                response_interaction_id=self._response_interaction_id,
+                response_committed=self._response_committed,
+                logger=self.logger,
+                acquire_audio=self.acquire_audio,
+                release_audio=self.release_audio,
+                speak=self.sink.speak,
+                set_response_guard=set_response_guard,
+            ),
+            text,
+        )
     
     def set_next_override(self, key: str, value) -> None:
         self.next_interaction_overrides[key] = value
