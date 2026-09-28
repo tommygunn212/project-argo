@@ -393,58 +393,6 @@ class RuleBasedIntentParser(IntentParser):
     Intentionally dumb for predictability.
     """
 
-    def parse(self, text: str) -> Intent:
-        """
-        Classify text using hardcoded rules.
-        """
-        if not text or not text.strip():
-            raise ValueError("text is empty")
-
-        text_original = text.strip()
-        text_lower = normalize_system_text(text_original.lower())
-        text_lower = normalize_status_text(text_lower)
-        text_lower = normalize_audio_routing_text(text_lower)
-        text_lower = normalize_app_text(text_lower)
-        text_lower = (
-            text_lower.replace("’", "'")
-            .replace("‘", "'")
-            .replace("“", '"')
-            .replace("”", '"')
-        )
-        text_lower = text_lower.replace("sound", "volume").replace("loudness", "volume")
-
-
-        # SERIOUS_MODE signal (keyword presence)
-        self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
-        serious_mode = self.serious_mode
-
-        # --- EXPLICIT PHRASE MAPPING FOR MUST_PASS CASES ---
-        def _normalize_phrase(phrase):
-            return (
-                phrase.strip().lower()
-                .replace("’", "'")
-                .replace("‘", "'")
-                .replace('“', '"')
-                .replace('”', '"')
-            )
-
-        must_pass_phrases = {
-            _normalize_phrase("why does coffee cool down?"): IntentType("knowledge_physics"),
-            _normalize_phrase("is bitcoin actually money?"): IntentType("knowledge_finance"),
-            _normalize_phrase("what time is it and how's my system doing?"): IntentType("knowledge_time_system"),
-        }
-        norm_input = _normalize_phrase(text_original)
-        # DEBUG: Print normalization and mapping keys
-        print(f"[DEBUG] norm_input: '{norm_input}'")
-        print(f"[DEBUG] must_pass_phrases keys: {list(must_pass_phrases.keys())}")
-        if norm_input in must_pass_phrases:
-            print(f"[DEBUG] MUST_PASS MATCH: '{norm_input}' -> {must_pass_phrases[norm_input]}")
-            return Intent(
-                intent_type=must_pass_phrases[norm_input],
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
 
     def __init__(self):
         """Initialize hardcoded rules."""
