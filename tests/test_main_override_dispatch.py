@@ -89,3 +89,42 @@ def test_realtime_voice_persistence_failure_is_reported_but_override_survives(
         call.args[0] == "UI_CMD_SET_OVERRIDE realtime_voice=marin"
         for call in event.call_args_list
     )
+
+
+def test_next_override_is_staged_without_touching_runtime_overrides(monkeypatch):
+    _, set_override, _, event, _ = _configure(monkeypatch)
+    staged = {}
+    monkeypatch.setattr(main, "NEXT_INTERACTION_OVERRIDES", staged)
+
+    main._handle_next_override({"key": "temperature", "value": 0.4})
+
+    assert staged == {"temperature": 0.4}
+    set_override.assert_not_called()
+    event.assert_called_once_with(
+        "UI_CMD_NEXT_OVERRIDE temperature=0.4", stage="ui"
+    )
+
+
+def test_next_override_without_key_is_ignored(monkeypatch):
+    _, _, _, event, _ = _configure(monkeypatch)
+    staged = {}
+    monkeypatch.setattr(main, "NEXT_INTERACTION_OVERRIDES", staged)
+
+    main._handle_next_override({"value": 0.4})
+
+    assert staged == {}
+    event.assert_not_called()
+
+
+def test_clear_overrides_clears_runtime_and_broadcasts_snapshot(monkeypatch):
+    _, _, get_overrides, event, broadcast = _configure(monkeypatch)
+    clear = Mock()
+    monkeypatch.setattr(main, "clear_runtime_overrides", clear)
+
+    main._handle_clear_overrides()
+
+    clear.assert_called_once_with()
+    event.assert_called_once_with("UI_CMD_CLEAR_OVERRIDES", stage="ui")
+    broadcast.assert_called_once_with(
+        "runtime_overrides", get_overrides.return_value
+    )
