@@ -101,6 +101,7 @@ from core.pipeline_confidence_gate import apply_confidence_gate
 from core.pipeline_canonical_stage import run_canonical_stage
 from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
 from core.pipeline_intent_stage import prepare_intent_stage
+from core import system_response_formatter as system_format
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -2214,36 +2215,13 @@ class ArgoPipeline:
         return 5
 
     def _format_system_health(self, health: dict) -> str:
-        return (
-            f"CPU at {health.get('cpu_percent')} percent. "
-            f"Memory at {health.get('ram_percent')} percent. "
-            f"Disk {health.get('disk_percent')} percent full."
-        )
+        return system_format.format_system_health(health)
 
     def _format_system_memory_info(self, total_gb: float, used_pct: float, temps: dict) -> str:
-        text = (
-            f"Your system has {total_gb} gigabytes of memory installed. "
-            f"Currently using about {used_pct} percent."
-        )
-        cpu_temp = temps.get("cpu")
-        gpu_temp = temps.get("gpu")
-        if cpu_temp is not None:
-            text += f" CPU temperature is {cpu_temp} degrees."
-        if gpu_temp is not None:
-            text += f" GPU temperature is {gpu_temp} degrees."
-        return text
+        return system_format.format_system_memory_info(total_gb, used_pct, temps)
 
     def _format_temperature_response(self, temps: dict) -> str:
-        parts = []
-        cpu_temp = temps.get("cpu")
-        gpu_temp = temps.get("gpu")
-        if cpu_temp is not None:
-            parts.append(f"CPU temperature is {cpu_temp} degrees.")
-        if gpu_temp is not None:
-            parts.append(f"GPU temperature is {gpu_temp} degrees.")
-        if not parts:
-            return "Temperature sensors are not available on this system."
-        return " ".join(parts) + " Normal."
+        return system_format.format_temperature_response(temps)
 
     def _format_system_full_report(self, report: dict) -> str:
         health = report.get("health", {}) or {}
