@@ -102,6 +102,7 @@ from core.pipeline_canonical_stage import run_canonical_stage
 from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
 from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
+from core.knowledge_answer_guard import enforce_knowledge_answer
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1733,9 +1734,7 @@ class ArgoPipeline:
         )
 
     def generate_response(self, text, interaction_id: str = "", rag_context: str = "", memory_context: str = "", use_convo_buffer: bool = True, intent_type: Optional[str] = None, confidence: float = 1.0):
-        """
-        Generate a response, enforcing principle/mechanism explanation for knowledge intents.
-        """
+        """Generate a response and enforce structured knowledge answers."""
         if not self.llm_enabled:
             self.logger.info("LLM offline: skipping generation")
             return ""
@@ -1771,132 +1770,69 @@ class ArgoPipeline:
                 full_response += part
 
             total_ms = (time.perf_counter() - start) * 1000
-            self._record_timeline(
-                f"LLM_DONE {total_ms:.0f}ms",
-                stage="llm",
-                interaction_id=interaction_id,
-            )
+            self._record_timeline(f"LLM_DONE {total_ms:.0f}ms", stage="llm", interaction_id=interaction_id)
             self.broadcast("llm_metrics", {
                 "interaction_id": interaction_id,
                 "first_token_ms": first_token_ms,
                 "total_ms": total_ms,
             })
             full_response = self._strip_prompt_artifacts(full_response)
+            default_model = self._llm_router.last_model or self.llm_model_name
 
-            # --- KNOWLEDGE ANSWER GUARD ---
-            knowledge_domains = {
-                "knowledge_physics": ["heat", "cooling", "thermodynamics", "energy", "conduction", "convection", "radiation", "molecule", "evaporation", "law", "process"],
-                "knowledge_finance": ["store of value", "medium of exchange", "inflation", "currency", "money", "bitcoin", "asset", "liability", "investment", "finance", "bond", "stock", "blockchain"],
-                "knowledge_time_system": ["clock", "time source", "system", "status", "uptime", "cpu", "memory", "disk", "metric", "monitor"]
-            }
+            def retry_knowledge_answer(schema_instruction: str, model_override: str | None) -> str:
+                retry_prompt = self._build_llm_prompt(
+                    text + "\n\n" + schema_instruction,
+                    mode,
+                    serious_mode,
+                    rag_context,
+                    memory_context,
+                    convo_context="",
+                )
+                retry_response = ""
+                try:
+                    for chunk in self._stream_llm_text(
+                        prompt=retry_prompt,
+                        system_message=self._get_system_message(mode, serious_mode),
+                        convo_messages=convo_messages,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        interaction_id=interaction_id,
+                        model_override=model_override,
+                    ):
+                        if self.stop_signal.is_set():
+                            break
+                        retry_response += chunk
+                    return self._strip_prompt_artifacts(retry_response)
+                except Exception as error:
+                    self.logger.error(f"[LLM] Retry Error: {error}")
+                    return full_response
 
-            # Model override for strict instruction-following on knowledge intents
-            STRICT_INSTRUCTION_MODEL = "gpt-4.1"  # or your most instruction-reliable model
-            DEFAULT_MODEL = self._llm_router.last_model or self.llm_model_name
-            knowledge_intents = {
-                "knowledge_physics",
-                "knowledge_finance",
-                "knowledge_time_system"
-            }
-            # Use strict model only for these intents
-            if intent_type in knowledge_intents:
-                model_to_use = STRICT_INSTRUCTION_MODEL
+            guarded = enforce_knowledge_answer(
+                initial_response=full_response,
+                user_text=text,
+                intent_type=intent_type,
+                confidence=confidence,
+                must_pass_phrases=getattr(self, "must_pass_phrases", None),
+                retry=retry_knowledge_answer,
+                default_model=default_model,
+            )
+            if guarded.outcome == "retry_pass":
+                self.logger.info("[KNOWLEDGE GUARD] Principle section and domain keyword found on retry.")
+            elif guarded.outcome == "must_pass_fallback":
+                self.logger.warning(
+                    f"[KNOWLEDGE GUARD] LLM failed schema for MUST_PASS {intent_type}. Using deterministic fallback."
+                )
+                self.logger.info("[KNOWLEDGE GUARD] knowledge_fallback_used = true")
+            elif guarded.outcome == "retry_weak":
+                self.logger.warning(
+                    "[KNOWLEDGE GUARD] Principle section or domain keyword still missing after retry. "
+                    "Downgrading confidence."
+                )
             else:
-                model_to_use = DEFAULT_MODEL
-
-            if intent_type in knowledge_domains and confidence >= 0.95:
-                def extract_principle_section(text):
-                    # Find the Principle: section and return its content (up to Explanation: or end)
-                    import re
-                    match = re.search(r"principle:\s*(.*?)(?:\n\s*explanation:|$)", text, re.IGNORECASE | re.DOTALL)
-                    return match.group(1).strip() if match else ""
-
-                answer_lower = full_response.lower()
-                principle_section = extract_principle_section(full_response)
-                has_principle_header = "principle:" in answer_lower
-                has_domain_keyword = any(kw in principle_section for kw in knowledge_domains[intent_type])
-                if not (has_principle_header and has_domain_keyword):
-                    # Structured retry with enforced schema
-                    schema_instruction = (
-                        "You must answer using the following structure:\n\n"
-                        "Principle:\n<Name the underlying scientific, economic, or system principle>\n\n"
-                        "Explanation:\n<Explain the phenomenon using that principle in plain language>\n\n"
-                        "Do not omit the Principle section."
-                    )
-                    retry_prompt = self._build_llm_prompt(
-                        text + "\n\n" + schema_instruction,
-                        mode, serious_mode, rag_context, memory_context, convo_context=""
-                    )
-                    retry_response = ""
-                    try:
-                        retry_sys_msg = self._get_system_message(mode, serious_mode)
-                        retry_model = model_to_use if model_to_use != DEFAULT_MODEL else None
-                        for chunk2 in self._stream_llm_text(
-                            prompt=retry_prompt,
-                            system_message=retry_sys_msg,
-                            convo_messages=convo_messages,
-                            temperature=0.7,
-                            max_tokens=1024,
-                            interaction_id=interaction_id,
-                            model_override=retry_model,
-                        ):
-                            if self.stop_signal.is_set():
-                                break
-                            retry_response += chunk2
-                        retry_response = self._strip_prompt_artifacts(retry_response)
-                    except Exception as e:
-                        self.logger.error(f"[LLM] Retry Error: {e}")
-                        retry_response = full_response
-                    retry_lower = retry_response.lower()
-                    retry_principle_section = extract_principle_section(retry_response)
-                    has_principle_header_retry = "principle:" in retry_lower
-                    has_domain_keyword_retry = any(kw in retry_principle_section for kw in knowledge_domains[intent_type])
-                    if has_principle_header_retry and has_domain_keyword_retry:
-                        self.logger.info("[KNOWLEDGE GUARD] Principle section and domain keyword found on retry.")
-                        return retry_response
-                    else:
-                        # DETERMINISTIC FALLBACK for MUST_PASS knowledge intents
-                        must_pass_phrases = getattr(self, 'must_pass_phrases', None)
-                        is_must_pass = False
-                        if must_pass_phrases:
-                            # Check if the normalized input is a must_pass phrase for this intent
-                            norm_input = text.strip().lower()
-                            for phrase, intent in must_pass_phrases.items():
-                                if norm_input == phrase.strip().lower() and intent == intent_type:
-                                    is_must_pass = True
-                                    break
-                        if is_must_pass:
-                            self.logger.warning(f"[KNOWLEDGE GUARD] LLM failed schema for MUST_PASS {intent_type}. Using deterministic fallback.")
-                            self.logger.info("[KNOWLEDGE GUARD] knowledge_fallback_used = true")
-                            # Deterministic, auditable fallback templates
-                            if intent_type == "knowledge_physics":
-                                fallback = (
-                                    "Principle:\nHeat transfer and thermodynamics\n\n"
-                                    "Explanation:\nObjects cool down because heat energy moves from warmer objects to cooler surroundings until temperatures equalize."
-                                )
-                            elif intent_type == "knowledge_finance":
-                                fallback = (
-                                    "Principle:\nDefinition of money\n\n"
-                                    "Explanation:\nMoney functions as a medium of exchange, store of value, and unit of account. Bitcoin partially satisfies these criteria."
-                                )
-                            elif intent_type == "knowledge_time_system":
-                                fallback = (
-                                    "Principle:\nSystem clock and resource monitoring\n\n"
-                                    "Explanation:\nThe current time comes from the system clock, while system status reflects CPU, memory, and other runtime metrics."
-                                )
-                            else:
-                                fallback = "[Error: No fallback template for this intent.]"
-                            # Mark as system generated, confidence high
-                            fallback += "\n[system_generated: true]"
-                            return fallback
-                        else:
-                            self.logger.warning("[KNOWLEDGE GUARD] Principle section or domain keyword still missing after retry. Downgrading confidence.")
-                            # Downgrade confidence, flag weak_pass, and return as is with warning
-                            return retry_response + "\n[Warning: Principle section or domain keyword missing. Answer may be incomplete.]"
-            self.logger.info(f"[LLM] Response: '{full_response[:60]}...'")
-            return full_response
-        except Exception as e:
-            self.logger.error(f"[LLM] Error: {e}")
+                self.logger.info(f"[LLM] Response: '{guarded.text[:60]}...'")
+            return guarded.text
+        except Exception as error:
+            self.logger.error(f"[LLM] Error: {error}")
             self._record_timeline("LLM_ERROR", stage="llm", interaction_id=interaction_id)
             return "[Error connecting to LLM]"
 
