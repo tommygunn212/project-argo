@@ -95,7 +95,7 @@ from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
 from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
 from core.coordinator_responses import CoordinatorResponseMixin
-from core.recording_silence_tracker import RecordingSilenceTracker
+from core.coordinator_recording import RecordingConfig, RecordingHooks, record_with_silence_detection
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -1150,222 +1150,43 @@ class Coordinator(CoordinatorResponseMixin):
         return gate
 
     def _record_with_silence_detection(self, initial_frames: Optional[list] = None) -> np.ndarray:
-        """
-        Record audio with dynamic silence detection and pre-roll buffer.
-        
-        Enhanced recording logic:
-        1. Prepend pre-roll buffer (speech onset captured before wake word)
-        2. Enforce minimum record duration (0.9s)
-        3. Start silence timer only after speech energy detected (RMS > threshold)
-        4. Stop on silence (2.2s) or max duration (15s)
-        5. Emit debug metrics (gated by RECORD_DEBUG flag)
-        
-        Returns:
-            numpy array of int16 audio samples at AUDIO_SAMPLE_RATE Hz
-        """
-        import numpy as np
-        import time
-        
-        # Chunk size for processing (100ms)
-        chunk_samples = int(self.AUDIO_SAMPLE_RATE * 0.1)
-        min_samples = int(self.AUDIO_SAMPLE_RATE * self.MINIMUM_RECORD_DURATION)
-        # Use dynamic silence timeout (updated after each transcription based on query type)
-        silence_samples_threshold = int(self.AUDIO_SAMPLE_RATE * self.dynamic_silence_timeout)
-        max_samples = int(self.AUDIO_SAMPLE_RATE * self.MAX_RECORDING_DURATION)
-        
-        audio_buffer = []
-        total_samples = 0
-        silence_tracker = RecordingSilenceTracker(
-            silence_samples=silence_samples_threshold,
-            minimum_samples=min_samples,
-        )
-        stop_reason = None
-        rms_samples = []  # For calculating average RMS (debug metric)
-        
-        # Get pre-roll buffer (speech onset before wake word) or use provided frames
-        preroll_frames = []
-        if initial_frames is not None:
-            preroll_frames = initial_frames
-        else:
-            try:
-                preroll_frames = self.trigger.get_preroll_buffer()
-            except Exception as e:
-                self.logger.debug(f"[Record] Could not retrieve pre-roll buffer: {e}")
-        
-        # Prepend pre-roll buffer to audio
-        if preroll_frames:
-            for frame in preroll_frames:
-                audio_buffer.append(frame)
-                total_samples += frame.shape[0]
-            if self.record_debug:
-                self.logger.info(f"[Record] Pre-roll: {len(preroll_frames)} frames ({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s)")
-        
-        recording_start_time = time.time()
-        stream = None
-        try:
-            # DEBUG: Print available devices so we can see what's connected
-            import sounddevice as sd_enum
-            if self.record_debug:
-                self.logger.info("[Record] Available audio devices:")
-                devices = sd_enum.query_devices()
-                for i, dev in enumerate(devices):
-                    self.logger.info(f"  [{i}] {dev['name']} (in={dev['max_input_channels']}, out={dev['max_output_channels']})")
-            
-            # Select microphone by index (prevent Windows "virtual nothing mic")
-            # For now use default; if you know your mic index, set: sd.default.device = (MIC_INDEX, None)
-            # MIC_INDEX should be from the device list above
-            
-            stream = sd.InputStream(
-                channels=1,
-                samplerate=self.AUDIO_SAMPLE_RATE,
-                dtype=np.int16,
-                device=self.input_device_index,
-            )
+        """Record one utterance with pre-roll, VAD, and bounded silence detection."""
+        def set_stream_state(stream, active: bool) -> None:
             self._input_stream = stream
-            self._input_stream_active = True
-            stream.start()
-            
-            # INSTRUMENTATION: Log mic open
-            log_event("MIC OPEN")
-            
-            vad = self._speech_gate()
-            if vad is not None:
-                vad.reset()
+            self._input_stream_active = active
 
-            rms = 0.0  # Initialize before loop (defensive: prevents UnboundLocalError in logging)
-            chunk_count = 0  # For RMS logging every 20 chunks
-            
-            while total_samples < max_samples:
-                if self._is_speaking.is_set() or self._input_stop_event.is_set() or self._audio_state == self.AUDIO_STATE_SPEAKING:
-                    stop_reason = "speaking_gate"
-                    if self.record_debug:
-                        self.logger.info("[Record] Aborting: speaking gate active")
-                    break
-                # Read one chunk
-                chunk, _ = stream.read(chunk_samples)
-                if chunk.size == 0:
-                    break
-                
-                audio_buffer.append(chunk)
-                total_samples += chunk.shape[0]
-                elapsed_time = time.time() - recording_start_time
-                
-                # Calculate RMS for this chunk (normalized 0-1)
-                rms = np.sqrt(np.mean(chunk.astype(float) ** 2)) / 32768.0  # Normalize int16 range
-                rms_samples.append(rms)
-                chunk_count += 1
+        config = RecordingConfig(
+            sample_rate=self.AUDIO_SAMPLE_RATE,
+            minimum_duration=self.MINIMUM_RECORD_DURATION,
+            dynamic_silence_timeout=self.dynamic_silence_timeout,
+            maximum_duration=self.MAX_RECORDING_DURATION,
+            rms_speech_threshold=self.RMS_SPEECH_THRESHOLD,
+            silence_threshold=self.SILENCE_THRESHOLD,
+            silence_timeout_label=self.SILENCE_TIMEOUT_SECONDS,
+            record_debug=self.record_debug,
+            input_device_index=self.input_device_index,
+        )
+        hooks = RecordingHooks(
+            logger=self.logger,
+            should_abort=lambda: (
+                self._is_speaking.is_set()
+                or self._input_stop_event.is_set()
+                or self._audio_state == self.AUDIO_STATE_SPEAKING
+            ),
+            speech_gate=self._speech_gate,
+            get_preroll=self.trigger.get_preroll_buffer,
+            set_stream_state=set_stream_state,
+            event_logger=log_event,
+            last_transcript=lambda: self._last_transcript,
+        )
+        return record_with_silence_detection(
+            config,
+            hooks,
+            stream_factory=sd.InputStream,
+            device_query=sd.query_devices,
+            initial_frames=initial_frames,
+        )
 
-                # Is this speech? Silero reads the waveform, so a fan, a tone
-                # or a keystroke does not hold the turn open the way a bare
-                # energy threshold does. None means it could not judge, and
-                # only then do we fall back to comparing loudness.
-                chunk_is_speech = vad.is_speech(chunk) if vad is not None else None
-                if chunk_is_speech is None:
-                    chunk_is_speech = rms > self.RMS_SPEECH_THRESHOLD
-                    chunk_is_silence = rms < self.SILENCE_THRESHOLD
-                else:
-                    chunk_is_silence = not chunk_is_speech
-                
-                # Log RMS every 20 chunks (~2 seconds) to see if mic is capturing
-                if chunk_count % 20 == 0:
-                    self.logger.debug(f"[AudioDebug] RMS={rms:.4f} (elapsed={elapsed_time:.2f}s)")
-                
-                # CRITICAL: Abort early if no voice detected after 2.5s
-                if elapsed_time > 2.5 and np.mean(rms_samples[-25:] if len(rms_samples) >= 25 else rms_samples) < 0.002:
-                    stop_reason = "no_voice_detected"
-                    self.logger.warning("[Record] No voice detected (avg RMS < 0.002 after 2.5s), aborting early")
-                    break
-                
-                silence = silence_tracker.observe(
-                    elapsed_seconds=elapsed_time,
-                    total_samples=total_samples,
-                    chunk_samples=chunk.shape[0],
-                    is_speech=chunk_is_speech,
-                    is_silence=chunk_is_silence,
-                )
-                if silence.speech_started and self.record_debug:
-                    self.logger.info(
-                        f"[Record] Speech detected at {elapsed_time:.3f}s (RMS={rms:.4f})"
-                    )
-                if silence.stop_for_silence:
-                    stop_reason = "silence"
-                    if self.record_debug:
-                        self.logger.info(
-                            f"[Record] Silence detected ({silence.silence_duration:.2f}s >= "
-                            f"{self.SILENCE_TIMEOUT_SECONDS}s), stopping recording "
-                            f"({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s recorded)"
-                        )
-                    break
-                
-                # Also stop if max duration reached
-                if total_samples >= max_samples:
-                    stop_reason = "max_duration"
-                    # Guard formatting (belt + suspenders: logging must never crash)
-                    calibration_chunks = 3  # Ignore first 300ms (3 x 100ms)
-                    filtered_rms = rms_samples[calibration_chunks:] if len(rms_samples) > calibration_chunks else rms_samples
-                    avg_rms = np.mean(filtered_rms) if filtered_rms else 0.0
-                    avg_rms_str = f"{avg_rms:.2f}" if avg_rms is not None else "N/A"
-                    self.logger.warning(
-                        f"[Record] MAX DURATION REACHED (15.0s) - stopping recording | "
-                        f"total_samples={total_samples}, avg_rms={avg_rms_str}"
-                    )
-                    break
-        
-        except Exception as e:
-            self.logger.error(f"[Record] Error during audio recording: {e}")
-            raise
-        
-        finally:
-            # Guarantee stream cleanup even on exception or cancellation
-            if stream:
-                try:
-                    stream.stop()
-                    stream.close()
-                except Exception as e:
-                    self.logger.warning(f"[Record] Error closing stream: {e}")
-            
-            # INSTRUMENTATION: Log mic close
-            log_event("MIC CLOSE")
-            
-            self._input_stream = None
-            self._input_stream_active = False
-        
-        # Emit debug metrics (gated by RECORD_DEBUG flag)
-        if self.record_debug and rms_samples:
-            calibration_chunks = 3  # Ignore first 300ms (3 x 100ms)
-            filtered_rms = rms_samples[calibration_chunks:] if len(rms_samples) > calibration_chunks else rms_samples
-            avg_rms = np.mean(filtered_rms) if filtered_rms else 0.0
-            avg_rms_str = f"{avg_rms:.4f}" if avg_rms is not None else "N/A"
-            self.logger.info(f"[Record] Recording Summary:")
-            self.logger.info(f"  Duration: {total_samples/self.AUDIO_SAMPLE_RATE:.2f}s (minimum: {self.MINIMUM_RECORD_DURATION}s)")
-            self.logger.info(f"  RMS average: {avg_rms_str} (normalized 0-1, threshold: {self.RMS_SPEECH_THRESHOLD})")
-            self.logger.info(
-                f"  Speech detected at: {silence_tracker.speech_detected_at:.3f}s"
-                if silence_tracker.speech_detected_at
-                else "  Speech: NOT detected"
-            )
-            self.logger.info(f"  Stop reason: {stop_reason}")
-            self.logger.info(f"  Silence threshold: {self.SILENCE_THRESHOLD} (absolute RMS)")
-            self.logger.info(f"  Silence timeout: {self.SILENCE_TIMEOUT_SECONDS}s")
-            if self._last_transcript:
-                self.logger.info(f"  Transcript: '{self._last_transcript}'")
-        
-        # Concatenate all chunks
-        if audio_buffer:
-            audio = np.concatenate(audio_buffer, axis=0)
-            
-            # FIX 3: Normalize audio before Whisper (critical for weak signals)
-            # Peak normalization does not amplify noise meaningfully but gives Whisper a fighting chance
-            peak = np.max(np.abs(audio.astype(float)))
-            if peak > 0:
-                audio = (audio.astype(float) / peak * 32767).astype(np.int16)
-                if self.record_debug:
-                    self.logger.debug(f"[Record] Audio normalized (peak was {peak:.0f})")
-            
-            return audio
-        else:
-            return np.array([], dtype=np.int16)
-    
     def _monitor_music_interrupt(self, music_player) -> None:
         """
         Monitor for user interrupt during music playback.
