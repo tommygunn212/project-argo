@@ -93,6 +93,41 @@ def test_question_form_does_not_mutate_volume(volume):
     assert volume["sets"] == []
 
 
+@pytest.mark.parametrize(
+    ("text", "adjustment"),
+    [
+        ("music volume up", 10),
+        ("music volume up 5", 5),
+        ("music volume down", -10),
+        ("music volume down 7", -7),
+    ],
+)
+def test_explicit_music_volume_adjustments_are_reachable(volume, text, adjustment):
+    pipeline = FakePipeline()
+
+    assert call(pipeline, text) is True
+    assert volume["adjustments"] == [adjustment]
+    assert pipeline.broadcasts[-1][1] == f"Argo: Music volume set to {40 + adjustment}%"
+
+
+@pytest.mark.parametrize("text", ["what is the music volume", "current music volume"])
+def test_explicit_music_volume_status_is_reachable_without_mutation(volume, text):
+    pipeline = FakePipeline()
+
+    assert call(pipeline, text, kind="QUESTION") is True
+    assert volume["sets"] == []
+    assert volume["adjustments"] == []
+    assert pipeline.broadcasts[-1] == ("log", "Argo: Music volume: 40%")
+
+
+def test_unqualified_system_volume_language_still_falls_through(volume):
+    pipeline = FakePipeline()
+
+    assert call(pipeline, "volume up 5") is False
+    assert call(pipeline, "what is the volume", kind="QUESTION") is False
+    assert volume["adjustments"] == []
+
+
 def test_low_confidence_command_is_not_executed(volume):
     pipeline = FakePipeline()
 
@@ -113,7 +148,7 @@ def test_tts_suppression_preserves_non_voice_completion(volume):
     pipeline = FakePipeline()
 
     assert call(
-        pipeline, "music volume 55", overrides={"suppress_tts": True}
+        pipeline, "music volume up 5", overrides={"suppress_tts": True}
     ) is True
     assert pipeline.spoken == []
-    assert volume["sets"] == [55]
+    assert volume["adjustments"] == [5]

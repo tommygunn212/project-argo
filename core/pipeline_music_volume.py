@@ -49,11 +49,18 @@ def dispatch_music_volume(
 
     volume_patterns: list[tuple[str, Callable[[re.Match[str]], Any]]] = [
         (r"(?:music )?volume (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
+        (r"set music volume to (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
         (r"set volume to (\d{1,3})%?", lambda m: set_volume_percent(int(m.group(1)))),
+        (r"music volume up (\d{1,3})%?", lambda m: adjust_volume_percent(int(m.group(1)))),
+        (r"music volume down (\d{1,3})%?", lambda m: adjust_volume_percent(-int(m.group(1)))),
         (r"volume up (\d{1,3})%?", lambda m: adjust_volume_percent(int(m.group(1)))),
         (r"volume down (\d{1,3})%?", lambda m: adjust_volume_percent(-int(m.group(1)))),
+        (r"music volume up", lambda _m: adjust_volume_percent(10)),
+        (r"music volume down", lambda _m: adjust_volume_percent(-10)),
         (r"volume up", lambda _m: adjust_volume_percent(10)),
         (r"volume down", lambda _m: adjust_volume_percent(-10)),
+        (r"what is the music volume", lambda _m: None),
+        (r"current music volume", lambda _m: None),
         (r"what is the volume", lambda _m: None),
         (r"current volume", lambda _m: None),
     ]
@@ -75,7 +82,12 @@ def dispatch_music_volume(
         if match is None:
             continue
 
-        is_status_query = pattern in {"what is the volume", "current volume"}
+        is_status_query = pattern in {
+            "what is the music volume",
+            "current music volume",
+            "what is the volume",
+            "current volume",
+        }
         effective_kind = "ACTION" if is_imperative else request_kind
         if effective_kind != "ACTION" and not is_status_query:
             response = "I can adjust volume. Say it as a command to execute."
