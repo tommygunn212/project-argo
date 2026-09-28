@@ -281,77 +281,31 @@ if WAKE_WORD_DETECTOR_AVAILABLE and STATE_MACHINE_AVAILABLE:
 # ============================================================================
 
 def start_wake_word_detector():
-    """
-    Start the wake-word detector.
-    
-    Called when entering LISTENING state.
-    Detector runs independently and pauses during PTT/SLEEP/THINKING/SPEAKING.
-    """
+    """Start wake-word detection when entering LISTENING."""
     start_detector(_wake_word_detector, logger)
 
 def stop_wake_word_detector():
-    """
-    Stop the wake-word detector.
-    
-    Called when exiting LISTENING state (e.g., entering SLEEP).
-    """
+    """Stop wake-word detection when leaving LISTENING."""
     stop_detector(_wake_word_detector, logger)
 
 def pause_wake_word_detector():
-    """
-    Pause the wake-word detector (e.g., during PTT).
-    
-    Non-blocking pause; detector remains initialized but doesn't listen.
-    Resumed after PTT completes.
-    """
+    """Pause the initialized detector during push-to-talk."""
     pause_detector(_wake_word_detector, logger)
 
 def resume_wake_word_detector():
-    """
-    Resume the wake-word detector after pause.
-    
-    Called after PTT completes; detector resumes listening.
-    """
+    """Resume wake-word detection after push-to-talk."""
     resume_detector(_wake_word_detector, logger)
 
 def get_wake_word_detector_status() -> dict:
     """Get wake-word detector status for diagnostics."""
     return detector_status(_wake_word_detector)
-
-
-
-
 SESSION_FILE = os.path.join(_get_log_dir(), ".sessions.json")
 """Persistent store of named session IDs. Format: {"name": "uuid", ...}"""
 
 
 def resolve_session_id(name: str) -> str:
-    """
-    Resolve a human-readable session name to a persistent UUID.
-    
-    If the session name already exists in .sessions.json, return its UUID.
-    If not, generate a new UUID, persist it, and return it.
-    
-    This allows multiple CLI runs to share the same session_id by using
-    the same --session <name> flag. Sessions persist until manually deleted.
-    
-    Args:
-        name: Human-readable session name (e.g., "work", "demo", "project-x")
-        
-    Returns:
-        str: UUID associated with this session name (same across runs)
-        
-    Side Effects:
-        Creates .sessions.json in logs directory if it doesn't exist.
-        Updates .sessions.json when a new session name is first seen.
-    """
+    """Resolve a named CLI session to its persistent UUID."""
     return _resolve_session_id(name, SESSION_FILE)
-
-
-# ============================================================================
-# Intent Classification & Gating
-# ============================================================================
-
 
 
 # ============================================================================
@@ -372,67 +326,12 @@ If Brainstorming Mode applies:
 
 Respond to the user. Do not mention conversation modes or internal state.
 """
-"""System constraint injected when --mode flag is used. Enforces mode rules."""
-
-
-# ============================================================================
-# Replay Filtering Policy
-# ============================================================================
-
-# ============================================================================
-# Phase 4C: Pre-Generation Behavior Selector
-# ============================================================================
-
-"""
-Query type classification patterns.
-Priority indicates detection order (higher priority checked first).
-"""
-
-
-
-
-# ============================================================================
-# Logging Infrastructure
-# ============================================================================
-
-
-
 # ============================================================================
 # WHISPER TRANSCRIPTION WITH CONFIRMATION GATE
 # ============================================================================
 
 def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> tuple:
-    """
-    Transcribe audio file and display confirmation gate before processing.
-    
-    ARGO's philosophy on transcription:
-      1. Audio in → text out (no intent detection)
-      2. Display text to user
-      3. Wait for explicit confirmation
-      4. Only confirmed transcripts flow downstream
-    
-    This function enforces the confirmation gate: users must see what Whisper
-    heard before any downstream processing. No blind automation.
-    
-    Args:
-        audio_path: Path to WAV file
-        max_duration_seconds: Maximum audio duration (default 5 minutes)
-    
-    Returns:
-        tuple: (confirmed: bool, transcript_text: str, artifact: TranscriptionArtifact)
-               - confirmed: True if user approved, False if rejected
-               - transcript_text: Raw transcript (empty if rejected or failed)
-               - artifact: Full artifact with metadata (for logging/audit)
-    
-    Example:
-        confirmed, text, artifact = transcribe_and_confirm("user_audio.wav")
-        
-        if confirmed:
-            # Safe to use: user explicitly approved this text
-            run_argo(text)
-        else:
-            print("Transcript rejected. Please try again.")
-    """
+    """Transcribe audio and require explicit confirmation before dispatch."""
     return transcribe_with_confirmation(
         TranscriptionWorkflow(
             whisper_available=WHISPER_AVAILABLE,
@@ -458,41 +357,7 @@ def execute_and_confirm(
     user_approved: bool = False,
     intent_id: str = ""
 ) -> ExecutionResultArtifact | None:
-    """
-    Execute an approved execution plan with all hard gates.
-    
-    This is a GLUE FUNCTION ONLY. It:
-    1. Validates all five execution hard gates
-    2. Calls ExecutionMode.execute_plan()
-    3. Returns ExecutionResultArtifact
-    
-    It does NOT:
-    - Add new logic
-    - Modify plan steps
-    - Bypass confirmation flags
-    - Retry on failure
-    
-    HARD GATES (all must pass):
-    1. DryRunExecutionReport must exist
-    2. Simulation status must be SUCCESS
-    3. User must have approved execution
-    4. execution_plan_id must match between report and plan
-    5. All gates checked before any system state changes
-    
-    Args:
-        dry_run_report: DryRunExecutionReport from simulation layer
-        plan_artifact: ExecutionPlanArtifact that was simulated
-        user_approved: Boolean confirmation from user
-        intent_id: ID of original intent (for chain traceability)
-    
-    Returns:
-        ExecutionResultArtifact on success
-        None if any hard gate fails (zero side effects)
-    
-    Raises:
-        None - errors are recorded in result artifact
-    """
-    
+    """Execute only when simulation, approval, and plan-identity gates pass."""
     return execute_approved_plan(
         ExecutionWorkflow(
             engine_available=EXECUTION_ENGINE_AVAILABLE,
@@ -550,35 +415,7 @@ def run_argo(
     replay_reason: str = "continuation",
     voice_mode: bool = False,
 ) -> None:
-    """
-    Public entry point for Argo execution.
-    
-    Wraps _run_argo_internal with memory and preference integration:
-    1. Loads and updates user preferences
-    2. Retrieves relevant past interactions (SKIPPED in voice_mode)
-    3. Injects memory context into the prompt (SKIPPED in voice_mode)
-    4. Injects preference context into the prompt
-    5. Executes the core logic
-    6. Stores the new interaction to memory
-    
-    Voice Mode (voice_mode=True):
-    - Disables memory injection entirely (no prior context)
-    - Disables replay (always stateless)
-    - Forces CLI context for formatting
-    - Ensures single-turn, stateless execution
-    - CRITICAL for Option B compliance
-    
-    Args:
-        user_input: User's raw message
-        active_mode: Conversation mode name or None
-        replay_n: Last N turns to replay or None (ignored in voice_mode)
-        replay_session: True to replay current session (ignored in voice_mode)
-        strict_mode: If True, reject low-intent input
-        persona: Tone adjustment ("neutral", etc.)
-        verbosity: Response length control ("short" or "long")
-        replay_reason: Why replay was requested
-        voice_mode: If True, force stateless, memory-free execution for voice input
-    """
+    """Run one public wrapper turn with policy, context, and voice compliance."""
     def set_send_output(callback) -> None:
         global _send_to_output_sink
         _send_to_output_sink = callback
@@ -615,10 +452,6 @@ def run_argo(
         replay_reason=replay_reason,
         voice_mode=voice_mode,
     )
-    
-    # Note: Memory storage happens inside _run_argo_internal after model response is available
-
-
 def _run_argo_internal(
     user_input: str,
     *,
