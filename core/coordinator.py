@@ -332,21 +332,6 @@ class Coordinator(CoordinatorResponseMixin):
 
         self._set_audio_state(self.AUDIO_STATE_LISTENING)
     
-    def _next_interaction_id(self) -> int:
-        """
-        DEPRECATED: This method violates the contract.
-        
-        CONTRACT: interaction_id increments ONLY in wake handler.
-        Any other increment is a fatal violation.
-        
-        Calling this method is forbidden. Use self.interaction_id directly.
-        """
-        raise RuntimeError(
-            "FATAL: _next_interaction_id() called. Contract violation: "
-            "interaction_id increments ONLY in wake handler (_handle_wake_event). "
-            "Any other increment is fatal."
-        )
-
     def set_next_override(self, key: str, value) -> None:
         self.next_interaction_overrides[key] = value
         log_event(f"NEXT_OVERRIDE_SET {key}={value}")

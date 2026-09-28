@@ -31,7 +31,7 @@ INSTRUMENTATION POINTS (EXACT LOCATIONS)
 
 2. INTERACTION ID INCREMENT
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Location: core/coordinator.py, _next_interaction_id() method
+   Location: core/coordinator.py, _handle_wake_event() method
    Log: [HH:MM:SS.mmm] INTERACTION_ID incremented (id=N)
    
    Purpose:
