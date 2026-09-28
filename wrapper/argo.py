@@ -95,8 +95,6 @@ if _REPO_ROOT not in sys.path:
 from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
-    detect_recall_query,
-    format_recall_response,
 )
 from wrapper.behavior_policy import (
     FAMILIARITY_STATE,
@@ -124,6 +122,7 @@ from wrapper.ollama_generation import generate_ollama_response
 from wrapper.replay_context import build_replay_context
 from wrapper.prompt_composition import compose_prompt
 from wrapper.post_generation import audit_and_record_response
+from wrapper.runtime_composition import prepare_conversation, update_preferences
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -138,8 +137,6 @@ except ImportError:
 
 # Import Argo Memory (RAG-based interaction recall)
 sys.path.insert(0, os.path.dirname(__file__))
-from memory import find_relevant_memory, store_interaction, load_memory
-from prefs import load_prefs, save_prefs, update_prefs, build_pref_block
 from browsing import (
     list_conversations, show_by_date, show_by_topic,
     get_conversation_context, summarize_conversation
@@ -1204,9 +1201,7 @@ def run_argo(
         # Memory will be skipped below
     
     # Step 1: Load, update, and save user preferences
-    prefs = load_prefs()
-    prefs = update_prefs(user_input, prefs)
-    save_prefs(prefs)
+    prefs = update_preferences(user_input)
     
     # [Phase 7B-3] Step 1b: Parse and classify command
     # --- ARGO LAW & 5 GATES INTERCEPT ---
@@ -1258,53 +1253,15 @@ def run_argo(
         if _state_machine.is_listening:
             _transition_to_thinking()
     
-    # Step 2: Check if this is a recall/retrieval query (meta-question)
-    is_recall, count_requested = detect_recall_query(user_input)
-    
-    if is_recall:
-        # RECALL MODE: User asking for list of previous topics
-        # Load all memory and format deterministically
-        all_memory = load_memory()
-        recall_output = format_recall_response(
-            all_memory, 
-            count=count_requested,
-            prefs=prefs
-        )
-        print(recall_output)
-        
-        # Send to audio output (if enabled)
-        _send_to_output_sink(recall_output)
-        
-        # IMPORTANT: Do NOT store recall queries to memory
-        # Recall queries are meta-operations, not conversational content
-        # Storing them would pollute memory with bookkeeping instead of conversation
+    preparation = prepare_conversation(
+        user_input, prefs=prefs, voice_mode=voice_mode
+    )
+    if preparation.is_recall:
+        print(preparation.recall_output)
+        _send_to_output_sink(preparation.recall_output)
         return
-    
-    # GENERATION MODE: Regular conversation
-    # Step 3: Find relevant past interactions
-    # CRITICAL: Skip memory injection in voice_mode for stateless execution (Option B compliance)
-    relevant_memory = None
-    if not voice_mode:
-        relevant_memory = find_relevant_memory(user_input, top_n=2)
-    
-    # Step 4: Build memory context to inject
-    memory_context = ""
-    if relevant_memory and not voice_mode:
-        memory_lines = []
-        for item in relevant_memory:
-            memory_lines.append(f"Past: {item['user_input']}")
-            memory_lines.append(f"Response: {item['model_response']}")
-        memory_context = "From your history:\n" + "\n".join(memory_lines) + "\n\n"
-    
-    # Step 5: Build preference context to inject
-    pref_block = build_pref_block(prefs)
-    
-    # Step 6: Compose user input with preference + memory prefixes
-    # CRITICAL: Skip memory prefix in voice_mode for stateless execution
-    composed_input = user_input
-    if not voice_mode:
-        composed_input = pref_block + memory_context + user_input
-    
+    composed_input = preparation.composed_input
+
     # [Phase 7B] Step 6b: Transition to SPEAKING before generating response
     _transition_to_speaking()
     
