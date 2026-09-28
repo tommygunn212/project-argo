@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
 import core.pipeline_audio_routing as routing_module
-from core.pipeline_audio_routing import PipelineAudioRoutingService
+from core.pipeline_audio_routing import (
+    AudioRoutingDependencies,
+    PipelineAudioRoutingService,
+)
 
 
 class Host:
@@ -17,6 +20,17 @@ class Host:
 
     def _evaluate_gates(self, *args):
         return self.gate
+
+
+def service_for(host):
+    return PipelineAudioRoutingService(
+        AudioRoutingDependencies(
+            logger=host.logger,
+            minimum_confidence=lambda: host._personal_mode_min_confidence,
+            deliver_response=host._deliver_canonical_response,
+            evaluate_gates=host._evaluate_gates,
+        )
+    )
 
 
 def test_audio_status_format_preserves_device_lists():
@@ -35,7 +49,7 @@ def test_audio_status_format_preserves_device_lists():
 
 def test_status_request_cannot_mutate_audio_routing(monkeypatch):
     host = Host()
-    service = PipelineAudioRoutingService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         routing_module,
         "get_audio_routing_status",
@@ -49,7 +63,7 @@ def test_status_request_cannot_mutate_audio_routing(monkeypatch):
 def test_blocked_control_does_not_call_routing_mutator(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineAudioRoutingService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         routing_module,
         "set_audio_routing",
@@ -69,7 +83,7 @@ def test_blocked_control_does_not_call_routing_mutator(monkeypatch):
 
 def test_allowed_input_control_routes_microphone(monkeypatch):
     host = Host()
-    service = PipelineAudioRoutingService(host)
+    service = service_for(host)
     calls = []
     monkeypatch.setattr(
         routing_module,

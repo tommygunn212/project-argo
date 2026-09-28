@@ -68,7 +68,10 @@ from core.pipeline_text_router import route_user_text
 from core.pipeline_streaming_response import PipelineStreamingResponseService
 from core.pipeline_response_generation import PipelineResponseGenerationService
 from core.pipeline_bluetooth import BluetoothDependencies, PipelineBluetoothService
-from core.pipeline_audio_routing import PipelineAudioRoutingService
+from core.pipeline_audio_routing import (
+    AudioRoutingDependencies,
+    PipelineAudioRoutingService,
+)
 from core.pipeline_system_volume import (
     PipelineSystemVolumeService,
     SystemVolumeDependencies,
@@ -191,7 +194,14 @@ class ArgoPipeline:
                 evaluate_gates=self._evaluate_gates,
             )
         )
-        self._audio_routing = PipelineAudioRoutingService(self)
+        self._audio_routing = PipelineAudioRoutingService(
+            AudioRoutingDependencies(
+                logger=self.logger,
+                minimum_confidence=lambda: self._personal_mode_min_confidence,
+                deliver_response=self._deliver_canonical_response,
+                evaluate_gates=self._evaluate_gates,
+            )
+        )
         self._system_volume = PipelineSystemVolumeService(
             SystemVolumeDependencies(
                 logger=self.logger,
