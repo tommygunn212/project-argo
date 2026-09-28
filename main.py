@@ -63,6 +63,10 @@ from core.frontend_diagnostics import (
     FrontendDiagnosticsDependencies,
     dispatch_frontend_diagnostics,
 )
+from core.frontend_interrupt import (
+    FrontendInterruptDependencies,
+    interrupt_current_response,
+)
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -333,38 +337,17 @@ def _run_noise_calibration():
 
 def _interrupt_current_response(reason: str, target_state: str = "LISTENING", clear_buffers: bool = True):
     """Shared UI/audio interrupt path for barge-in, stop, restart, and reset."""
-    interaction_id = getattr(pipeline_ref, "current_interaction_id", "") if pipeline_ref else ""
-    try:
-        sound_cues.stop_active_cue(reason, interaction_id=interaction_id)
-    except Exception:
-        pass
-    if pipeline_ref and hasattr(pipeline_ref, "interrupt_current_response"):
-        try:
-            pipeline_ref.interrupt_current_response(
-                reason=reason,
-                interaction_id=interaction_id,
-                target_state=target_state,
-                clear_buffers=clear_buffers,
-            )
-            return
-        except Exception as exc:
-            logger.warning(f"[INTERRUPT] Pipeline interrupt failed: {exc}")
-
-    if pipeline_ref:
-        try:
-            pipeline_ref.stop_signal.set()
-            pipeline_ref.stop_tts()
-            pipeline_ref.is_speaking = False
-        except Exception:
-            pass
-    if audio_ref:
-        try:
-            audio_ref.force_release_audio(reason, interaction_id=interaction_id)
-            audio_ref.stop_playback()
-            if clear_buffers:
-                audio_ref.clear_buffers()
-        except Exception:
-            pass
+    interrupt_current_response(
+        FrontendInterruptDependencies(
+            get_pipeline=lambda: pipeline_ref,
+            get_audio=lambda: audio_ref,
+            stop_active_cue=sound_cues.stop_active_cue,
+            logger=logger,
+        ),
+        reason,
+        target_state=target_state,
+        clear_buffers=clear_buffers,
+    )
 
 
 def _hard_reset_pipeline(reason: str) -> dict:
