@@ -86,6 +86,10 @@ from core.pipeline_request_classifier import (
 from core.pipeline_settings import load_pipeline_settings
 from core.pipeline_transcription import TranscriptionDependencies, transcribe_audio
 from core.pipeline_warmup import WarmupDependencies, initialize_pipeline_runtime
+from core.pipeline_interaction_runtime import (
+    InteractionDependencies,
+    process_interaction_audio,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -2292,68 +2296,46 @@ class ArgoPipeline:
                 return
 
         try:
-            # Reset any prior barge-in state
             self.stop_signal.clear()
             self.timeline_events = []
             if not interaction_id:
                 interaction_id = str(uuid.uuid4())
             self.current_interaction_id = interaction_id
-            self.logger.info(f"--- Starting Interaction ({len(audio_data)} samples) ---")
-            self._record_timeline("INTERACTION_START", stage="pipeline", interaction_id=interaction_id)
-            self.transition_state("TRANSCRIBING", interaction_id=interaction_id, source="audio")
-            
-            # Print to stdout just in case logger fails
-            print(f"DEBUG: Processing audio... {audio_data.shape}")
-
-            try:
-                self.audio.acquire_audio("STT", interaction_id=interaction_id)
-            except Exception as e:
-                self.logger.error(f"[STT] Audio ownership error: {e}")
-                self._record_timeline("STT_AUDIO_CONTESTED", stage="audio", interaction_id=interaction_id)
-                return
-
-            try:
-                user_text = self.transcribe(audio_data, interaction_id=interaction_id)
-            finally:
-                self.audio.release_audio("STT", interaction_id=interaction_id)
-            confidence_hint = 1.0
-            stt_result = self._last_stt_metrics
-            if stt_result and "confidence" in stt_result:
-                confidence_hint = stt_result["confidence"]
-            self._current_stt_confidence = confidence_hint
-
-            if not user_text:
-                self.logger.warning("No speech recognized.")
-                self.broadcast("log", "User: [No speech recognized]")
-                # Silently return to listening — speaking "I didn't catch that" causes
-                # more echo on the Brio mic, creating a feedback loop.
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete (no speech) ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            user_text = normalize_system_text(user_text)
-            user_text = self._normalize_music_command_text(user_text)
-            if self._is_low_confidence_stt_prompt_echo(user_text, confidence_hint):
-                self.logger.warning(
-                    "[STT] Ignoring low-confidence prompt echo: %r (confidence=%.2f)",
-                    user_text, confidence_hint,
-                )
-                self._record_timeline("STT_PROMPT_ECHO_IGNORED", stage="stt", interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            self.broadcast("log", f"User: {user_text}")
-            self._conversation_buffer.add("User", user_text)
-            self._broadcast_turn_info()
-            self._append_convo_ledger("user", user_text)
-
-            self.handle_user_text(
-                user_text=user_text,
-                confidence_hint=confidence_hint,
+            process_interaction_audio(
+                InteractionDependencies(
+                    logger=self.logger,
+                    acquire_audio=self.audio.acquire_audio,
+                    release_audio=self.audio.release_audio,
+                    transcribe=self.transcribe,
+                    read_stt_metrics=lambda: self._last_stt_metrics,
+                    set_stt_confidence=lambda confidence: setattr(
+                        self, "_current_stt_confidence", confidence
+                    ),
+                    normalize_text=normalize_system_text,
+                    normalize_music_text=lambda text: (
+                        self._normalize_music_command_text(text)
+                    ),
+                    is_prompt_echo=lambda text, confidence: (
+                        self._is_low_confidence_stt_prompt_echo(text, confidence)
+                    ),
+                    record_timeline=self._record_timeline,
+                    transition_state=self.transition_state,
+                    broadcast=self.broadcast,
+                    add_conversation_turn=lambda role, text: (
+                        self._conversation_buffer.add(role, text)
+                    ),
+                    broadcast_turn_info=lambda: self._broadcast_turn_info(),
+                    append_conversation_ledger=lambda role, text: (
+                        self._append_convo_ledger(role, text)
+                    ),
+                    handle_user_text=lambda **kwargs: self.handle_user_text(
+                        **kwargs
+                    ),
+                ),
+                audio_data,
                 interaction_id=interaction_id,
                 replay_mode=replay_mode,
                 overrides=overrides,
-                audio_data=audio_data,
             )
             return
 
