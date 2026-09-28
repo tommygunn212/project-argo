@@ -11,8 +11,8 @@ Complete navigation for ARGO system documentation. The current implementation ch
 ### Critical Foundation
 
 1. **[← Root README.md](../README.md)** — Project overview, what ARGO does, how to run
-2. **[← Foundation Lock](../FOUNDATION_LOCK.md)** — What must NEVER be broken (critical reading)
-3. **[← Release Notes](../RELEASE_NOTES.md)** — Why v1.0.0-voice-core matters, guarantees
+2. **[← Foundation Lock](../archive/FOUNDATION_LOCK.md)** — What must NEVER be broken (critical reading)
+3. **[← Release Notes](../archive/RELEASE_NOTES.md)** — Why v1.0.0-voice-core matters, guarantees
 4. **[← Getting Started](../GETTING_STARTED.md)** — Installation and first run
 5. **[PostgreSQL Memory Backend](POSTGRES_MEMORY_BACKEND.md)** — Optional v1.8.0 Postgres backend and migration guide
 6. **[LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md)** — v1.9.0 smooth voice, mobile access, speaker-ID readiness
@@ -25,9 +25,9 @@ Complete navigation for ARGO system documentation. The current implementation ch
 ### For Developers Modifying Code
 
 Read these BEFORE making any changes:
-1. [Foundation Lock](../FOUNDATION_LOCK.md) — Non-negotiable constraints
-2. [Phase 7B: State Machine](../PHASE_7B_COMPLETE.md) — Core control flow
-3. [Phase 7B-2: STOP Interrupt](../PHASE_7B-2_COMPLETE.md) — Latency guarantees
+1. [Foundation Lock](../archive/FOUNDATION_LOCK.md) — Non-negotiable constraints
+2. [Phase 7B: State Machine](../archive/PHASE_7B_COMPLETE.md) — Core control flow
+3. [Phase 7B-2: STOP Interrupt](../archive/PHASE_7B-2_COMPLETE.md) — Latency guarantees
 4. [PR Guidelines](#making-changes-pr-guidelines) (at bottom of this page)
 
 ---
@@ -36,7 +36,7 @@ Read these BEFORE making any changes:
 
 ### Phase 7B: State Machine (COMPLETE)
 
-**[← Phase 7B: State Machine](../PHASE_7B_COMPLETE.md)** — Core control flow
+**[← Phase 7B: State Machine](../archive/PHASE_7B_COMPLETE.md)** — Core control flow
 
 SLEEP/LISTENING/THINKING/SPEAKING with deterministic transitions.
 - SLEEP: Voice disabled, no ambient listening
@@ -46,7 +46,7 @@ SLEEP/LISTENING/THINKING/SPEAKING with deterministic transitions.
 
 ### Phase 7B-2: Integration & Hard STOP (COMPLETE)
 
-**[← Phase 7B-2: Integration & STOP](../PHASE_7B-2_COMPLETE.md)** — STOP interrupt architecture
+**[← Phase 7B-2: Integration & STOP](../archive/PHASE_7B-2_COMPLETE.md)** — STOP interrupt architecture
 
 STOP dominance guaranteed:
 - <50ms latency even during streaming
@@ -58,7 +58,7 @@ STOP dominance guaranteed:
 
 ### Phase 7B-3: Command Parsing (COMPLETE)
 
-**[← Phase 7B-3: Command Parsing](../PHASE_7B-3_COMPLETE.md)** — Safety gates and priority rules
+**[← Phase 7B-3: Command Parsing](../archive/PHASE_7B-3_COMPLETE.md)** — Safety gates and priority rules
 
 ---
 
@@ -109,7 +109,7 @@ See: [Advanced Music Search](ADVANCED_MUSIC_SEARCH.md)
 
 ### Phase 7A-2: Audio Streaming (COMPLETE)
 
-**[← Phase 7A-2: Audio Streaming](../PHASE_7A2_STREAMING_COMPLETE.md)** — Piper TTS optimization
+**[← Phase 7A-2: Audio Streaming](../archive/PHASE_7A2_STREAMING_COMPLETE.md)** — Piper TTS optimization
 
 Time-to-first-audio reduced from 20-180s to 500-900ms:
 - Incremental frame reading from Piper
@@ -121,7 +121,7 @@ Time-to-first-audio reduced from 20-180s to 500-900ms:
 
 ### Voice Mode: Stateless Execution (COMPLETE)
 
-**[← Option B: Confidence Burn-In](../OPTION_B_BURNIN_REPORT.md)** — Validation results
+**[← Option B: Confidence Burn-In](../archive/OPTION_B_BURNIN_REPORT.md)** — Validation results
 
 14/14 tests passed, 0 anomalies, 95% confidence:
 - Tier 1 (Fundamental): 5/5 passed
@@ -143,7 +143,7 @@ Time-to-first-audio reduced from 20-180s to 500-900ms:
 
 **IMPORTANT: Phase 7A-3a is design-only. Implementation pending approval.**
 
-**[← Phase 7A-3: Wake-Word Design](../PHASE_7A3_WAKEWORD_DESIGN.md)** — 11-section architecture
+**[← Phase 7A-3: Wake-Word Design](../archive/PHASE_7A3_WAKEWORD_DESIGN.md)** — 11-section architecture
 
 Comprehensive design covering:
 - Activation model (LISTENING active, SLEEP/THINKING/SPEAKING inactive)
@@ -157,7 +157,7 @@ Comprehensive design covering:
 - Failure modes (all documented)
 - Validation checklist (pre-implementation criteria)
 
-**[← Wake-Word Decision Matrix](../WAKEWORD_DECISION_MATRIX.md)** — 15-table reference
+**[← Wake-Word Decision Matrix](../archive/WAKEWORD_DECISION_MATRIX.md)** — 15-table reference
 
 Comprehensive trigger-outcome matrices:
 - Master matrix (state × input combinations)
@@ -171,7 +171,7 @@ Comprehensive trigger-outcome matrices:
 - Test matrix (for future validation phase)
 - Sign-off matrix (acceptance criteria)
 
-**[← Go/No-Go Checklist](../PHASE_7A3_GONO_CHECKLIST.md)** — 14 acceptance criteria
+**[← Go/No-Go Checklist](../archive/PHASE_7A3_GONO_CHECKLIST.md)** — 14 acceptance criteria
 
 14 acceptance criteria + 6 auto-fail conditions:
 - Architecture fully specified (no vague language)
@@ -199,7 +199,7 @@ Comprehensive trigger-outcome matrices:
 
 **[← Artifact Chain Architecture](architecture/artifact-chain.md)** — Three-layer artifact system (Transcription, Intent, Planning)
 
-**[← Frozen Layers](../FROZEN_LAYERS.md)** — Official freeze of v1.0.0-v1.3.0 safety chain
+**[← Frozen Layers](../archive/FROZEN_LAYERS.md)** — Official freeze of v1.0.0-v1.3.0 safety chain
 
 ### Feature Planning
 
@@ -339,15 +339,15 @@ Must include:
 
 ## Quick Navigation
 
-**First time reading?** Start with [Root README.md](../README.md) → [Foundation Lock](../FOUNDATION_LOCK.md) → [Getting Started](../GETTING_STARTED.md)
+**First time reading?** Start with [Root README.md](../README.md) → [Foundation Lock](../archive/FOUNDATION_LOCK.md) → [Getting Started](../GETTING_STARTED.md)
 
-**Want architecture details?** [Phase 7B State Machine](../PHASE_7B_COMPLETE.md) → [Phase 7B-2 STOP](../PHASE_7B-2_COMPLETE.md) → [Phase 7B-3 Parsing](../PHASE_7B-3_COMPLETE.md)
+**Want architecture details?** [Phase 7B State Machine](../archive/PHASE_7B_COMPLETE.md) → [Phase 7B-2 STOP](../archive/PHASE_7B-2_COMPLETE.md) → [Phase 7B-3 Parsing](../archive/PHASE_7B-3_COMPLETE.md)
 
-**Curious about voice?** [LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md) → [Hedra / LiveKit Avatar Notes](HEDRA_AVATAR.md) → [Voice Mode Design](../PHASE_7B_COMPLETE.md)
+**Curious about voice?** [LiveKit Realtime Voice](LIVEKIT_REALTIME_VOICE.md) → [Hedra / LiveKit Avatar Notes](HEDRA_AVATAR.md) → [Voice Mode Design](../archive/PHASE_7B_COMPLETE.md)
 
 **Need complete scope?** [Master Feature List](specs/master-feature-list.md)
 
-**Implementing a feature?** Check the feature list, read [Foundation Lock](../FOUNDATION_LOCK.md), then follow [PR Guidelines](#making-changes-pr-guidelines)
+**Implementing a feature?** Check the feature list, read [Foundation Lock](../archive/FOUNDATION_LOCK.md), then follow [PR Guidelines](#making-changes-pr-guidelines)
 
 **Debugging?** Check logs and review relevant architecture doc
 
