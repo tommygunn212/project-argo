@@ -125,6 +125,11 @@ from core.pipeline_runtime_state import (
     PipelineRuntimeStateDependencies,
     PipelineRuntimeStateService,
 )
+from core.pipeline_runtime_tuning import (
+    PipelineRuntimeTuning,
+    clamped_runtime_float,
+    resolve_runtime_tuning,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -695,50 +700,29 @@ class ArgoPipeline:
         return False
 
     def _runtime_float(self, key: str, default: float, minimum: float, maximum: float) -> float:
-        try:
-            value = float(self.runtime_overrides.get(key, default))
-        except (TypeError, ValueError):
-            value = default
-        return max(minimum, min(maximum, value))
+        return clamped_runtime_float(
+            self.runtime_overrides, key, default, minimum, maximum
+        )
 
     def apply_runtime_tuning(self) -> None:
         """Apply live UI behavior-tuning overrides to pipeline thresholds."""
-        self._stt_min_rms_threshold = self._runtime_float(
-            "stt_min_rms_threshold",
-            self._stt_min_rms_threshold,
-            0.0,
-            0.2,
+        tuning = resolve_runtime_tuning(
+            self.runtime_overrides,
+            PipelineRuntimeTuning(
+                stt_min_rms_threshold=self._stt_min_rms_threshold,
+                stt_silence_ratio_threshold=self._stt_silence_ratio_threshold,
+                stt_min_duration_seconds=self._stt_min_duration_s,
+                vad_silence_pad_ms=self._vad_silence_pad_ms,
+                tts_min_confidence=self._tts_min_confidence,
+                personal_mode_min_confidence=self._personal_mode_min_confidence,
+            ),
         )
-        self._stt_silence_ratio_threshold = self._runtime_float(
-            "stt_silence_ratio_threshold",
-            self._stt_silence_ratio_threshold,
-            0.0,
-            1.0,
-        )
-        self._stt_min_duration_s = self._runtime_float(
-            "stt_min_duration_s",
-            self._stt_min_duration_s,
-            0.05,
-            5.0,
-        )
-        self._vad_silence_pad_ms = int(self._runtime_float(
-            "vad_silence_pad_ms",
-            float(self._vad_silence_pad_ms),
-            0.0,
-            3000.0,
-        ))
-        self._tts_min_confidence = self._runtime_float(
-            "tts_min_confidence",
-            self._tts_min_confidence,
-            0.0,
-            1.0,
-        )
-        self._personal_mode_min_confidence = self._runtime_float(
-            "personal_mode_min_confidence",
-            self._personal_mode_min_confidence,
-            0.0,
-            1.0,
-        )
+        self._stt_min_rms_threshold = tuning.stt_min_rms_threshold
+        self._stt_silence_ratio_threshold = tuning.stt_silence_ratio_threshold
+        self._stt_min_duration_s = tuning.stt_min_duration_seconds
+        self._vad_silence_pad_ms = tuning.vad_silence_pad_ms
+        self._tts_min_confidence = tuning.tts_min_confidence
+        self._personal_mode_min_confidence = tuning.personal_mode_min_confidence
 
     def _broadcast_turn_info(self) -> None:
         """Broadcast current turn count to frontend."""
