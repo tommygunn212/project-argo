@@ -55,6 +55,10 @@ from core.coordinator_speech_start import (
     wait_for_speech_start,
 )
 from core.coordinator_vad import SpeechGateDependencies, get_speech_gate
+from core.coordinator_state_transition import (
+    CoordinatorTransitionDependencies,
+    run_safe_transition,
+)
 from core.coordinator_trigger_contract import assert_trigger_state
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
@@ -475,29 +479,21 @@ class Coordinator:
                 self.logger.debug(f"[Coordinator] on_status_update error: {e}")
 
     def _safe_transition(self, action, next_state: State, source: str, interaction_id: str = "") -> bool:
-        prev_state = self.state_machine.current_state
-        try:
-            return action()
-        except RuntimeError:
-            payload = {
-                "from": prev_state.value,
-                "to": next_state.value,
-                "allowed": list(self.ALLOWED_TRANSITIONS.get(prev_state.value, set())),
-                "source": source,
-                "interaction_id": interaction_id,
-            }
-            log_event(
-                f"ILLEGAL_TRANSITION {prev_state.value}->{next_state.value} source={source}",
-                stage="state",
-                interaction_id=interaction_id,
-            )
-            if self.on_illegal_transition:
-                try:
-                    self.on_illegal_transition(payload)
-                except Exception:
-                    pass
-            self.stop_requested = True
-            return False
+        return run_safe_transition(
+            CoordinatorTransitionDependencies(
+                current_state=lambda: self.state_machine.current_state,
+                allowed_transitions=lambda state: self.ALLOWED_TRANSITIONS.get(
+                    state, set()
+                ),
+                get_illegal_transition_callback=lambda: self.on_illegal_transition,
+                request_stop=lambda: setattr(self, "stop_requested", True),
+                event_logger=log_event,
+            ),
+            action,
+            next_state,
+            source,
+            interaction_id,
+        )
 
     def _assert_trigger_state(self, state: State) -> None:
         """
