@@ -80,11 +80,7 @@ from tools.home_assistant import execute_smart_home_command
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryService
 from core.memory_command_service import MemoryCommandService
-from core.pipeline_domain_dispatch import dispatch_domain_intent
-from core.pipeline_platform_dispatch import dispatch_early_status, dispatch_platform_intent
-from core.pipeline_music_volume import dispatch_music_volume
-from core.pipeline_music_dispatch import dispatch_music_intent
-from core.pipeline_system_info import dispatch_system_info
+from core.pipeline_platform_dispatch import dispatch_early_status
 from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
@@ -93,9 +89,6 @@ from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningService
 from core.pipeline_writing_responses import PipelineWritingResponseService
-from core.pipeline_restricted_fallback import block_restricted_llm_fallback
-from core.pipeline_special_dispatch import dispatch_special_intent
-from core.pipeline_llm_stage import run_llm_stage
 from core.pipeline_conversation_gates import dispatch_conversation_gate
 from core.pipeline_confidence_gate import apply_confidence_gate
 from core.pipeline_canonical_stage import run_canonical_stage
@@ -103,6 +96,7 @@ from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
 from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
 from core.knowledge_answer_guard import enforce_knowledge_answer
+from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -3527,73 +3521,22 @@ class ArgoPipeline:
         request_kind = intent_result.request_kind
         safe_utterance = intent_result.safe_utterance
         low_confidence_audio = intent_result.low_confidence_audio
-        if dispatch_music_volume(
+        dispatch_prepared_intent(
             self,
-            user_text,
-            request_kind,
-            low_confidence_audio,
-            interaction_id,
-            replay_mode,
-            overrides,
-        ):
-            return
-        if dispatch_music_intent(
-            self,
-            intent,
-            user_text,
-            request_kind,
-            low_confidence_audio,
-            stt_conf,
-            interaction_id,
-            replay_mode,
-            overrides,
-        ):
-            return
-        if dispatch_platform_intent(
-            self,
-            intent,
-            user_text,
-            stt_conf,
-            interaction_id,
-            replay_mode,
-            overrides,
-        ):
-            return
-
-        if dispatch_special_intent(
-            self, intent, user_text, interaction_id, replay_mode, overrides
-        ):
-            return
-        if dispatch_domain_intent(
-            self, intent, user_text, interaction_id, replay_mode, overrides
-        ):
-            return
-
-        if dispatch_system_info(
-            self, intent, interaction_id, replay_mode, overrides
-        ):
-            return
-        if block_restricted_llm_fallback(
-            self,
-            intent,
-            user_text,
-            safe_utterance,
-            interaction_id,
-            replay_mode,
-            overrides,
-        ):
-            return
-        run_llm_stage(
-            self,
-            intent,
-            user_text,
-            request_kind,
-            interaction_id,
-            replay_mode,
-            overrides,
-            audio_data,
+            PreparedDispatch(
+                intent=intent,
+                user_text=user_text,
+                request_kind=request_kind,
+                safe_utterance=safe_utterance,
+                low_confidence_audio=low_confidence_audio,
+                stt_confidence=stt_conf,
+                interaction_id=interaction_id,
+                replay_mode=replay_mode,
+                overrides=overrides,
+                audio_data=audio_data,
+            ),
         )
-        return
+
     def _save_replay(self, interaction_id: str, audio_data, user_text: str, ai_text: str):
         try:
             replay_dir = Path("runtime") / "replays"
