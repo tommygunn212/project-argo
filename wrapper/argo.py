@@ -84,7 +84,6 @@ import queue
 from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
-import requests
 from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
@@ -98,7 +97,6 @@ from wrapper.conversation_history import (
     get_confidence_instruction,
     get_last_n_entries,
     get_session_entries,
-    validate_voice_compliance,
 )
 from wrapper.behavior_policy import (
     FAMILIARITY_STATE,
@@ -131,6 +129,7 @@ from wrapper.preflight import (
     dispatch_self_knowledge,
     neural_terminology_sink,
 )
+from wrapper.ollama_generation import generate_ollama_response
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -1644,107 +1643,12 @@ def _run_argo_internal(
     full_prompt = "\n\n".join(prompt_parts).encode("utf-8")
 
     # ________________________________________________________________________
+    # ________________________________________________________________________
     # Step 3: Call Ollama (with streaming output)
     # ________________________________________________________________________
-    
-    # Set up environment
-    env = os.environ.copy()
-    env["OLLAMA_NO_INTERACTIVE"] = "1"
 
-    # Validate Ollama connection before proceeding
-    url = "http://localhost:11434/api/generate"
-    try:
-        # Quick connectivity check
-        response = requests.head("http://localhost:11434/api/tags", timeout=2)
-        response.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print("Error: Ollama server is not running.", file=sys.stderr)
-        print("Start Ollama with: ollama serve", file=sys.stderr)
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print("Error: Ollama server is not responding.", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error connecting to Ollama: {e}", file=sys.stderr)
-        sys.exit(1)
+    output = generate_ollama_response(full_prompt)
 
-    # Validate model existence
-    try:
-        tags_response = requests.get("http://localhost:11434/api/tags", timeout=2)
-        tags_response.raise_for_status()
-        models = tags_response.json().get("models", [])
-        model_names = [m.get("name") for m in models]
-        
-        # Check if 'argo' or 'argo:latest' exists
-        argo_exists = any(name.startswith("argo") for name in model_names)
-        
-        if not argo_exists:
-            print("Error: Model 'argo' not found.", file=sys.stderr)
-            print(f"Available models: {', '.join(model_names) if model_names else 'none'}", file=sys.stderr)
-            sys.exit(1)
-    except Exception as e:
-        print(f"Error validating model: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Make the actual generation request
-    payload = {
-        "model": "argo",
-        "prompt": full_prompt.decode("utf-8"),
-        "stream": True
-    }
-
-    response = requests.post(url, json=payload, stream=True)
-    response.raise_for_status()
-
-    output_lines = []
-    MAX_CHARACTERS = 3000
-    char_printed = 0
-    output_cutoff = False
-    cutoff_printed = False
-    
-    # Token buffer to reduce syscalls
-    token_buffer = []
-    BUFFER_SIZE = 10
-
-    for line in response.iter_lines(decode_unicode=True):
-        if line:
-            try:
-                data = json.loads(line)
-                token = data.get("response", "")
-                output_lines.append(token)
-
-                if not output_cutoff:
-                    chars_this_line = len(token)
-                    if char_printed + chars_this_line > MAX_CHARACTERS:
-                        # Flush any pending tokens before cutoff message
-                        if token_buffer:
-                            print("".join(token_buffer), end="", flush=True)
-                            token_buffer.clear()
-                        
-                        output_cutoff = True
-                        cutoff_msg = "\n— Output paused to keep things readable. Say \"continue\" to go deeper."
-                        print(cutoff_msg, flush=True)
-                    else:
-                        char_printed += chars_this_line
-                        token_buffer.append(token)
-                        
-                        # Flush buffer when it reaches size threshold
-                        if len(token_buffer) >= BUFFER_SIZE:
-                            print("".join(token_buffer), end="", flush=True)
-                            token_buffer.clear()
-            except json.JSONDecodeError:
-                continue
-    
-    # Final flush of any remaining buffered tokens
-    if token_buffer:
-        print("".join(token_buffer), flush=True)
-    
-    # Reconstruct full output for logging (preserves everything, even if truncated in terminal)
-    output = "".join(output_lines).strip()
-    
-    # VOICE COMPLIANCE: Enforce example constraints (brevity, tone, no hedge)
-    output = validate_voice_compliance(output)
-    
     # Send response to audio output (if VOICE_ENABLED and PIPER_ENABLED)
     # This call blocks until audio playback completes
     _send_to_output_sink(output)
