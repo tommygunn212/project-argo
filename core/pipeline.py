@@ -122,7 +122,7 @@ from system_profile import get_system_profile, get_gpu_profile
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryMixin
 from core.pipeline_domain_dispatch import dispatch_domain_intent
-from core.pipeline_platform_dispatch import dispatch_platform_intent
+from core.pipeline_platform_dispatch import dispatch_early_status, dispatch_platform_intent
 from core.pipeline_music_volume import dispatch_music_volume
 from core.pipeline_music_dispatch import dispatch_music_intent
 from core.pipeline_system_info import dispatch_system_info
@@ -4743,28 +4743,10 @@ class ArgoPipeline(PipelineMemoryMixin):
             early_intent = self._intent_parser.parse(user_text)
         except Exception:
             early_intent = None
-        if early_intent and early_intent.intent_type == IntentType.SYSTEM_STATUS:
-            self.logger.info("[INTENT] intent=SYSTEM_STATUS request_kind=<ignored>")
-            if self._respond_with_system_health(user_text, early_intent, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.BLUETOOTH_STATUS:
-            if self._respond_with_bluetooth_status(user_text, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.AUDIO_ROUTING_STATUS:
-            if self._respond_with_audio_routing_status(user_text, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.APP_STATUS:
-            if self._respond_with_app_status(user_text, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.TIME_STATUS:
-            if self._respond_with_time_status(early_intent, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.WORLD_TIME:
-            if self._respond_with_world_time(early_intent, interaction_id, replay_mode, overrides):
-                return
-        if early_intent and early_intent.intent_type == IntentType.VOLUME_STATUS:
-            if self._respond_with_system_volume_status(interaction_id, replay_mode, overrides):
-                return
+        if dispatch_early_status(
+            self, early_intent, user_text, interaction_id, replay_mode, overrides
+        ):
+            return
         self.logger.info(
             "[STT] text_received conf_hint=%.2f strict_lab_mode=%s",
             stt_conf,

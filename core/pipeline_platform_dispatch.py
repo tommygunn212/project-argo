@@ -52,6 +52,15 @@ _PLATFORM_HANDLERS = {
     IntentType.WORLD_TIME: ("_respond_with_world_time", _Arguments.INTENT),
 }
 
+_EARLY_STATUS_INTENTS = {
+    IntentType.BLUETOOTH_STATUS,
+    IntentType.AUDIO_ROUTING_STATUS,
+    IntentType.APP_STATUS,
+    IntentType.VOLUME_STATUS,
+    IntentType.TIME_STATUS,
+    IntentType.WORLD_TIME,
+}
+
 
 def dispatch_platform_intent(
     pipeline: Any,
@@ -82,3 +91,34 @@ def dispatch_platform_intent(
     else:
         arguments = trailing
     return bool(handler(*arguments))
+
+
+def dispatch_early_status(
+    pipeline: Any,
+    intent: Any,
+    user_text: str,
+    interaction_id: str,
+    replay_mode: bool,
+    overrides: dict[str, Any] | None,
+) -> bool:
+    """Handle status intents before confidence and conversational gating."""
+    if intent is None:
+        return False
+    if intent.intent_type == IntentType.SYSTEM_STATUS:
+        pipeline.logger.info("[INTENT] intent=SYSTEM_STATUS request_kind=<ignored>")
+        return bool(
+            pipeline._respond_with_system_health(
+                user_text, intent, interaction_id, replay_mode, overrides
+            )
+        )
+    if intent.intent_type not in _EARLY_STATUS_INTENTS:
+        return False
+    return dispatch_platform_intent(
+        pipeline,
+        intent,
+        user_text,
+        1.0,
+        interaction_id,
+        replay_mode,
+        overrides,
+    )
