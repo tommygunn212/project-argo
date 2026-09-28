@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from core.bluetooth import (
     connect_device,
@@ -13,20 +14,17 @@ from core.bluetooth import (
 )
 
 
-class BluetoothHost(Protocol):
+@dataclass(frozen=True)
+class BluetoothDependencies:
     logger: Any
-    _personal_mode_min_confidence: float
-
-    def _deliver_canonical_response(self, *args, **kwargs) -> bool: ...
-
-    def _evaluate_gates(
-        self, capability_key: str, module_key: str, interaction_id: str
-    ) -> tuple[bool, str]: ...
+    minimum_confidence: Callable[[], float]
+    deliver_response: Callable[..., bool]
+    evaluate_gates: Callable[[str, str, str], tuple[bool, str]]
 
 
 class PipelineBluetoothService:
-    def __init__(self, host: BluetoothHost) -> None:
-        self._host = host
+    def __init__(self, dependencies: BluetoothDependencies) -> None:
+        self._dependencies = dependencies
 
     @staticmethod
     def format_status(status: dict) -> str:
@@ -77,16 +75,16 @@ class PipelineBluetoothService:
     def respond_status(
         self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None
     ) -> bool:
-        host = self._host
+        dependencies = self._dependencies
         if self.is_control_text(user_text):
-            host.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth status attempted control")
+            dependencies.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth status attempted control")
             message = "Bluetooth status cannot change device state. Say a control command explicitly."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
-        host.logger.info("[BLUETOOTH] mode=STATUS")
-        return host._deliver_canonical_response(
+        dependencies.logger.info("[BLUETOOTH] mode=STATUS")
+        return dependencies.deliver_response(
             self.format_status(get_bluetooth_status()),
             interaction_id,
             replay_mode,
@@ -105,35 +103,35 @@ class PipelineBluetoothService:
         replay_mode: bool,
         overrides: dict | None,
     ) -> bool:
-        host = self._host
+        dependencies = self._dependencies
         if self.is_status_text(user_text) and not self.is_control_text(user_text):
-            host.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth control attempted status-only response")
+            dependencies.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth control attempted status-only response")
             message = "Bluetooth control requires an explicit command."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
         if not self.is_control_text(user_text):
             message = "Bluetooth control requires an explicit command."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
-        if stt_conf < host._personal_mode_min_confidence:
+        if stt_conf < dependencies.minimum_confidence():
             message = "Bluetooth command unclear. Please repeat."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
         action = getattr(intent, "action", None)
         target = getattr(intent, "target", None)
-        host.logger.info(f"[BLUETOOTH] mode=CONTROL action={action} target={target}")
-        allowed, reason = host._evaluate_gates(
+        dependencies.logger.info(f"[BLUETOOTH] mode=CONTROL action={action} target={target}")
+        allowed, reason = dependencies.evaluate_gates(
             "bluetooth_control", "bluetooth", interaction_id
         )
         if not allowed:
             message = f"Bluetooth control blocked by policy ({reason})."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
@@ -149,7 +147,7 @@ class PipelineBluetoothService:
             _ok, message = pair_device(target)
         else:
             _ok, message = False, "Bluetooth control requires an explicit command."
-        return host._deliver_canonical_response(
+        return dependencies.deliver_response(
             message, interaction_id, replay_mode, overrides,
             enforce_confidence=False, force_tts=True,
         )

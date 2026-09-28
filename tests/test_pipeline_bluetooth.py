@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import core.pipeline_bluetooth as bluetooth_module
-from core.pipeline_bluetooth import PipelineBluetoothService
+from core.pipeline_bluetooth import BluetoothDependencies, PipelineBluetoothService
 
 
 class Host:
@@ -17,6 +17,17 @@ class Host:
 
     def _evaluate_gates(self, *args):
         return self.gate
+
+
+def service_for(host):
+    return PipelineBluetoothService(
+        BluetoothDependencies(
+            logger=host.logger,
+            minimum_confidence=lambda: host._personal_mode_min_confidence,
+            deliver_response=host._deliver_canonical_response,
+            evaluate_gates=host._evaluate_gates,
+        )
+    )
 
 
 def test_status_format_preserves_device_details():
@@ -38,7 +49,7 @@ def test_status_format_preserves_device_details():
 
 def test_status_path_never_executes_a_control_command(monkeypatch):
     host = Host()
-    service = PipelineBluetoothService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         bluetooth_module,
         "get_bluetooth_status",
@@ -52,7 +63,7 @@ def test_status_path_never_executes_a_control_command(monkeypatch):
 def test_control_path_checks_gate_before_device_mutation(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineBluetoothService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         bluetooth_module,
         "set_bluetooth_enabled",
@@ -72,7 +83,7 @@ def test_control_path_checks_gate_before_device_mutation(monkeypatch):
 
 def test_control_path_executes_explicit_allowed_action(monkeypatch):
     host = Host()
-    service = PipelineBluetoothService(host)
+    service = service_for(host)
     calls = []
     monkeypatch.setattr(
         bluetooth_module,
