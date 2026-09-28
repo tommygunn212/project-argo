@@ -115,6 +115,7 @@ from core.pipeline_music_text import (
     normalize_music_command_text,
     strip_music_politeness,
 )
+from core.pipeline_audio_policy import AudioRejectionThresholds, should_reject_audio
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -945,18 +946,16 @@ class ArgoPipeline:
 
     def _should_reject_audio(self, rms: float, silence_ratio: float, duration_s: float) -> tuple[bool, str]:
         """Return True if audio should be rejected as silence/noise."""
-        # Personal mode: accept more aggressively (cloud STT handles noise well)
-        if self.runtime_overrides.get("personal_mode", False):
-            if duration_s >= 0.2 and rms >= 0.002:
-                return False, ""
-        meets_duration_floor = duration_s >= self._stt_min_duration_s
-        if meets_duration_floor or rms >= self._stt_min_rms_threshold:
-            return False, ""
-        if silence_ratio < self._stt_silence_ratio_threshold:
-            return False, ""
-        return True, (
-            f"VAD discard: rms={rms:.4f}, duration_ms={duration_s * 1000:.0f}, "
-            f"silence_ratio={silence_ratio:.2f}"
+        return should_reject_audio(
+            rms,
+            silence_ratio,
+            duration_s,
+            thresholds=AudioRejectionThresholds(
+                min_duration_s=self._stt_min_duration_s,
+                min_rms=self._stt_min_rms_threshold,
+                max_silence_ratio=self._stt_silence_ratio_threshold,
+            ),
+            personal_mode=self.runtime_overrides.get("personal_mode", False),
         )
 
 
