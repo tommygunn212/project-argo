@@ -46,19 +46,6 @@ from core.intent_system_rules import (
 )
 
 # ============================================================================
-# 2) KEYWORD BANKS (MUSIC)
-# ============================================================================
-GENERIC_PLAY_PHRASES = {
-    "play",
-    "play music",
-    "play some music",
-    "play a song",
-    "play some songs",
-    "play something",
-    "surprise me",
-}
-
-# ============================================================================
 # 3) KEYWORD BANKS (SYSTEM)
 # ============================================================================
 FULL_SYSTEM_PHRASES = [
@@ -913,75 +900,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
                 serious_mode=serious_mode,
             )
 
-        # Rule 1: MUSIC_STOP keywords (highest priority - short-circuit)
-        # "stop", "stop music", "pause"
-        if any(keyword == text_lower or text_lower.startswith(keyword + " ") for keyword in self.music_stop_keywords):
-            return Intent(
-                intent_type=IntentType.MUSIC_STOP,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 2: MUSIC_NEXT keywords (highest priority - short-circuit)
-        # "next", "skip", "skip track"
-        if any(keyword == text_lower or text_lower.startswith(keyword + " ") for keyword in self.music_next_keywords):
-            return Intent(
-                intent_type=IntentType.MUSIC_NEXT,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 3: MUSIC_STATUS keywords (high priority - read-only status query)
-        # "what's playing", "what is playing", "what song is this", "what am i listening to"
-        if any(keyword == text_lower or keyword in text_lower for keyword in self.music_status_keywords):
-            return Intent(
-                intent_type=IntentType.MUSIC_STATUS,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        normalized_phrase = " ".join(re.findall(r"[a-z0-9']+", text_lower)).strip()
-
-        # Rule 4: Music intent (disambiguated)
-        # Only trigger if music-specific terms are present (play/music/song) and no tech keywords
-        music_terms = {"music", "song", "artist", "album"}
-        has_play = "play" in text_lower
-        has_music_term = any(term in text_lower for term in music_terms)
-        has_genre_play = any(f"play {genre}" in text_lower for genre in self.music_genres)
-        is_generic_play_phrase = normalized_phrase in GENERIC_PLAY_PHRASES
-        if (has_play or has_music_term or is_generic_play_phrase) and not any(keyword in text_lower for keyword in self.tech_keywords):
-            artist, title, modifiers = self._extract_music_components(text_original, text_lower)
-            keyword = title or artist or self._extract_music_keyword(text_lower)
-            if keyword:
-                keyword = keyword.lower()
-            is_generic_play = False
-            if is_generic_play_phrase:
-                artist = None
-                title = None
-                keyword = None
-            if not artist and not title and not keyword:
-                is_generic_play = normalized_phrase in GENERIC_PLAY_PHRASES
-            self.logger.debug(
-                "[INTENT] artist=\"%s\" title=%s modifiers=%s",
-                artist,
-                f"\"{title}\"" if title else "None",
-                modifiers or [],
-            )
-            return Intent(
-                intent_type=IntentType.MUSIC,
-                confidence=0.95,
-                raw_text=text_original,
-                keyword=keyword,
-                artist=artist,
-                title=title,
-                modifiers=modifiers or [],
-                is_generic_play=is_generic_play,
-                serious_mode=serious_mode,
-                explicit_genre=has_genre_play,
-            )
+        music_intent = self._parse_music_intent(text_original, text_lower, serious_mode)
+        if music_intent is not None:
+            return music_intent
 
         # Rule 4.5: COUNT intent (deterministic, no LLM)
         if "count" in tokens:

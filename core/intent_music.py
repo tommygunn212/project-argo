@@ -6,6 +6,19 @@ import re
 import string
 from typing import List, Optional, Tuple
 
+from core.intent_models import Intent, IntentType
+
+
+GENERIC_PLAY_PHRASES = {
+    "play",
+    "play music",
+    "play some music",
+    "play a song",
+    "play some songs",
+    "play something",
+    "surprise me",
+}
+
 MUSIC_FILLER_WORDS = {
     "play", "me", "a", "the", "some", "good", "song", "music", "from",
     "can", "you", "please", "could", "would", "just", "something"
@@ -14,6 +27,87 @@ MUSIC_MODIFIER_WORDS = {"good", "best", "random", "favorite", "favourite"}
 
 
 class IntentMusicMixin:
+    def _parse_music_intent(
+        self,
+        text_original: str,
+        text_lower: str,
+        serious_mode: bool,
+    ) -> Optional[Intent]:
+        """Classify transport, status, and play requests in priority order."""
+        if any(
+            keyword == text_lower or text_lower.startswith(keyword + " ")
+            for keyword in self.music_stop_keywords
+        ):
+            return Intent(
+                intent_type=IntentType.MUSIC_STOP,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        if any(
+            keyword == text_lower or text_lower.startswith(keyword + " ")
+            for keyword in self.music_next_keywords
+        ):
+            return Intent(
+                intent_type=IntentType.MUSIC_NEXT,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        if any(
+            keyword == text_lower or keyword in text_lower
+            for keyword in self.music_status_keywords
+        ):
+            return Intent(
+                intent_type=IntentType.MUSIC_STATUS,
+                confidence=1.0,
+                raw_text=text_original,
+                serious_mode=serious_mode,
+            )
+
+        normalized_phrase = " ".join(re.findall(r"[a-z0-9']+", text_lower)).strip()
+        music_terms = {"music", "song", "artist", "album"}
+        has_play = "play" in text_lower
+        has_music_term = any(term in text_lower for term in music_terms)
+        has_genre_play = any(f"play {genre}" in text_lower for genre in self.music_genres)
+        is_generic_play_phrase = normalized_phrase in GENERIC_PLAY_PHRASES
+        if not (has_play or has_music_term or is_generic_play_phrase):
+            return None
+        if any(keyword in text_lower for keyword in self.tech_keywords):
+            return None
+
+        artist, title, modifiers = self._extract_music_components(text_original, text_lower)
+        keyword = title or artist or self._extract_music_keyword(text_lower)
+        if keyword:
+            keyword = keyword.lower()
+        is_generic_play = False
+        if is_generic_play_phrase:
+            artist = None
+            title = None
+            keyword = None
+        if not artist and not title and not keyword:
+            is_generic_play = normalized_phrase in GENERIC_PLAY_PHRASES
+        self.logger.debug(
+            '[INTENT] artist="%s" title=%s modifiers=%s',
+            artist,
+            f'"{title}"' if title else "None",
+            modifiers or [],
+        )
+        return Intent(
+            intent_type=IntentType.MUSIC,
+            confidence=0.95,
+            raw_text=text_original,
+            keyword=keyword,
+            artist=artist,
+            title=title,
+            modifiers=modifiers or [],
+            is_generic_play=is_generic_play,
+            serious_mode=serious_mode,
+            explicit_genre=has_genre_play,
+        )
+
     def _extract_music_components(
         self,
         text_original: str,
