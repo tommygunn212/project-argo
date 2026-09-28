@@ -273,31 +273,38 @@ def test_launch_error_becomes_persisted_failure(monkeypatch, repo):
 
 
 def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path):
-    import ast
-    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-    from urllib.parse import urlparse, parse_qs
+    import logging
+    from http.server import ThreadingHTTPServer
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError
     import os
     from unittest.mock import patch
+    from core.frontend_http import build_frontend_handler
     # The sidecar loads .env at import. Keep that intentional production behavior
     # from changing the environment of other tests in this process.
     with patch.dict(os.environ):
         import livekit_realtime_agent as realtime
-    # Compile the actual HTTP handler alone; importing main would initialize
-    # unrelated production databases/logging. No routes are reimplemented.
-    source = Path(__file__).resolve().parents[1] / "main.py"
-    tree = ast.parse(source.read_text(encoding="utf-8"))
-    handler = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "FrontendHandler")
     recovery = AssistedRecovery()
     recovery._execute_action = AsyncMock(return_value={"status": "error", "message": "Disconnected device"})
     service = RepairService(recovery, Mock(), Mock())
     recovery.propose("reinit_audio", "Input failed")
-    scope = {"SimpleHTTPRequestHandler": SimpleHTTPRequestHandler, "json": json,
-        "urlparse": urlparse, "parse_qs": parse_qs, "Path": Path,
-        "repair_bridge_token": "test-local-token", "repair_service_ref": service}
-    exec(compile(ast.Module(body=[handler], type_ignores=[]), str(source), "exec"), scope)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), scope["FrontendHandler"])
+    handler = build_frontend_handler({
+        "repo_root": Path(__file__).resolve().parents[1],
+        "http_port": 8000,
+        "ws_port": 8001,
+        "logger": logging.getLogger("test.repair_endpoint"),
+        "get_config": lambda: None,
+        "env_enabled": lambda _name: False,
+        "handle_control": lambda _command: None,
+        "hard_reset_pipeline": lambda _reason: {"ok": True},
+        "broadcast_msg": lambda *_args: None,
+        "note_smooth_voice_phase": lambda _phase: None,
+        "set_listening_enabled": lambda _enabled: None,
+        "get_current_status": lambda: "READY",
+        "get_repair_bridge_token": lambda: "test-local-token",
+        "get_repair_service": lambda: service,
+    })
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
