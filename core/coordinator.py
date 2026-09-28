@@ -93,81 +93,11 @@ log_event = log_event_impl
 # 2) COORDINATOR
 # ============================================================================
 class Coordinator:
-    """
-    End-to-end orchestration with bounded interaction loop + session memory.
-    
-    Loop behavior (v4 — differs from v3):
-    - Repeats until STOP condition
-    - Each iteration is independent (no learning, no personality)
-    - Short-term working memory stores recent interactions
-    - SessionMemory passed to ResponseGenerator (read-only)
-    - Exits cleanly after stop or max iterations
-    
-    Stop conditions:
-    1. User says a stop command (detected in response text)
-    2. Max interactions reached (hardcoded)
-    
-    SessionMemory:
-    - Bounded ring buffer (default capacity 3)
-    - Stores: utterance, intent, response per interaction
-    - Read-only for ResponseGenerator (can reference recent context)
-    - Cleared automatically on exit (not persistent)
-    - NOT embeddings, NOT learning, NOT personality
-    
-    Each iteration:
-    1. Wait for wake word (InputTrigger)
-    2. Record audio during trigger callback
-    3. Transcribe audio (SpeechToText)
-    4. Classify intent (IntentParser)
-    5. Generate response (ResponseGenerator, with SessionMemory available)
-    6. Speak response (OutputSink)
-    7. Store in SessionMemory (utterance, intent, response)
-    8. Check stop condition
-    9. If no stop → loop back to step 1
-    10. If stop → clear memory and exit cleanly
-    
-    What Coordinator does:
-    - Loop until stop condition
-    - Orchestrate all layers in correct order per iteration
-    - Record audio window during callback
-    - Route text through SpeechToText → IntentParser
-    - Pass intent + SessionMemory to ResponseGenerator for response
-    - Call OutputSink to speak
-    - Append interaction to SessionMemory
-    - Track interaction count
-    - Detect stop keywords in response
-    - Clear memory on exit
-    - Exit cleanly when done
-    
-    What Coordinator does NOT:
-    - Inspect or modify generated response text (except for stop detection)
-    - Know that ResponseGenerator uses an LLM
-    - Modify SessionMemory (append-only, read-only for generator)
-    - Make responses learn or adapt (each response independent)
-    - Retry on failure (single attempt per turn)
-    - Make any decisions beyond routing
-    
-    v4 Changes from v3:
-    - Add SessionMemory instantiation at startup
-    - Append to memory after each iteration
-    - Pass SessionMemory to ResponseGenerator
-    - Clear memory on exit
-    - Everything else identical to v3
-    
-    Multi-turn with working memory but stateless personality:
-    wake → listen → respond → [store in memory] → [check stop] → [loop] → exit
-    
-    Usage:
-    ```python
-    coordinator = Coordinator(
-        input_trigger=trigger,
-        speech_to_text=stt,
-        intent_parser=parser,
-        response_generator=generator,
-        output_sink=sink
-    )
-    coordinator.run()  # Loops until stop condition or max interactions
-    ```
+    """Classic voice orchestrator with bounded stages and session memory.
+
+    The coordinator owns lifecycle, state transitions, and audio authority.
+    Capture, parsing, deterministic dispatch, generation, delivery, and memory
+    work are delegated to focused ``coordinator_*`` modules.
     """
 
     AUDIO_STATE_IDLE = "IDLE"
