@@ -32,11 +32,6 @@ from core.sound_cues import get_sound_cue_player
 from core.config import (
     get_runtime_overrides,
     get_config,
-    MIN_TTS_CONFIDENCE,
-    MIN_TTS_TEXT_LEN,
-    PERSONAL_MODE_MIN_CONFIDENCE,
-    PERSONAL_MODE_MIN_TEXT_LEN,
-    MEMORY_MIN_CONFIDENCE,
     ResponseStyle,
     ActionRisk,
 )
@@ -88,6 +83,7 @@ from core.pipeline_request_classifier import (
     is_identity_query,
     meaningful_tokens,
 )
+from core.pipeline_settings import load_pipeline_settings
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -121,10 +117,11 @@ class ArgoPipeline:
         self._llm_router = LLMRouter(self._config, self._voice_clients)
         self._context_fetcher = BoundedContext()
         self._current_stt_confidence = 1.0
-        self._tts_min_text_length = MIN_TTS_TEXT_LEN
-        self._tts_min_confidence = MIN_TTS_CONFIDENCE
-        self._personal_mode_min_confidence = PERSONAL_MODE_MIN_CONFIDENCE
-        self._personal_mode_min_text_len = PERSONAL_MODE_MIN_TEXT_LEN
+        settings = load_pipeline_settings(self._config, self.runtime_overrides)
+        self._tts_min_text_length = settings.tts_min_text_length
+        self._tts_min_confidence = settings.tts_min_confidence
+        self._personal_mode_min_confidence = settings.personal_mode_min_confidence
+        self._personal_mode_min_text_len = settings.personal_mode_min_text_length
         self._intent_parser = RuleBasedIntentParser()
         self._inspection_responses = PipelineInspectionService(self)
         self._scheduling_responses = PipelineSchedulingService(self)
@@ -211,78 +208,24 @@ class ArgoPipeline:
             self.logger.info("[MEM0] enabled")
         self._ephemeral_memory = {}
         self._brain = get_brain()
-        convo_size = 24
-        try:
-            if self._config is not None:
-                convo_size = int(self._config.get("conversation.buffer_size", 24))
-        except Exception:
-            convo_size = 24
         session_memory_enabled = self.runtime_overrides.get("session_memory_enabled", True)
-        self._conversation_buffer = ConversationBuffer(max_turns=convo_size, enabled=session_memory_enabled)
-        ledger_size = 10
-        try:
-            if self._config is not None:
-                ledger_size = int(self._config.get("conversation.ledger_size", 10))
-        except Exception:
-            ledger_size = 10
-        self._conversation_ledger = deque(maxlen=ledger_size)
+        self._conversation_buffer = ConversationBuffer(
+            max_turns=settings.conversation_buffer_size,
+            enabled=session_memory_enabled,
+        )
+        self._conversation_ledger = deque(maxlen=settings.conversation_ledger_size)
         self._pending_memory_write = None
         self._pending_memory = None
         self._memory_commands = MemoryCommandService(self)
         self._memory_service = PipelineMemoryService(self)
         self._session_flags = {}
-        self._stt_prompt_profile = "general"
-        self._stt_initial_prompt = ""
-        self._stt_min_rms_threshold = 0.005
-        self._stt_silence_ratio_threshold = 0.90
-        self._stt_min_duration_s = 0.3
-        self._vad_silence_pad_ms = 300
-        self.strict_lab_mode = False
-        try:
-            if self._config is not None:
-                self._stt_prompt_profile = str(self._config.get("speech_to_text.prompt_profile", "general"))
-                self._stt_min_rms_threshold = float(self._config.get("speech_to_text.min_rms_threshold", 0.005))
-                self._stt_silence_ratio_threshold = float(self._config.get("speech_to_text.silence_ratio_threshold", 0.90))
-                self._stt_min_duration_s = float(
-                    self._config.get(
-                        "speech_to_text.min_duration_seconds",
-                        self._stt_min_duration_s,
-                    )
-                )
-                self._vad_silence_pad_ms = int(self._config.get("audio.vad_silence_pad_ms", self._vad_silence_pad_ms))
-                self.strict_lab_mode = bool(self._config.get("modes.strict_lab_mode", False))
-                profiles = self._config.get("speech_to_text.initial_prompt_profiles", {}) or {}
-                self._stt_initial_prompt = str(profiles.get(self._stt_prompt_profile, ""))
-                self._tts_min_text_length = int(
-                    self._config.get("guards.tts.min_text_length", self._tts_min_text_length)
-                )
-                self._tts_min_confidence = float(
-                    self._config.get("guards.tts.min_confidence", self._tts_min_confidence)
-                )
-                self._personal_mode_min_confidence = float(
-                    self._config.get(
-                        "guards.stt.personal_min_confidence",
-                        self._personal_mode_min_confidence,
-                    )
-                )
-                self._personal_mode_min_text_len = int(
-                    self._config.get(
-                        "guards.stt.personal_min_text_length",
-                        self._personal_mode_min_text_len,
-                    )
-                )
-        except Exception:
-            pass
-        self._tts_min_text_length = max(1, int(self._tts_min_text_length))
-        self._personal_mode_min_text_len = max(1, int(self._personal_mode_min_text_len))
-        self._tts_min_confidence = max(0.0, min(1.0, float(self._tts_min_confidence)))
-        self._personal_mode_min_confidence = max(0.0, min(1.0, float(self._personal_mode_min_confidence)))
-        self._stt_min_duration_s = max(self._stt_min_duration_s, self._vad_silence_pad_ms / 1000.0)
-        if "strict_lab_mode" in self.runtime_overrides:
-            try:
-                self.strict_lab_mode = bool(self.runtime_overrides["strict_lab_mode"])
-            except Exception:
-                pass
+        self._stt_prompt_profile = settings.stt_prompt_profile
+        self._stt_initial_prompt = settings.stt_initial_prompt
+        self._stt_min_rms_threshold = settings.stt_min_rms_threshold
+        self._stt_silence_ratio_threshold = settings.stt_silence_ratio_threshold
+        self._stt_min_duration_s = settings.stt_min_duration_seconds
+        self._vad_silence_pad_ms = settings.vad_silence_pad_ms
+        self.strict_lab_mode = settings.strict_lab_mode
 
     def _respond_with_vision_describe(self, *args, **kwargs):
         return self._inspection_responses._respond_with_vision_describe(*args, **kwargs)
