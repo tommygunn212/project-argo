@@ -445,29 +445,6 @@ class ArgoPipeline:
         ]
         return any(phrase in lower for phrase in phrases)
 
-        allow_llm = topic is None
-        if request_kind == "QUESTION" and not self.strict_lab_mode:
-            assert allow_llm, "Personal mode questions must never be blocked"
-
-        # --- Unresolved Noun Phrase Clarification Rule ---
-        # If a question contains an unresolved noun phrase and no prior referent exists, force clarification and block LLM answer generation. No retries, no guessing.
-        if request_kind == "QUESTION":
-            # Heuristic: If the question contains a noun (not a pronoun) and no referent in convo ledger, block LLM and clarify
-            tokens = self._get_meaningful_tokens(user_text)
-            # Simple noun phrase detection: look for tokens that are not pronouns or verbs
-            pronouns = {"i", "me", "my", "you", "your", "we", "our", "they", "their", "he", "him", "his", "she", "her", "it", "its", "this", "that", "these", "those", "who", "whom", "whose", "which"}
-            # If there is a noun-like token and no referent in previous user entry, block
-            previous = self._get_previous_user_entry() or ""
-            previous_tokens = set(self._get_meaningful_tokens(previous))
-            unresolved_nouns = [t for t in tokens if t not in pronouns and t not in previous_tokens]
-            if unresolved_nouns:
-                clarification = f"Can you clarify what you mean by '{unresolved_nouns[0]}'?"
-                self._respond_with_clarification(interaction_id, replay_mode, overrides, prompt=clarification)
-                self.logger.info(f"[CLARIFICATION] Blocked LLM answer due to unresolved noun phrase: {unresolved_nouns[0]}")
-                return
-
-        # ...existing code...
-
     def _is_non_propositional_utterance(self, text: str, request_kind: str) -> bool:
         if not text:
             return True
