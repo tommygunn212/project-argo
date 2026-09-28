@@ -11,6 +11,7 @@ STT/LLM/TTS pipeline for command/control fallback.
 - **Multi-engine STT**: OpenAI Cloud (`gpt-4o-mini-transcribe`), Azure, Faster Whisper, OpenAI Whisper — switchable at runtime
 - **Multi-engine TTS**: OpenAI TTS (`gpt-4o-mini-tts`, 13 voices), Edge TTS, Azure Neural — switchable at runtime
 - **LLM router**: OpenAI, Ollama, or Gemini with config-driven primary selection and optional deterministic fallback
+- **Knowledge retrieval**: one `core.knowledge_service` path backed by the local AnythingLLM Tommy Knowledge Base for both voice runtimes
 - **Frontend V1** (`/`): Original UI debugger
 - **Frontend V2** (`/v2`): Full-featured cyberpunk UI with 6 tabs, gate tuning, and engine switching
 - Deterministic system health + hardware queries (no LLM)
@@ -33,6 +34,12 @@ The smooth path is intentionally separate from the classic command loop:
 3. OpenAI Realtime owns listening, speaking, interruption, and short-turn response timing.
 4. `/api/livekit-status` reports room/model/voice, avatar fallback state, and speaker-ID readiness.
 5. `/api/mobile-access` reports the same-network dashboard URL for iPad/phone testing.
+
+`core/livekit_config.py` remains the compatibility facade for session settings.
+Its process-boundary preferences, access/dispatch, status/network reporting,
+and avatar readiness are owned by `core/livekit_preferences.py`,
+`core/livekit_access.py`, `core/livekit_status.py`, and
+`core/livekit_avatar.py`, respectively.
 
 Speaker identity is prepared as a Speechmatics-based opt-in layer. It is not
 forced into the OpenAI Realtime session because ARGO's first priority is keeping
@@ -98,7 +105,7 @@ Memory contract:
 - Backend: SQLite default (`data/memory.db`), PostgreSQL optional through `core.memory_store`
 - Memory is advisory, never authoritative
 - Memory cannot trigger actions
-- Conversation-turn storage exists for future long-term recall, but semantic recall still needs a retrieval pass
+- Conversation-turn storage is separate from authored knowledge retrieval; both voice paths query authored knowledge through `core.knowledge_service`
 
 STT design:
 - Local-only Whisper

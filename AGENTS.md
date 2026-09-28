@@ -59,6 +59,18 @@ kept at the root because scripts find the worker by that path. The code is
 `phrase_gates.py` ("stop" + sleep/wake), `activity.py` (log + events),
 `avatars.py` (Simli; Hedra is retired and its code is gone).
 
+**LiveKit configuration** — `core/livekit_config.py` is the stable public
+facade and owns the realtime session schema. Persistence is in
+`core/livekit_preferences.py`, token/dispatch work in `core/livekit_access.py`,
+dashboard/network reporting in `core/livekit_status.py`, and avatar readiness
+in `core/livekit_avatar.py`. Import public helpers from the facade unless a
+test deliberately targets one owner module.
+
+**Knowledge retrieval** — `core/knowledge_service.py` is the one RAG door for
+both Classic and Smooth Voice. It uses the local AnythingLLM "Tommy Knowledge
+Base" workspace. Do not restore a second repo-index RAG path; source-code
+questions belong to normal code/search tools, not Tommy's authored knowledge.
+
 **Personality** — `core/persona_briefs.py` is the single source of truth.
 Seven personas, each producing a distinct instruction set with a
 `v3-<sha>` fingerprint. Never stack persona text from more than one place.
@@ -258,15 +270,14 @@ Dashboard: `http://localhost:8000/v2` — **not** `/`, which is the retired one.
 
 ## Open work
 
-- **Code cleanup, 2026-09-27.** The Smooth Voice path (`core/voice/`,
+- **Code cleanup, 2026-09-28.** The Smooth Voice path (`core/voice/`,
   `core/realtime_tools/`, `core/voice_memory.py`) was restructured and its
-  bugs fixed in atomic commits: see `git log --oneline 1faa6c0..`. That was
-  verified on a Linux mirror of the suite (no new failures against the
-  baseline). The Windows suite and a live voice session have NOT been run
-  since. Do both first, after `RESTART_ARGO.bat`. Next cleanup candidates,
-  in order: `core/livekit_config.py` (901 lines, shared with the dashboard),
-  then the repo root (stale `*_COMPLETE.md` reports, loose logs, three
-  frontends), then `core/pipeline.py`.
+  bugs fixed in atomic commits: see `git log --oneline 1faa6c0..`.
+  `core/livekit_config.py` was then split behind its compatible facade, and
+  AnythingLLM became the single RAG service for both voice paths. Next cleanup
+  candidates, in order: the repo root (stale `*_COMPLETE.md` reports, loose
+  logs, three frontends), then `core/pipeline.py`. Re-run the Windows suite and
+  a live voice proof after changes to either runtime path.
 
 - Memory round trip unproven live: say a decision, stop Smooth Voice, reconnect,
   ask. `recall` is a tool the model *chooses* to call; if she answers from thin
