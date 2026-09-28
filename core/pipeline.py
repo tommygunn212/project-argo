@@ -92,6 +92,7 @@ from core.pipeline_interaction_runtime import (
 )
 from core.pipeline_speech import SpeechDependencies, speak_text
 from core import persona_briefs
+from core.pipeline_ambiguity import ambiguous_short_question_prompt
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -496,75 +497,7 @@ class ArgoPipeline:
 
     def _ambiguous_short_question_prompt(self, text: str, request_kind: str, topic: str | None = None) -> str | None:
         """Ask for grounding before answering terse shorthand like "what is mc2"."""
-        if request_kind != "QUESTION" or topic or not self._has_interrogative_structure(text):
-            return None
-        question_structure = {
-            "what",
-            "whats",
-            "where",
-            "when",
-            "why",
-            "how",
-            "who",
-            "which",
-            "is",
-            "are",
-            "do",
-            "does",
-            "did",
-            "can",
-            "could",
-            "would",
-            "should",
-            "will",
-            "mean",
-            "means",
-            "meaning",
-            "many",
-            "much",
-        }
-        meaningful = [token for token in self._get_meaningful_tokens(text) if token not in question_structure]
-        if not meaningful or len(meaningful) > 2:
-            return None
-
-        known_singletons = {
-            "argo",
-            "ai",
-            "api",
-            "cpu",
-            "date",
-            "day",
-            "email",
-            "gpu",
-            "home",
-            "light",
-            "lights",
-            "memory",
-            "music",
-            "name",
-            "ram",
-            "status",
-            "system",
-            "temperature",
-            "time",
-            "volume",
-            "weather",
-        }
-        opaque_terms = []
-        for token in meaningful:
-            if token in known_singletons:
-                continue
-            has_alpha = bool(re.search(r"[a-z]", token))
-            has_digit = bool(re.search(r"\d", token))
-            is_short_code = len(token) <= 4 and has_alpha
-            is_mixed_code = len(token) <= 8 and has_alpha and has_digit
-            if is_short_code or is_mixed_code:
-                opaque_terms.append(token)
-
-        if not opaque_terms:
-            return None
-        term = opaque_terms[0]
-        return f"When you say '{term}', do you mean something from ARGO or your setup, or the general meaning?"
+        return ambiguous_short_question_prompt(text, request_kind, topic)
 
     def _sanitize_tts_text(self, text: str, enforce_confidence: bool = True, deterministic: bool = False) -> str:
         if not text or not text.strip():
