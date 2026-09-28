@@ -2224,131 +2224,16 @@ class ArgoPipeline:
         return system_format.format_temperature_response(temps)
 
     def _format_system_full_report(self, report: dict) -> str:
-        health = report.get("health", {}) or {}
-        disks = report.get("disks", {}) or {}
-        uptime_seconds = report.get("uptime_seconds", 0) or 0
-        network = report.get("network", []) or []
-        battery = report.get("battery")
-        fans = report.get("fans")
-
-        parts = []
-        cpu_pct = health.get("cpu_percent")
-        ram_pct = health.get("ram_percent")
-        disk_pct = health.get("disk_percent")
-        gpu_pct = health.get("gpu_percent")
-        gpu_mem = health.get("gpu_mem_percent")
-        if cpu_pct is not None and ram_pct is not None and disk_pct is not None:
-            parts.append(f"CPU is {cpu_pct} percent. Memory is {ram_pct} percent. Disk usage is {disk_pct} percent.")
-        if gpu_pct is not None:
-            if gpu_mem is not None:
-                parts.append(f"GPU usage is {gpu_pct} percent, with VRAM at {gpu_mem} percent.")
-            else:
-                parts.append(f"GPU usage is {gpu_pct} percent.")
-
-        cpu_temp = health.get("cpu_temp")
-        gpu_temp = health.get("gpu_temp")
-        if cpu_temp is not None or gpu_temp is not None:
-            temp_bits = []
-            if cpu_temp is not None:
-                temp_bits.append(f"CPU {cpu_temp}°C")
-            if gpu_temp is not None:
-                temp_bits.append(f"GPU {gpu_temp}°C")
-            parts.append("Temperatures: " + ", ".join(temp_bits) + ".")
-
-        if uptime_seconds:
-            hours = round(uptime_seconds / 3600, 1)
-            parts.append(f"Uptime is {hours} hours.")
-
-        if disks:
-            disk_bits = []
-            for label, info in sorted(disks.items()):
-                drive_label = label.replace(":", "")
-                free_text = self._format_size_gb(info["free_gb"])
-                total_text = self._format_size_gb(info["total_gb"])
-                disk_bits.append(
-                    f"{drive_label} drive is {info['percent']} percent full, with {free_text} free out of {total_text}."
-                )
-            parts.append("Drives: " + " ".join(disk_bits))
-
-        if network:
-            net_bits = []
-            for nic in network:
-                label = nic.get("name")
-                ip = nic.get("ip")
-                speed = nic.get("speed_mbps")
-                seg = label or "Network"
-                if ip:
-                    seg += f" {ip}"
-                if speed:
-                    seg += f" {speed}Mbps"
-                net_bits.append(seg)
-            parts.append("Network: " + ", ".join(net_bits) + ".")
-
-        if battery:
-            pct = battery.get("percent")
-            plugged = battery.get("plugged")
-            if pct is not None:
-                status = "plugged in" if plugged else "on battery"
-                parts.append(f"Battery is {pct} percent, {status}.")
-
-        if fans:
-            fan_bits = [f"{f['label']} {f['rpm']}RPM" for f in fans if f.get("rpm") is not None]
-            if fan_bits:
-                parts.append("Fans: " + ", ".join(fan_bits) + ".")
-
-        if not parts:
-            return "Hardware information unavailable."
-
-        return "System status. " + " ".join(parts)
+        return system_format.format_system_full_report(report)
 
     def _format_size_gb(self, gb: float) -> str:
-        try:
-            if gb >= 1024:
-                tb = round(gb / 1024, 2)
-                return f"{tb} terabytes"
-            gigs = int(gb)
-            megs = int(round((gb - gigs) * 1024))
-            if gigs > 0 and megs > 0:
-                return f"{gigs} gigs {megs} megs"
-            if gigs > 0:
-                return f"{gigs} gigs"
-            return f"{megs} megs"
-        except Exception:
-            return f"{gb} gigs"
+        return system_format.format_size_gb(gb)
 
     def _format_ports_summary(self, ports: dict | None) -> str:
-        if not ports:
-            return "Ports information unavailable."
-        serial = ports.get("serial") or []
-        parallel = ports.get("parallel") or []
-        usb = ports.get("usb_controllers") or []
-        bits = []
-        if serial:
-            serial_names = ", ".join(p.get("name") or p.get("device_id") or "Unknown" for p in serial)
-            bits.append(f"Serial ports: {serial_names}.")
-        if parallel:
-            parallel_names = ", ".join(p.get("name") or p.get("device_id") or "Unknown" for p in parallel)
-            bits.append(f"Parallel ports: {parallel_names}.")
-        if usb:
-            usb_names = ", ".join(u.get("name") or u.get("device_id") or "USB controller" for u in usb)
-            bits.append(f"USB controllers: {usb_names}.")
-        return " ".join(bits).strip() or "Ports information unavailable."
+        return system_format.format_ports_summary(ports)
 
     def _format_irq_summary(self, irqs: list | None, limit: int = 25) -> str:
-        if not irqs:
-            return "IRQ information unavailable."
-        lines = []
-        for irq in irqs[:limit]:
-            irq_num = irq.get("irq")
-            name = irq.get("name") or irq.get("description") or "IRQ"
-            if irq_num is not None:
-                lines.append(f"IRQ {irq_num}: {name}")
-            else:
-                lines.append(f"IRQ: {name}")
-        remaining = len(irqs) - len(lines)
-        if remaining > 0:
-            lines.append(f"({remaining} more)")
-        return "; ".join(lines).strip() or "IRQ information unavailable."
+        return system_format.format_irq_summary(irqs, limit)
 
     def _get_gate_statuses(self, capability_key: str, module_key: str) -> dict[str, str]:
         statuses: dict[str, str] = {}
