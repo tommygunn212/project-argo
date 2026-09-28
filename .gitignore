@@ -30,6 +30,7 @@ gem_test/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/music_index.json
 
 # Temporary files
 temp/
