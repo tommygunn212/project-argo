@@ -81,8 +81,7 @@ from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
 from core.knowledge_answer_guard import enforce_knowledge_answer
 from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
-from core.streaming_tts_worker import StreamingTTSWorker
-from core.streamed_text_collector import StreamedTextCollector
+from core.pipeline_streaming_response import PipelineStreamingResponseService
 from core.pipeline_bluetooth import PipelineBluetoothService
 from core.pipeline_audio_routing import PipelineAudioRoutingService
 from core.pipeline_system_volume import PipelineSystemVolumeService
@@ -143,6 +142,7 @@ class ArgoPipeline:
         self._system_volume = PipelineSystemVolumeService(self)
         self._apps = PipelineAppService(self)
         self._time_responses = PipelineTimeService(self)
+        self._streaming_responses = PipelineStreamingResponseService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -2482,116 +2482,19 @@ class ArgoPipeline:
         replay_mode: bool = False,
         overrides: dict | None = None,
     ) -> str:
-        """
-        Stream LLM tokens to TTS at sentence boundaries.
-
-        Returns the full response text (for logging, brain, buffer).
-        TTS playback starts as soon as the first sentence completes —
-        typically within ~1s of the LLM request, rather than waiting
-        for the entire response.
-        """
-        if not self.llm_enabled:
-            self.logger.info("LLM offline: skipping generation")
-            return ""
-
-        mode = self._resolve_personality_mode()
-        serious_mode = self._is_serious(user_text)
-        convo_messages = self._conversation_buffer.as_messages() if use_convo_buffer else []
-        response_controls = self._get_spoken_response_controls()
-        chinese_lesson = self._chinese_lesson_variant(user_text)
-        # Build user prompt WITHOUT convo context (that goes into messages array)
-        prompt = self._build_llm_prompt(user_text, mode, serious_mode, rag_context, memory_context, convo_context="")
-        prompt = "\n---\n".join([self._build_spoken_style_block(user_text, response_controls), prompt])
-
-        # ── TTS consumer thread ──────────────────────────────────────
-        tts_engine = self._tts_engine
-
-        def _tts_consumer(sentence_queue, started, errors):
-            from core.streaming_tts import consume_tts_sentences
-
-            consume_tts_sentences(
-                self,
-                sentence_queue,
-                interaction_id=interaction_id,
-                tts_engine=tts_engine,
-                chinese_lesson=chinese_lesson,
-                tts_started=started,
-                tts_errors=errors,
-            )
-
-        tts_worker = StreamingTTSWorker(
-            _tts_consumer,
-            enabled=not replay_mode and not (overrides or {}).get("suppress_tts", False),
+        service = getattr(self, "_streaming_responses", None)
+        if service is None:
+            service = PipelineStreamingResponseService(self)
+            self._streaming_responses = service
+        return service.generate_and_speak(
+            user_text=user_text,
+            interaction_id=interaction_id,
+            rag_context=rag_context,
+            memory_context=memory_context,
+            use_convo_buffer=use_convo_buffer,
+            replay_mode=replay_mode,
+            overrides=overrides,
         )
-
-        # ── Stream LLM tokens and detect sentences ───────────────────
-        self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
-        start = time.perf_counter()
-        first_token_ms = None
-
-        # Start TTS consumer thread (it blocks on the queue until sentences arrive)
-        tts_worker.start()
-        collector = StreamedTextCollector(
-            pop_chunk=lambda buffer, soft: self._pop_stream_chunk(buffer, allow_soft_split=soft),
-            sanitize=lambda text: self._sanitize_tts_text(text, enforce_confidence=False),
-            enqueue=tts_worker.enqueue,
-            tts_is_alive=lambda: tts_worker.is_alive,
-            max_sentences=response_controls["max_sentences"],
-        )
-
-        try:
-            sys_msg = self._get_system_message(mode, serious_mode)
-            for part in self._stream_llm_text(
-                prompt=prompt,
-                system_message=sys_msg,
-                convo_messages=convo_messages,
-                temperature=response_controls["temperature"],
-                max_tokens=response_controls["max_tokens"],
-                interaction_id=interaction_id,
-            ):
-                if self.stop_signal.is_set():
-                    break
-                if not part:
-                    continue
-                if first_token_ms is None:
-                    first_token_ms = (time.perf_counter() - start) * 1000
-                    self._record_timeline(
-                        f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
-                        stage="llm", interaction_id=interaction_id,
-                    )
-                collector.accept(part)
-                if collector.truncated:
-                    break
-
-            collector.flush()
-
-        except Exception as e:
-            self.logger.error(f"[LLM-STREAM] Error: {e}", exc_info=True)
-        finally:
-            total_ms = (time.perf_counter() - start) * 1000
-            self._record_timeline(f"LLM_DONE {total_ms:.0f}ms", stage="llm", interaction_id=interaction_id)
-            self.broadcast("llm_metrics", {
-                "interaction_id": interaction_id,
-                "first_token_ms": first_token_ms,
-                "total_ms": total_ms,
-            })
-
-        # ── Broadcast text to chat NOW (before waiting for TTS) ──
-        full_response = self._strip_prompt_artifacts(collector.full_response)
-        _display = full_response or ""
-        _display = self._strip_disallowed_phrases(_display)
-        _persona = self._resolve_personality_mode()
-        _display = apply_persona(_display, ResponseType.ANSWER, _persona)
-        if _display.strip():
-            self.broadcast("log", f"Argo: {_display}")
-
-        tts_worker.finish(
-            stop_signal=self.stop_signal,
-            stop_tts=self.stop_tts,
-            logger=self.logger,
-        )
-
-        return full_response
 
     def speak(self, text, interaction_id: str = "", force_tts: bool = False):
         if not self.runtime_overrides.get("tts_enabled", True) and not force_tts:
