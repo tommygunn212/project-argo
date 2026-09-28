@@ -88,6 +88,13 @@ from core.pipeline_audio_routing import PipelineAudioRoutingService
 from core.pipeline_system_volume import PipelineSystemVolumeService
 from core.pipeline_apps import PipelineAppService
 from core.pipeline_time import LOCATION_TO_TIMEZONE as TIMEZONE_MAP, PipelineTimeService
+from core.pipeline_request_classifier import (
+    classify_request_kind,
+    classify_request_type,
+    has_interrogative_structure,
+    is_identity_query,
+    meaningful_tokens,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1004,140 +1011,26 @@ class ArgoPipeline:
     def _classify_request_kind(self, user_text: str) -> str:
         if not user_text or not user_text.strip():
             return "UNKNOWN"
-        # Brain memory commands (recall, forget, store)
-        brain_cmd = self._brain.parse_memory_command(user_text)
-        if brain_cmd:
+        if self._brain.parse_memory_command(user_text):
             return "WRITE_MEMORY"
         if self._parse_memory_write(user_text):
             return "WRITE_MEMORY"
-        text = user_text.strip().lower()
-        tokens = re.findall(r"\w+", text)
-        token_set = set(tokens)
-
-        starts_question = bool(re.match(r"^(what|why|how|when|where|who)\b", text))
-        ends_question = text.endswith("?")
-        has_question_cue = bool(re.search(r"\b(what|why|how|who|when|where|explain|describe|define|tell|show|what's|whats|why's|hows)\b", text))
-
-        hedging = {"maybe", "might", "could", "would", "should", "perhaps", "possibly", "guess", "think", "can", "could", "would", "should"}
-        has_hedge = bool(token_set & hedging) or text.startswith("can you") or text.startswith("could you") or text.startswith("would you")
-
-        action_verbs = {
-            "open", "close", "quit", "exit", "shutdown", "shut", "delete", "run", "start", "stop",
-            "enable", "disable", "install", "remove", "play", "pause", "resume", "next", "skip",
-            "set", "change", "turn", "launch",
-        }
-        has_action = bool(token_set & action_verbs)
-
-        concept_tokens = {
-            "system", "file", "pipeline", "manager", "audio", "tts", "stt", "rag",
-            "index", "config", "logs", "llm", "model", "voice", "argo",
-        }
-        mentions_concept = bool(token_set & concept_tokens)
-
-        has_target = len(tokens) >= 2
-        looks_question = starts_question or ends_question or has_question_cue or has_hedge
-        is_command = has_action and has_target and not looks_question
-
-        if is_command:
-            return "ACTION"
-
-        if starts_question or ends_question or has_question_cue:
-            return "QUESTION"
-        if mentions_concept and not has_action:
-            return "QUESTION"
-        if len(tokens) <= 4 and not has_action:
-            return "QUESTION"
-
-        return "QUESTION"
+        return classify_request_kind(user_text)
 
     def _classify_request_type(self, user_text: str, intent) -> str:
         request_kind = self._classify_request_kind(user_text)
-        if request_kind in {"WRITE_MEMORY", "UNKNOWN"}:
-            return request_kind
-
-        if intent is not None:
-            if intent.intent_type in {
-                IntentType.MUSIC,
-                IntentType.MUSIC_STOP,
-                IntentType.MUSIC_NEXT,
-                IntentType.MUSIC_STATUS,
-            }:
-                if request_kind == "ACTION" or self._is_executable_command(user_text):
-                    return "ACTION"
-            if intent.intent_type == IntentType.BLUETOOTH_CONTROL:
-                if request_kind == "ACTION" or self._is_executable_command(user_text):
-                    return "ACTION"
-                return "ACTION"
-            if intent.intent_type == IntentType.BLUETOOTH_STATUS:
-                return "QUESTION"
-            if intent.intent_type == IntentType.AUDIO_ROUTING_CONTROL:
-                return "ACTION"
-            if intent.intent_type == IntentType.AUDIO_ROUTING_STATUS:
-                return "QUESTION"
-            if intent.intent_type == IntentType.APP_CONTROL:
-                return "ACTION"
-            if intent.intent_type == IntentType.APP_LAUNCH:
-                return "ACTION"
-            if intent.intent_type == IntentType.APP_STATUS:
-                return "QUESTION"
-            if intent.intent_type == IntentType.TIME_STATUS:
-                return "QUESTION"
-            if intent.intent_type == IntentType.WORLD_TIME:
-                return "QUESTION"
-            if intent.intent_type == IntentType.VOLUME_STATUS:
-                return "QUESTION"
-            if intent.intent_type == IntentType.VOLUME_CONTROL:
-                return "ACTION"
-            if intent.intent_type in {
-                IntentType.SYSTEM_HEALTH,
-                IntentType.SYSTEM_STATUS,
-                IntentType.SYSTEM_INFO,
-                IntentType.COUNT,
-                IntentType.ARGO_IDENTITY,
-                IntentType.ARGO_GOVERNANCE,
-            }:
-                return "QUESTION"
-
-        return request_kind
+        return classify_request_type(
+            user_text, intent, request_kind, self._is_executable_command
+        )
 
     def _has_interrogative_structure(self, text: str) -> bool:
-        """Check if text has interrogative structure (question words, question mark).
-        TODO: Implement full interrogative detection if needed.
-        """
-        if not text:
-            return False
-        lower = text.lower().strip()
-        if lower.endswith("?"):
-            return True
-        question_words = {"what", "why", "how", "who", "when", "where", "which", "whose", "whom", "is", "are", "do", "does", "did", "can", "could", "would", "should", "will"}
-        tokens = lower.split()
-        if tokens and tokens[0] in question_words:
-            return True
-        return False
+        return has_interrogative_structure(text)
 
     def _get_meaningful_tokens(self, text: str) -> list:
-        """Extract meaningful tokens from text (excluding stop words).
-        TODO: Implement full token extraction if needed.
-        """
-        if not text:
-            return []
-        stop_words = {"a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "shall", "can", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through", "during", "before", "after", "above", "below", "between", "under", "again", "further", "then", "once", "and", "but", "or", "nor", "so", "yet", "both", "either", "neither", "not", "only", "own", "same", "than", "too", "very", "just", "i", "me", "my", "you", "your", "he", "him", "his", "she", "her", "it", "its", "we", "our", "they", "their", "this", "that", "these", "those"}
-        tokens = re.findall(r"\w+", text.lower())
-        return [t for t in tokens if t not in stop_words]
+        return meaningful_tokens(text)
 
     def _is_identity_query(self, text: str) -> bool:
-        """Check if text is asking about identity (e.g., 'what is my name').
-        TODO: Implement full identity query detection if needed.
-        """
-        if not text:
-            return False
-        lower = text.lower().strip()
-        identity_patterns = [
-            r"what('?s|\s+is)\s+my\s+name",
-            r"do\s+you\s+(know|remember)\s+my\s+name",
-            r"who\s+am\s+i",
-        ]
-        return any(re.search(p, lower) for p in identity_patterns)
+        return is_identity_query(text)
 
     def _respond_with_identity_lookup(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
         """Respond to identity lookup queries.
