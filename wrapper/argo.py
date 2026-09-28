@@ -79,7 +79,6 @@ import json
 import uuid
 import logging
 from types import SimpleNamespace
-from datetime import datetime
 from pathlib import Path
 
 # When executed as ``python wrapper/argo.py``, Python puts ``wrapper/`` rather
@@ -120,6 +119,7 @@ from wrapper.replay_context import build_replay_context
 from wrapper.prompt_composition import compose_prompt
 from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
+from wrapper.interaction_runtime import InteractionRuntime, run_classified_interaction
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
@@ -1212,122 +1212,34 @@ def _run_argo_internal(
     voice_mode: bool = False
 ) -> None:
     """Run one classified, optionally contextualized wrapper interaction."""
-    # ________________________________________________________________________
-    # Step 0: Intent Classification & Gating
-    # ________________________________________________________________________
-    
-    intent = classify_input(user_input)
-    
-    # ________________________________________________________________________
-    # Step 0b: Verbosity Classification
-    # ________________________________________________________________________
-    
-    # Classify response length preference based on explicit cues
-    # Note: verbosity parameter can be overridden, but we compute from input
-    classified_verbosity = classify_verbosity(user_input)
-    
-    # Handle invalid intent in strict mode
-    if strict_mode and intent in ("empty", "ambiguous", "low_intent"):
-        output = "Input is ambiguous. Please clarify what you want to do."
-        
-        # Send to audio output (if enabled)
-        _send_to_output_sink(output)
-        
-        # Still log the interaction normally
-        timestamp_iso = datetime.now().isoformat(timespec="seconds")
-        _append_daily_log(
-            timestamp_iso=timestamp_iso,
-            session_id=SESSION_ID,
-            user_prompt=user_input,
-            model_response=output,
-            active_mode=active_mode,
-            replay_n=replay_n,
-            replay_session=replay_session,
-            persona=persona,
-            verbosity=classified_verbosity,
-        )
-        
-        print(output)
-        return
-    
-    # Handle command routing (reserved for future use)
-    if intent == "command":
-        output = "Commands not yet implemented. Please provide a question or statement."
-        
-        # Still log the interaction normally
-        timestamp_iso = datetime.now().isoformat(timespec="seconds")
-        _append_daily_log(
-            timestamp_iso=timestamp_iso,
-            session_id=SESSION_ID,
-            user_prompt=user_input,
-            model_response=output,
-            active_mode=active_mode,
-            replay_n=replay_n,
-            replay_session=replay_session,
-            persona=persona,
-            verbosity=classified_verbosity,
-            replay_policy=None,
-        )
-        print(output)
-        return
-    # ________________________________________________________________________
-    
-    replay_context = build_replay_context(
+    runtime = InteractionRuntime(
+        classify_input=classify_input,
+        classify_verbosity=classify_verbosity,
+        send_output=_send_to_output_sink,
+        append_daily_log=_append_daily_log,
+        build_replay_context=build_replay_context,
+        compose_prompt=compose_prompt,
+        generate_response=generate_ollama_response,
+        audit_and_record=audit_and_record_response,
         session_id=SESSION_ID,
+        mode_enforcement=MODE_ENFORCEMENT,
+        state_machine_available=STATE_MACHINE_AVAILABLE,
+        state_machine=_state_machine,
+        wake_word_detector_available=WAKE_WORD_DETECTOR_AVAILABLE,
+        resume_wake_word_detector=resume_wake_word_detector,
+        logger=logger,
+    )
+    run_classified_interaction(
+        runtime,
+        user_input,
+        active_mode=active_mode,
         replay_n=replay_n,
         replay_session=replay_session,
+        strict_mode=strict_mode,
+        persona=persona,
+        verbosity=verbosity,
         replay_reason=replay_reason,
         voice_mode=voice_mode,
-    )
-    replay_block = replay_context.block
-    replay_policy = replay_context.policy
-    context_strength = replay_context.context_strength
-
-    prompt = compose_prompt(
-        user_input=user_input,
-        active_mode=active_mode,
-        persona=persona,
-        classified_verbosity=classified_verbosity,
-        context_strength=context_strength,
-        replay_block=replay_block,
-        voice_mode=voice_mode,
-        mode_enforcement=MODE_ENFORCEMENT,
-    )
-    full_prompt = prompt.full_prompt
-
-    # ________________________________________________________________________
-    # ________________________________________________________________________
-    # Step 3: Call Ollama (with streaming output)
-    # ________________________________________________________________________
-
-    output = generate_ollama_response(full_prompt)
-
-    # Send response to audio output (if VOICE_ENABLED and PIPER_ENABLED)
-    # This call blocks until audio playback completes
-    _send_to_output_sink(output)
-    
-    # [CRITICAL FIX] Transition from SPEAKING back to LISTENING after audio completes
-    # This ensures the state machine doesn't get stuck in SPEAKING state
-    if STATE_MACHINE_AVAILABLE and _state_machine:
-        # Only transition if currently in SPEAKING state
-        if _state_machine.current_state == "SPEAKING":
-            if not _state_machine.stop_audio():
-                logger.warning("Failed to transition from SPEAKING to LISTENING after audio playback")
-        # Resume wake-word detector in case it was paused
-        if WAKE_WORD_DETECTOR_AVAILABLE:
-            resume_wake_word_detector()
-
-    # ________________________________________________________________________
-    audit_and_record_response(
-        user_input=user_input,
-        output=output,
-        prompt=prompt,
-        session_id=SESSION_ID,
-        active_mode=active_mode,
-        replay_n=replay_n,
-        replay_session=replay_session,
-        replay_policy=replay_policy,
-        persona=persona,
     )
 
 
