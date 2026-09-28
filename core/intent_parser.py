@@ -29,6 +29,7 @@ from core.intent_rules.writing import parse_writing_intent
 from core.intent_rules.smart_home import parse_smart_home_intent
 from core.intent_rules.scheduling import parse_scheduling_intent
 from core.intent_rules.vision import parse_vision_intent
+from core.intent_rules.filesystem import parse_filesystem_intent
 from core.intent_system_rules import (
     AUDIO_ROUTING_KEYWORDS,
     detect_disk_query,
@@ -853,38 +854,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if vision_intent is not None:
             return vision_intent
 
-        # ── File System ────────────────────────────────────────────
-
-        # FILE_LARGE: "find large files on D drive", "biggest files"
-        if re.search(r"\b(large|big|huge|biggest|largest)\b.*\bfiles?\b", text_lower) or \
-           re.search(r"\bfiles?\b.*\b(large|big|huge|biggest|largest|taking\s+space)\b", text_lower):
-            return Intent(
-                intent_type=IntentType.FILE_LARGE,
-                confidence=0.96,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # FILE_RECENT: "what did I download today", "recent files", "latest downloads"
-        if re.search(r"\b(recent|latest|new|today)\b.*\b(files?|downloads?)\b", text_lower) or \
-           re.search(r"\bdownloads?\b.*\b(today|recent|latest|new)\b", text_lower) or \
-           re.search(r"\bwhat\b.*\bdownload", text_lower):
-            return Intent(
-                intent_type=IntentType.FILE_RECENT,
-                confidence=0.96,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # FILE_SEARCH: "find my tax documents", "search for PDF files", "locate the report"
-        if re.search(r"\b(find|search|look\s+for|locate|where(?:'s| is| are))\b.*\b(files?|documents?|folders?|pdf|doc|spreadsheet|photos?|images?|videos?|music)\b", text_lower) or \
-           re.search(r"\b(find|search|look\s+for|locate)\b.*\bon\s+[a-z]\s*(?:drive|:)", text_lower):
-            return Intent(
-                intent_type=IntentType.FILE_SEARCH,
-                confidence=0.95,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
+        filesystem_intent = parse_filesystem_intent(text_original, text_lower, serious_mode)
+        if filesystem_intent is not None:
+            return filesystem_intent
 
         # Rule 0.09: SYSTEM_STATUS (full telemetry)
         if any(phrase in text_lower for phrase in FULL_SYSTEM_PHRASES):
