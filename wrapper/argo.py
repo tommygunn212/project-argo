@@ -78,7 +78,6 @@ import os
 import json
 import uuid
 import logging
-from types import SimpleNamespace
 from pathlib import Path
 
 # When executed as ``python wrapper/argo.py``, Python puts ``wrapper/`` rather
@@ -121,6 +120,10 @@ from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
 from wrapper.interaction_runtime import InteractionRuntime, run_classified_interaction
 from wrapper.public_runtime import PublicRuntime, run_public_interaction
+from wrapper.transcription_workflow import (
+    TranscriptionWorkflow,
+    transcribe_with_confirmation,
+)
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
@@ -580,85 +583,23 @@ def transcribe_and_confirm(audio_path: str, max_duration_seconds: int = 300) -> 
         else:
             print("Transcript rejected. Please try again.")
     """
-    def _failure_artifact(status: str, reason: str):
-        """Create a failure artifact for blocked/unavailable transcription paths."""
-        if "TranscriptionArtifact" in globals() and TranscriptionArtifact:
-            artifact = TranscriptionArtifact()
-            artifact.source_audio = audio_path
-            artifact.transcript_text = None
-            artifact.language_detected = None
-            artifact.confidence = 0.0
-            artifact.status = status
-            artifact.error_detail = reason
-            artifact.confirmation_status = "rejected"
-            return artifact
-        return SimpleNamespace(
-            id=None,
-            timestamp=None,
-            source_audio=audio_path,
-            transcript_text=None,
-            language_detected=None,
-            confidence=0.0,
-            status=status,
-            error_detail=reason,
-            confirmation_status="rejected",
-        )
-
-    # Short-circuit missing files before listening gate (explicit failure artifact)
-    if audio_path and not Path(audio_path).exists():
-        reason = f"Audio file not found: {audio_path}"
-        return False, "", _failure_artifact("failure", reason)
-
-    # [Phase 7B] Gate: Check if listening is enabled
-    if STATE_MACHINE_AVAILABLE and _state_machine:
-        if not _state_machine.listening_enabled():
-            reason = "Microphone input blocked: not in LISTENING state"
-            print(f"⚠ {reason}", file=sys.stderr)
-            return False, "", _failure_artifact("blocked", reason)
-    
-    if not WHISPER_AVAILABLE:
-        reason = "Whisper not installed. Run: pip install openai-whisper"
-        print(f"⚠ {reason}", file=sys.stderr)
-        return False, "", _failure_artifact("failure", reason)
-    
-    # Transcribe audio file
-    print(f"\n🎤 Transcribing audio...", file=sys.stderr)
-    artifact = transcribe_audio(audio_path, max_duration_seconds=max_duration_seconds)
-    
-    # Handle transcription failure
-    if artifact.status == "failure":
-        print(f"❌ Transcription failed: {artifact.error_detail}", file=sys.stderr)
-        return False, "", artifact
-    
-    if artifact.status == "partial":
-        print(f"⚠ Partial transcription: {artifact.error_detail}", file=sys.stderr)
-    
-    # Display confirmation gate (core philosophy)
-    print(f"\n{'='*70}", file=sys.stderr)
-    print(f"Here's what I heard:", file=sys.stderr)
-    print(f"{'='*70}", file=sys.stderr)
-    print(f"\n  \"{artifact.transcript_text}\"", file=sys.stderr)
-    print(f"\nLanguage: {artifact.language_detected} | Confidence: {artifact.confidence:.0%}", file=sys.stderr)
-    print(f"{'='*70}", file=sys.stderr)
-    print(f"\nProceed with this transcript? (yes/no): ", end="", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # Get user confirmation
-    try:
-        response = input().strip().lower()
-    except EOFError:
-        # Piped input or non-interactive: assume no confirmation
-        response = "no"
-    
-    # Process confirmation
-    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
-        transcription_storage.confirm(artifact.id)
-        print(f"✅ Confirmed. Processing transcript...\n", file=sys.stderr)
-        return True, artifact.transcript_text, artifact
-    else:
-        transcription_storage.reject(artifact.id)
-        print(f"❌ Rejected. Please try again.\n", file=sys.stderr)
-        return False, "", artifact
+    return transcribe_with_confirmation(
+        TranscriptionWorkflow(
+            whisper_available=WHISPER_AVAILABLE,
+            state_machine_available=STATE_MACHINE_AVAILABLE,
+            state_machine=_state_machine,
+            artifact_factory=(
+                TranscriptionArtifact
+                if "TranscriptionArtifact" in globals() and TranscriptionArtifact
+                else None
+            ),
+            transcribe_audio=transcribe_audio if WHISPER_AVAILABLE else None,
+            storage=transcription_storage if WHISPER_AVAILABLE else None,
+            read_confirmation=input,
+        ),
+        audio_path,
+        max_duration_seconds,
+    )
 
 
 # ============================================================================
