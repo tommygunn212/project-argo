@@ -79,6 +79,7 @@ from core.runtime_constants import GATES_ORDER, Gate
 from tools.home_assistant import execute_smart_home_command
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryMixin
+from core.memory_command_service import MemoryCommandService
 from core.pipeline_domain_dispatch import dispatch_domain_intent
 from core.pipeline_platform_dispatch import dispatch_early_status, dispatch_platform_intent
 from core.pipeline_music_volume import dispatch_music_volume
@@ -233,6 +234,7 @@ class ArgoPipeline(PipelineMemoryMixin):
         self._conversation_ledger = deque(maxlen=ledger_size)
         self._pending_memory_write = None
         self._pending_memory = None
+        self._memory_commands = MemoryCommandService(self)
         self._session_flags = {}
         self._stt_prompt_profile = "general"
         self._stt_initial_prompt = ""
