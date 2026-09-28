@@ -98,6 +98,7 @@ from core import system_response_formatter as system_format
 from core.knowledge_answer_guard import enforce_knowledge_answer
 from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
 from core.streaming_tts_worker import StreamingTTSWorker
+from core.streamed_text_collector import StreamedTextCollector
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -3076,13 +3077,16 @@ class ArgoPipeline:
         self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
         start = time.perf_counter()
         first_token_ms = None
-        full_response = ""
-        sentence_buffer = ""
-        queued_chunks = 0
-        response_truncated = False
 
         # Start TTS consumer thread (it blocks on the queue until sentences arrive)
         tts_worker.start()
+        collector = StreamedTextCollector(
+            pop_chunk=lambda buffer, soft: self._pop_stream_chunk(buffer, allow_soft_split=soft),
+            sanitize=lambda text: self._sanitize_tts_text(text, enforce_confidence=False),
+            enqueue=tts_worker.enqueue,
+            tts_is_alive=lambda: tts_worker.is_alive,
+            max_sentences=response_controls["max_sentences"],
+        )
 
         try:
             sys_msg = self._get_system_message(mode, serious_mode)
@@ -3104,34 +3108,11 @@ class ArgoPipeline:
                         f"LLM_FIRST_TOKEN {first_token_ms:.0f}ms",
                         stage="llm", interaction_id=interaction_id,
                     )
-                full_response += part
-                sentence_buffer += part
-
-                while True:
-                    complete, sentence_buffer = self._pop_stream_chunk(
-                        sentence_buffer,
-                        allow_soft_split=(queued_chunks == 0),
-                    )
-                    if not complete:
-                        break
-                    if complete and tts_worker.is_alive:
-                        tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
-                        if tts_text:
-                            tts_worker.enqueue(tts_text)
-                            queued_chunks += 1
-                            if queued_chunks >= response_controls["max_sentences"]:
-                                response_truncated = True
-                                sentence_buffer = ""
-                                break
-                if response_truncated:
+                collector.accept(part)
+                if collector.truncated:
                     break
 
-            # Flush any remaining text in the buffer
-            remainder = sentence_buffer.strip()
-            if remainder and tts_worker.is_alive and not response_truncated:
-                tts_text = self._sanitize_tts_text(remainder, enforce_confidence=False)
-                if tts_text:
-                    tts_worker.enqueue(tts_text)
+            collector.flush()
 
         except Exception as e:
             self.logger.error(f"[LLM-STREAM] Error: {e}", exc_info=True)
@@ -3145,7 +3126,7 @@ class ArgoPipeline:
             })
 
         # ── Broadcast text to chat NOW (before waiting for TTS) ──
-        full_response = self._strip_prompt_artifacts(full_response)
+        full_response = self._strip_prompt_artifacts(collector.full_response)
         _display = full_response or ""
         _display = self._strip_disallowed_phrases(_display)
         _persona = self._resolve_personality_mode()
