@@ -84,6 +84,10 @@ from core.coordinator_stages import (
     transcribe_audio_stage,
 )
 from core.coordinator_system_health_stage import dispatch_system_health_stage
+from core.coordinator_music_stage import (
+    dispatch_music_stage,
+    stop_active_music_for_phrase,
+)
 from core.policy import (
     LLM_WATCHDOG_SECONDS,
     TTS_WATCHDOG_SECONDS,
@@ -936,17 +940,10 @@ class Coordinator(CoordinatorResponseMixin):
                 output_produced = procedural_result.output_produced
                 return procedural_result.interaction_result
 
-            stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
-            if any(term in text.lower() for term in stop_terms):
-                from core.music_player import get_music_player
-                music_player = get_music_player()
-                if music_player.is_playing():
-                    self.logger.info("[ARGO] Active music detected")
-                    music_player.stop()
-                    self._last_utterance_time = time.time()
-                    _finalize_response_watchdog()
-                    return True
-
+            if stop_active_music_for_phrase(
+                self, text, _finalize_response_watchdog
+            ):
+                return True
             # Generate response (LLM, with SessionMemory available)
             self.logger.info(
                 f"[Iteration {self.interaction_count}] Generating response..."
@@ -955,207 +952,25 @@ class Coordinator(CoordinatorResponseMixin):
             # TASK 15: Mark LLM start
             self.current_probe.mark("llm_start")
 
-            # Deterministic commands: STOP/PAUSE (music), NEXT, STATUS
-            # These routes bypass LLM entirely and execute directly.
-            # Check if this is a STOP command (highest priority - short-circuit)
-            if intent.intent_type == IntentType.MUSIC_STOP:
-                self.logger.info(f"[Iteration {self.interaction_count}] STOP command: Stopping music")
-                from core.music_player import get_music_player
-                music_player = get_music_player()
-
-                blocked = music_player.preflight()
-                if blocked:
-                    msg = "Music library not indexed yet."
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music blocked: {blocked.get('reason')}")
-                    if self.runtime_overrides.get("tts_enabled", True):
-                        self._safe_speak(msg, interaction_id=self.interaction_id)
-                    self.release_audio("MUSIC")
-                    self.current_probe.mark("llm_end")
-                    _finalize_response_watchdog()
-                    self._last_utterance_time = time.time()
-                    return True
-                music_player.stop()
-                try:
-                    self.release_audio("MUSIC")
-                except Exception:
-                    pass
-
-                # Optional brief response
-                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self._safe_speak("Stopped.", interaction_id=self.interaction_id)
-                output_produced = True
-                response_text = ""
-                self.current_probe.mark("llm_end")
-                # Exit callback - continue to next iteration (outer loop)
-                _finalize_response_watchdog()
-                self._last_utterance_time = time.time()
-                return True
-
-            # Check if this is a NEXT command (highest priority - short-circuit)
-            if intent.intent_type == IntentType.MUSIC_NEXT:
-                self.logger.info(f"[Iteration {self.interaction_count}] NEXT command: Playing next track")
-                from core.music_player import get_music_player
-                music_player = get_music_player()
-
-                playback_started = music_player.play_next(self.sink)
-                if not playback_started:
-                    # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self._safe_speak("No music playing.", interaction_id=self.interaction_id)
-                    self.logger.warning(f"[Iteration {self.interaction_count}] NEXT failed: no playback mode")
-                    output_produced = True
-                else:
-                    self.logger.info(f"[Iteration {self.interaction_count}] NEXT: Started playback")
-                    # Monitor for interrupt during music playback
-                    self._monitor_music_interrupt(music_player)
-                    output_produced = True
-
-                response_text = ""
-                self.current_probe.mark("llm_end")
-                # Exit callback - continue to next iteration (outer loop)
-                _finalize_response_watchdog()
-                self._last_utterance_time = time.time()
-                return True
-
-            # Check if this is a STATUS query (read-only - no side effects)
-            if intent.intent_type == IntentType.MUSIC_STATUS:
-                self.logger.info(f"[Iteration {self.interaction_count}] STATUS query: What's playing")
-                from core.music_status import query_music_status
-
-                status = query_music_status()
-                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self._safe_speak(status, interaction_id=self.interaction_id)
-                self.logger.info(f"[Iteration {self.interaction_count}] STATUS response: {status}")
-                output_produced = True
-
-                response_text = ""
-                self.current_probe.mark("llm_end")
-                # Exit callback - continue to next iteration (outer loop)
-                _finalize_response_watchdog()
-                self._last_utterance_time = time.time()
-                return True
-
-            # Check if this is a music command (before LLM processing)
-            if intent.intent_type == IntentType.MUSIC:
-                if not self.runtime_overrides.get("music_enabled", True):
-                    msg = "Music is disabled."
-                    self.logger.info(f"[Iteration {self.interaction_count}] {msg}")
-                    if self.runtime_overrides.get("tts_enabled", True):
-                        self._safe_speak(msg, interaction_id=self.interaction_id)
-                    self.current_probe.mark("llm_end")
-                    return True
-                # Music playback with STRICT priority routing
-                # IMPORTANT: Music commands don't count as conversational turns
-                is_music_iteration = True
-                self.logger.info(f"[Iteration {self.interaction_count}] Music command - not counting as interaction turn")
-
-                from core.music_player import get_music_player
-                music_player = get_music_player()
-
-                try:
-                    self.acquire_audio("MUSIC")
-                except Exception as e:
-                    self.logger.warning(f"[Iteration {self.interaction_count}] Music blocked: {e}")
-                    if self.runtime_overrides.get("tts_enabled", True):
-                        self._safe_speak("Audio busy. Try again.", interaction_id=self.interaction_id)
-                    self.current_probe.mark("llm_end")
-                    return True
-
-                playback_started = False
-                error_message = ""
-
-                artist = getattr(intent, "artist", None)
-                title = getattr(intent, "title", None)
-                do_not_try_genre_lookup = bool(title)
-                explicit_genre = bool(getattr(intent, "explicit_genre", False))
-                if getattr(intent, "is_generic_play", False) and not artist and not title and not intent.keyword:
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM (generic play)")
-                    playback_started = music_player.play_random(None)
-                    if not playback_started:
-                        error_message = "Your music library is empty or unavailable."
-                
-                if title:
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music title: '{title}'")
-                    if not playback_started:
-                        playback_started = music_player.play_by_song(title, None)
-                        if playback_started:
-                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: SONG match")
-                        elif not artist:
-                            playback_started = music_player.play_by_artist(title, None)
-                            if playback_started:
-                                self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST fallback (title-only)")
-
-                if not playback_started and artist:
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music artist: '{artist}'")
-                    playback_started = music_player.play_by_artist(artist, None)
-                    if playback_started:
-                        self.logger.info(f"[Iteration {self.interaction_count}] Music route: ARTIST match")
-
-                if not playback_started and intent.keyword:
-                    keyword = intent.keyword
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music keyword: '{keyword}'")
-
-                    # PRIORITY ORDER (FIXED):
-                    # 1. Genre match (with adjacent fallback)
-                    if not playback_started:
-                        if explicit_genre and not do_not_try_genre_lookup:
-                            playback_started = music_player.play_by_genre(keyword, None)  # No sink here
-                        if playback_started:
-                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: GENRE match")
-
-                    # 2. Keyword token match
-                    if not playback_started:
-                        playback_started = music_player.play_by_keyword(keyword, None)  # No sink here
-                        if playback_started:
-                            self.logger.info(f"[Iteration {self.interaction_count}] Music route: KEYWORD match")
-
-                # If still no playback, consolidate error into single message
-                    if not playback_started:
-                        error_message = f"No music found for '{keyword}'."
-                        self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
-                else:
-                    # No keyword: random track
-                    self.logger.info(f"[Iteration {self.interaction_count}] Music route: RANDOM (no keyword)")
-                    playback_started = music_player.play_random(None)  # No sink here
-                    if not playback_started:
-                        error_message = "No music available."
-                        self.logger.warning(f"[Iteration {self.interaction_count}] Music failed: {error_message}")
-
-                response_text = ""  # No LLM response for music
-
-                if intent.intent_type == IntentType.MUSIC and not playback_started and title:
-                    setattr(intent, "unresolved", True)
-                    self._safe_speak("I can’t find that track in your library.", interaction_id=self.interaction_id)
-                    output_produced = True
-                    self.release_audio("MUSIC")
-                    self.current_probe.mark("llm_end")
-                    _finalize_response_watchdog()
-                    self._last_utterance_time = time.time()
-                    return True
-
-                # Speak error message only once (if no playback started)
-                if error_message and not playback_started:
-                    # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                    self._safe_speak(error_message, interaction_id=self.interaction_id)
-                    output_produced = True
-
-                # Monitor for interrupt during music playback
-                if playback_started:
-                    self.logger.info(f"[Iteration {self.interaction_count}] Monitoring for interrupt during music...")
-                    self._monitor_music_interrupt(music_player)
-                    output_produced = True
-                else:
-                    self.release_audio("MUSIC")
-
-                self.current_probe.mark("llm_end")
+            music_result = dispatch_music_stage(
+                self, intent, _mark_output_produced, _finalize_response_watchdog
+            )
+            if music_result.routed:
+                output_produced = music_result.output_produced
+                is_music_iteration = music_result.is_music_iteration
+                if music_result.return_interaction:
+                    return music_result.interaction_result
+                response_text = music_result.response_text
             else:
                 # Normal LLM response (watchdog-protected)
                 with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as llm_wd:
                     response_text = self.generator.generate(intent, self.memory)
                 if llm_wd.triggered:
-                    self.logger.warning("[WATCHDOG] LLM exceeded watchdog; using fallback response")
+                    self.logger.warning(
+                        "[WATCHDOG] LLM exceeded watchdog; using fallback response"
+                    )
                     response_text = WATCHDOG_FALLBACK_RESPONSE
                 self.current_probe.mark("llm_end")
-
             # PHASE 16: Capture for observer snapshot
             self._last_response = response_text
 
