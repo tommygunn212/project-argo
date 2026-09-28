@@ -543,7 +543,7 @@ SILENCE_DURATION = 0.8      # Decreased from 1.5
    ```
 
 3. **For premium voices**, consider Deepgram Aura (requires API key):
-   - See [RELEASE_NOTES_v1_0_0_COMPLETE.md](RELEASE_NOTES_v1_0_0_COMPLETE.md#alternative-tts-options)
+   - See the current [architecture](../ARCHITECTURE.md) for supported TTS paths.
 
 ---
 
@@ -863,8 +863,8 @@ asyncio.run(test())
 
 1. **Check console output** for error messages
 2. **Review logs** in `logs/` directory (if available)
-3. **Search** [ISSUES_RESOLVED.md](ISSUES_RESOLVED.md) for your issue
-4. **Check** [RELEASE_NOTES_v1_0_0_COMPLETE.md](RELEASE_NOTES_v1_0_0_COMPLETE.md) for known issues
+3. **Search** [CHANGELOG.md](../CHANGELOG.md) for your issue
+4. **Check** the current [README](../README.md) for known runtime requirements
 5. **File an issue** on GitHub with:
    - Your OS (Windows version)
    - Python version

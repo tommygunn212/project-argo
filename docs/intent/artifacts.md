@@ -411,5 +411,5 @@ A: No. Pure pattern matching. Grammar-based, not neural.
 ## References
 
 - [Whisper Transcription](../transcription/whisper.md) — Audio confirmation
-- [ARGO Architecture](../architecture/architecture.md) — System design
-- Test suite: [test_intent_artifacts.py](../../test_intent_artifacts.py)
+- [ARGO Architecture](../../ARCHITECTURE.md) — System design
+- Test suite: [test_intent_artifacts.py](../../tests/test_intent_artifacts.py)

@@ -275,8 +275,8 @@ When these milestones are authorized, contributions will be invited. Until then,
 Before asking, check:
 1. [README.md](README.md) — System overview
 2. [ARCHITECTURE.md](ARCHITECTURE.md) — Design philosophy
-3. [FAQ.md](FAQ.md) — Common questions
-4. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues
+3. [Documentation index](docs/README.md) — Current technical documentation
+4. [Troubleshooting](docs/TROUBLESHOOTING.md) — Common issues
 
 ---
 

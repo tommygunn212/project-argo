@@ -68,5 +68,4 @@ The goal is not a "smarter" AI. It is an **understandable** AI that you trust be
 ## Key Documents
 
 - **[ARCHITECTURE.md](../../ARCHITECTURE.md)**: Detailed explanation of systems, pipelines, and design rationale
-- **[CODE_REFERENCE.md](../../CODE_REFERENCE.md)**: Function reference and codebase map
 - **[README.md](../../README.md)**: Quick start and usage examples
