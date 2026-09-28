@@ -125,6 +125,7 @@ from core.pipeline_domain_dispatch import dispatch_domain_intent
 from core.pipeline_platform_dispatch import dispatch_platform_intent
 from core.pipeline_music_volume import dispatch_music_volume
 from core.pipeline_music_dispatch import dispatch_music_intent
+from core.pipeline_system_info import dispatch_system_info
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5330,73 +5331,10 @@ class ArgoPipeline(PipelineMemoryMixin):
         ):
             return
 
-        if intent and intent.intent_type == IntentType.SYSTEM_INFO:
-            allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
-            if not allowed:
-                response = f"System information access blocked by policy ({reason})."
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            profile = get_system_profile()
-            gpus = get_gpu_profile()
-            subintent = getattr(intent, "subintent", None)
-            if subintent == "memory":
-                ram_gb = profile.get("ram_gb") if profile else None
-                response = (
-                    f"Your system has {ram_gb} gigabytes of memory."
-                    if ram_gb is not None
-                    else "Hardware information unavailable."
-                )
-            elif subintent == "cpu":
-                cpu_name = profile.get("cpu") if profile else None
-                response = (
-                    f"Your CPU is a {cpu_name}."
-                    if cpu_name
-                    else "Hardware information unavailable."
-                )
-            elif subintent == "gpu":
-                if gpus:
-                    response = f"Your GPU is {gpus[0].get('name')}."
-                else:
-                    response = "No GPU detected."
-            elif subintent == "os":
-                os_name = profile.get("os") if profile else None
-                response = (
-                    f"You are running {os_name}."
-                    if os_name
-                    else "Hardware information unavailable."
-                )
-            elif subintent == "motherboard":
-                board = profile.get("motherboard") if profile else None
-                response = (
-                    f"Your motherboard is {board}."
-                    if board
-                    else "Hardware information unavailable."
-                )
-            else:
-                response = "Hardware information unavailable."
-            self.broadcast("log", f"Argo: {response}")
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        if dispatch_system_info(
+            self, intent, interaction_id, replay_mode, overrides
+        ):
             return
-
         restricted_llm_intents = {
             IntentType.MUSIC,
             IntentType.MUSIC_STOP,
