@@ -75,7 +75,11 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 from core.intent_parser import Intent, IntentType, normalize_system_text, is_system_keyword
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
-from core.coordinator_stages import capture_audio_stage, transcribe_audio_stage
+from core.coordinator_stages import (
+    capture_audio_stage,
+    process_transcript_stage,
+    transcribe_audio_stage,
+)
 from core.policy import (
     LLM_WATCHDOG_SECONDS,
     TTS_WATCHDOG_SECONDS,
@@ -878,95 +882,11 @@ class Coordinator(CoordinatorResponseMixin):
 
             audio_bytes = capture_audio_stage(self, initial_frames=initial_frames)
             text = transcribe_audio_stage(self, audio_bytes)
-            if overrides.get("force_passive_listening"):
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] Passive listening override active; skipping intent/command"
-                )
-                return False
-
-            # Self-echo filter: drop transcripts too similar to last response
-            if self.last_response_text:
-                similarity = self._similarity_ratio(text, self.last_response_text)
-                if similarity >= 0.80:
-                    self.logger.info(
-                        f"[Iteration {self.interaction_count}] "
-                        f"Self-echo detected (similarity={similarity:.2f}); discarding transcript"
-                    )
-                    self.interaction_count -= 1
-                    return False
-
-            # Feedback loop: run/test last built script
-            run_triggers = {"run it", "test it", "run", "test"}
-            if self._last_built_script and text.lower().strip() in run_triggers:
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] Running sandbox script: {self._last_built_script}"
-                )
-                output = self.builder.test_run(self._last_built_script)
-                analysis_intent = Intent(
-                    intent_type=IntentType.DEVELOP,
-                    confidence=1.0,
-                    raw_text=(
-                        f"The script '{self._last_built_script}' was executed. "
-                        f"Output:\n{output}\n" 
-                        f"Summarize the result and suggest next steps."
-                    ),
-                )
-                response_text = self.generator.generate(analysis_intent, self.memory)
-                self._last_response = response_text
-                self.last_response_text = response_text
-                # HARDENING STEP 2: Pass interaction_id to prevent zombie callbacks
-                self._safe_speak(response_text, interaction_id=self.interaction_id)
-                self.memory.append(
-                    user_utterance=text,
-                    parsed_intent=analysis_intent.intent_type.value,
-                    generated_response=response_text,
-                )
-                self._last_utterance_time = time.time()
-                return True
-
-            # Skip if transcription is empty (just silence/noise)
-            if not text or not text.strip():
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] "
-                    f"Empty transcription (silence only), skipping..."
-                )
-                self.interaction_count -= 1
-                return False
-
-            # Early STT quality guard (quality-of-life)
-            stt_metrics = None
-            try:
-                stt_metrics = self.stt.get_last_metrics()
-            except Exception:
-                stt_metrics = None
-            stt_conf = 0.0
-            if stt_metrics:
-                try:
-                    stt_conf = float(stt_metrics.get("confidence", 0.0))
-                except Exception:
-                    stt_conf = 0.0
-            normalized_text = normalize_system_text(text)
-            if normalized_text != text:
-                text = normalized_text
-            if stt_conf < 0.35 or not text.strip():
-                if is_system_keyword(text):
-                    self.logger.info(
-                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but whitelisted system intent: {text}"
-                    )
-                elif re.search(r"\bcount\b", text, flags=re.IGNORECASE):
-                    self.logger.info(
-                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}) but count detected; continuing"
-                    )
-                elif stt_conf < 0.10 or not text.strip():
-                    self.logger.info(
-                        f"[Iteration {self.interaction_count}] Low STT confidence ({stt_conf:.2f}); skipping"
-                    )
-                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
-                        self._safe_speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=self.interaction_id)
-                        self._low_conf_notice_given = True
-                    self.interaction_count -= 1
-                    return False
-
+            transcript_result = process_transcript_stage(self, text, overrides)
+            if not transcript_result.continue_processing:
+                return transcript_result.interaction_result
+            text = transcript_result.text
+            stt_conf = transcript_result.stt_confidence
             # 3. Parse intent
             self.logger.info(
                 f"[Iteration {self.interaction_count}] Parsing intent..."
