@@ -56,7 +56,6 @@ from core.app_control import (
     write_text_to_app,
 )
 from core.app_registry import APP_REGISTRY
-from core.system_volume import get_status as get_system_volume_status, set_volume_percent as set_system_volume_percent, adjust_volume_percent as adjust_system_volume_percent, mute_volume as mute_system_volume, unmute_volume as unmute_system_volume
 from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
 from core.app_registry import get_supported_app_displays, resolve_app_name
 
@@ -93,6 +92,7 @@ from core.streaming_tts_worker import StreamingTTSWorker
 from core.streamed_text_collector import StreamedTextCollector
 from core.pipeline_bluetooth import PipelineBluetoothService
 from core.pipeline_audio_routing import PipelineAudioRoutingService
+from core.pipeline_system_volume import PipelineSystemVolumeService
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -138,6 +138,7 @@ class ArgoPipeline:
         self._writing_responses = PipelineWritingResponseService(self)
         self._bluetooth = PipelineBluetoothService(self)
         self._audio_routing = PipelineAudioRoutingService(self)
+        self._system_volume = PipelineSystemVolumeService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -2361,67 +2362,15 @@ class ArgoPipeline:
         return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
 
     def _is_system_volume_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        if any(term in lowered for term in {"app volume", "application volume", "per app", "per-app"}):
-            return False
-        if any(term in lowered for term in {"headphones", "speaker", "speakers", "device", "monitor"}):
-            return False
-        if "music" in lowered or "song" in lowered:
-            return False
-        return any(term in lowered for term in {"volume", "mute", "unmute", "sound"})
+        return self._system_volume.is_system_volume_text(text)
 
     def _respond_with_system_volume_status(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        allowed, reason = self._evaluate_gates("system_volume", "system_volume", interaction_id)
-        if not allowed:
-            message = f"System volume status blocked by policy ({reason})."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        volume, muted = get_system_volume_status()
-        message = f"System volume is {volume}%. Muted: {'true' if muted else 'false'}."
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._system_volume.respond_status(interaction_id, replay_mode, overrides)
 
     def _respond_with_system_volume_control(self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if not self._is_system_volume_text(user_text):
-            message = "System volume control requires a direct system volume command."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        allowed, reason = self._evaluate_gates("system_volume", "system_volume", interaction_id)
-        if not allowed:
-            message = f"System volume control blocked by policy ({reason})."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        lowered = (user_text or "").lower()
-        prev_volume, prev_muted = get_system_volume_status()
-        ok = False
-        msg = ""
-        new_volume = prev_volume
-        new_muted = prev_muted
-
-        match = re.search(r"set volume to (\d{1,3})%?", lowered)
-        if not match:
-            # Also match "volume 20%" or "volume to 20%"
-            match = re.search(r"\bvolume\s+(?:to\s+)?(\d{1,3})%?", lowered)
-        if match:
-            ok, msg, prev_volume, new_volume, new_muted = set_system_volume_percent(int(match.group(1)))
-        elif re.search(r"\bvolume up\b|\bturn volume up\b|\bincrease volume\b|\braise volume\b|\braise the volume\b|\blouder\b", lowered):
-            ok, msg, prev_volume, new_volume, new_muted = adjust_system_volume_percent(5)
-        elif re.search(r"\bvolume down\b|\bturn volume down\b|\bdecrease volume\b|\blower volume\b|\blower the volume\b|\bquieter\b", lowered):
-            ok, msg, prev_volume, new_volume, new_muted = adjust_system_volume_percent(-5)
-        elif re.search(r"\bmute\b", lowered):
-            ok, msg, prev_volume, new_volume, new_muted = mute_system_volume()
-        elif re.search(r"\bunmute\b", lowered):
-            ok, msg, prev_volume, new_volume, new_muted = unmute_system_volume()
-        else:
-            msg = "System volume control requires an explicit command."
-
-        self.logger.info(
-            f"[SYSTEM_VOLUME] prev={prev_volume} new={new_volume} muted={new_muted}"
+        return self._system_volume.respond_control(
+            user_text, interaction_id, replay_mode, overrides
         )
-        if not ok and msg:
-            return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if ok:
-            response = f"System volume set to {new_volume}%."
-            if new_muted:
-                response = "System volume muted."
-            return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        return self._deliver_canonical_response("System volume command failed.", interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
 
     # =========================================================================
     # WORLD TIME - City/Country to IANA Timezone mapping
