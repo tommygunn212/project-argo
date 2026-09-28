@@ -46,6 +46,10 @@ from core.coordinator_speech import (
     CoordinatorSpeechDependencies,
     speak_without_interrupt_detection,
 )
+from core.coordinator_music_interrupt import (
+    MusicInterruptDependencies,
+    monitor_music_interrupt,
+)
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -883,31 +887,16 @@ class Coordinator:
         Args:
             music_player: MusicPlayer instance to stop on interrupt
         """
-        import time
-        
-        try:
-            self.logger.info("[Music] Monitoring for interrupt...")
-            
-            # Poll while music is playing
-            while music_player.is_playing:
-                try:
-                    # Reuse existing trigger instance to check for interrupt
-                    if self.trigger._check_for_interrupt():
-                        self.logger.warning("[Music] User interrupted! Stopping music...")
-                        music_player.stop()
-                        break
-                except Exception as e:
-                    self.logger.debug(f"[Music] Interrupt check failed: {e}")
-                
-                time.sleep(0.2)  # Check every 200ms
-        
-        except Exception as e:
-            self.logger.error(f"[Music] Monitor error: {e}")
-        finally:
-            try:
-                self.release_audio("MUSIC")
-            except Exception:
-                pass
+        monitor_music_interrupt(
+            MusicInterruptDependencies(
+                is_playing=lambda: music_player.is_playing,
+                check_for_interrupt=self.trigger._check_for_interrupt,
+                stop_music=music_player.stop,
+                release_audio=self.release_audio,
+                sleep=time.sleep,
+                logger=self.logger,
+            )
+        )
 
     def _extract_code_block(self, text: str) -> Optional[str]:
         return extract_code_block(text)
