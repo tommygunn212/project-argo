@@ -77,10 +77,7 @@ import sys
 import os
 import json
 import uuid
-import asyncio
 import logging
-import threading
-import queue
 from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
@@ -123,6 +120,7 @@ from wrapper.replay_context import build_replay_context
 from wrapper.prompt_composition import compose_prompt
 from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
+from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -194,7 +192,7 @@ except ImportError:
 
 # Import Output Sink (Phase 7A-0: Piper TTS integration)
 try:
-    from core.output_sink import get_output_sink, set_output_sink, PiperOutputSink
+    from core.output_sink import get_output_sink
     OUTPUT_SINK_AVAILABLE = True
 except ImportError:
     OUTPUT_SINK_AVAILABLE = False
@@ -276,55 +274,12 @@ PIPER_ENABLED = os.getenv("PIPER_ENABLED", "false").lower() == "true"
 # Audio Output Helper (Async Bridge for CLI)
 # ============================================================================
 
-MAX_VOICE_CHARS = 150
-
-_output_queue: "queue.Queue[str]" = queue.Queue()
-_output_thread: threading.Thread | None = None
-_output_thread_lock = threading.Lock()
-
-
-def _output_worker() -> None:
-    """Background worker to send TTS output without blocking the main loop."""
-    sink = None
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    while True:
-        text = _output_queue.get()
-        if text is None:
-            break
-        if sink is None:
-            try:
-                sink = get_output_sink()
-            except Exception as e:
-                print(f"⚠ Audio output error: {e}", file=sys.stderr)
-                sink = None
-        if sink is None:
-            continue
-        try:
-            loop.run_until_complete(sink.send(text))
-        except Exception as e:
-            print(f"⚠ Audio output error: {e}", file=sys.stderr)
-    try:
-        loop.stop()
-    finally:
-        loop.close()
-
-
-def _start_output_thread() -> None:
-    global _output_thread
-    if _output_thread and _output_thread.is_alive():
-        return
-    if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
-        return
-    with _output_thread_lock:
-        if _output_thread and _output_thread.is_alive():
-            return
-        _output_thread = threading.Thread(
-            target=_output_worker,
-            name="ArgoOutputSink",
-            daemon=True,
-        )
-        _output_thread.start()
+_audio_output_bridge = AudioOutputBridge(
+    get_output_sink if OUTPUT_SINK_AVAILABLE else None,
+    enabled=VOICE_ENABLED,
+    piper_enabled=PIPER_ENABLED,
+    logger=logger,
+)
 
 def _send_to_output_sink(text: str) -> None:
     """
@@ -341,15 +296,7 @@ def _send_to_output_sink(text: str) -> None:
     Args:
         text: Text to send to audio output
     """
-    if not OUTPUT_SINK_AVAILABLE or not VOICE_ENABLED or not PIPER_ENABLED:
-        return  # Audio disabled, text already printed
-
-    spoken_text = text[:MAX_VOICE_CHARS]
-    if len(text) > MAX_VOICE_CHARS:
-        logger.debug(f"Capping voice output: {len(text)} → {MAX_VOICE_CHARS} chars")
-
-    _start_output_thread()
-    _output_queue.put(spoken_text)
+    _audio_output_bridge.send(text)
 
 
 # ============================================================================
