@@ -4845,8 +4845,6 @@ class ArgoPipeline(PipelineMemoryMixin):
             self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
             return
 
-        meaningful_tokens = self._get_meaningful_tokens(user_text)
-        has_interrogative = self._has_interrogative_structure(user_text)
         if self._is_non_propositional_utterance(user_text, request_kind):
             self.logger.info("[LLM] Non-propositional utterance detected; prompting for clarification")
             self._record_timeline("NON_PROPOSITIONAL_GUARD", stage="pipeline", interaction_id=interaction_id)
