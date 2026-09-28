@@ -466,7 +466,10 @@ class ArgoPipeline:
         """Check if response is affirmative (yes, yeah, correct, do it, confirm)."""
         lower_text = text.lower().strip()
         affirmatives = {"yes", "yeah", "yep", "correct", "right", "do it", "confirm", "ok", "okay"}
-        return lower_text in affirmatives or any(a == lower_text[:len(a)] for a in affirmatives)
+        return any(
+            re.match(rf"^{re.escape(affirmative)}\b", lower_text)
+            for affirmative in affirmatives
+        )
 
     def _is_non_propositional_utterance(self, text: str, request_kind: str) -> bool:
         return is_non_propositional_utterance(
