@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Protocol
 
 from tools.filesystem import (
     find_large_files,
@@ -97,4 +98,26 @@ class PipelineInspectionResponseMixin:
         info = get_file_info(path)
         response = format_file_info_for_speech(info)
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+
+class InspectionResponseHost(Protocol):
+    """Small host contract required by vision and filesystem responses."""
+
+    logger: Any
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+
+class PipelineInspectionService(PipelineInspectionResponseMixin):
+    """Composed inspection handlers backed by a narrow pipeline interface."""
+
+    def __init__(self, host: InspectionResponseHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool:
+        return self._host._deliver_canonical_response(message, *args, **kwargs)
 

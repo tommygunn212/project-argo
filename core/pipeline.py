@@ -89,7 +89,7 @@ from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
 from core.pipeline_draft_responses import PipelineDraftResponseMixin
 from core.pipeline_scheduling_responses import PipelineSchedulingResponseMixin
-from core.pipeline_inspection_responses import PipelineInspectionResponseMixin
+from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningMixin
 from core.pipeline_writing_responses import PipelineWritingResponseMixin
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
@@ -112,7 +112,6 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 class ArgoPipeline(
     PipelineWritingResponseMixin,
     PipelineTaskPlanningMixin,
-    PipelineInspectionResponseMixin,
     PipelineSchedulingResponseMixin,
     PipelineDraftResponseMixin,
     PipelineMemoryMixin,
@@ -145,6 +144,7 @@ class ArgoPipeline(
         self._personal_mode_min_confidence = PERSONAL_MODE_MIN_CONFIDENCE
         self._personal_mode_min_text_len = PERSONAL_MODE_MIN_TEXT_LEN
         self._intent_parser = RuleBasedIntentParser()
+        self._inspection_responses = PipelineInspectionService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -288,6 +288,27 @@ class ArgoPipeline(
                 self.strict_lab_mode = bool(self.runtime_overrides["strict_lab_mode"])
             except Exception:
                 pass
+
+    def _respond_with_vision_describe(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_vision_describe(*args, **kwargs)
+
+    def _respond_with_vision_read_error(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_vision_read_error(*args, **kwargs)
+
+    def _respond_with_vision_question(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_vision_question(*args, **kwargs)
+
+    def _respond_with_file_search(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_file_search(*args, **kwargs)
+
+    def _respond_with_file_large(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_file_large(*args, **kwargs)
+
+    def _respond_with_file_recent(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_file_recent(*args, **kwargs)
+
+    def _respond_with_file_info(self, *args, **kwargs):
+        return self._inspection_responses._respond_with_file_info(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""

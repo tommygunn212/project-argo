@@ -1,4 +1,5 @@
 import core.pipeline_inspection_responses as responses
+from core.pipeline import ArgoPipeline
 
 
 class _Logger:
@@ -117,3 +118,48 @@ def test_recent_files_preserves_parsed_time_window(monkeypatch):
     assert _call(pipeline, "_respond_with_file_recent", "recent files") is True
     assert hours_seen == [6]
     assert pipeline.deliveries[0][0] == "none"
+
+
+def test_pipeline_uses_composition_and_preserves_public_handler_facade():
+    assert not issubclass(ArgoPipeline, responses.PipelineInspectionResponseMixin)
+    pipeline = object.__new__(ArgoPipeline)
+    calls = []
+    pipeline._inspection_responses = type(
+        "InspectionDouble",
+        (),
+        {
+            name: (lambda method_name: lambda _self, *args, **kwargs: calls.append(
+                (method_name, args, kwargs)
+            ) or True)(name)
+            for name in (
+                "_respond_with_vision_describe",
+                "_respond_with_vision_read_error",
+                "_respond_with_vision_question",
+                "_respond_with_file_search",
+                "_respond_with_file_large",
+                "_respond_with_file_recent",
+                "_respond_with_file_info",
+            )
+        },
+    )()
+
+    for name in (
+        "_respond_with_vision_describe",
+        "_respond_with_vision_read_error",
+        "_respond_with_vision_question",
+        "_respond_with_file_search",
+        "_respond_with_file_large",
+        "_respond_with_file_recent",
+        "_respond_with_file_info",
+    ):
+        assert getattr(pipeline, name)(None, "text", "id", False, {}) is True
+
+    assert [name for name, _args, _kwargs in calls] == [
+        "_respond_with_vision_describe",
+        "_respond_with_vision_read_error",
+        "_respond_with_vision_question",
+        "_respond_with_file_search",
+        "_respond_with_file_large",
+        "_respond_with_file_recent",
+        "_respond_with_file_info",
+    ]
