@@ -75,6 +75,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 from core.intent_parser import Intent, IntentType, normalize_system_text, is_system_keyword
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
+from core.coordinator_stages import capture_audio_stage, transcribe_audio_stage
 from core.policy import (
     LLM_WATCHDOG_SECONDS,
     TTS_WATCHDOG_SECONDS,
@@ -875,82 +876,8 @@ class Coordinator(CoordinatorResponseMixin):
             if mark_wake:
                 self.current_probe.mark("wake_detected")
 
-            # 1. Record audio with dynamic silence detection
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Recording (max {self.MAX_RECORDING_DURATION}s, stops on {self.SILENCE_DURATION}s silence)..."
-            )
-
-            # TASK 15: Mark recording start
-            self.current_probe.mark("recording_start")
-
-            # GUI Callback: Recording started
-            if self.on_recording_start:
-                try:
-                    self.on_recording_start()
-                except Exception as e:
-                    self.logger.debug(f"[Coordinator] on_recording_start callback error: {e}")
-
-            # Record audio dynamically with silence detection
-            audio = self._record_with_silence_detection(initial_frames=initial_frames)
-
-            # TASK 15: Mark recording end
-            self.current_probe.mark("recording_end")
-
-            # GUI Callback: Recording stopped
-            if self.on_recording_stop:
-                try:
-                    self.on_recording_stop()
-                except Exception as e:
-                    self.logger.debug(f"[Coordinator] on_recording_stop callback error: {e}")
-
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Recorded {len(audio)} samples ({len(audio)/self.AUDIO_SAMPLE_RATE:.2f}s)"
-            )
-
-            # Convert to WAV bytes
-            from scipy.io import wavfile
-            import io
-
-            audio_buffer = io.BytesIO()
-            wavfile.write(audio_buffer, self.AUDIO_SAMPLE_RATE, audio)
-            audio_bytes = audio_buffer.getvalue()
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Audio buffer: {len(audio_bytes)} bytes"
-            )
-
-            # 2. Transcribe audio
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Transcribing audio..."
-            )
-
-            # TASK 15: Mark STT start
-            self.current_probe.mark("stt_start")
-
-            text = self.stt.transcribe(audio_bytes, self.AUDIO_SAMPLE_RATE)
-
-            # PHASE 2A: TRANSCRIPT TRUTH - Log EXACT raw Whisper output
-            # No lowercasing, no cleanup, no token filtering
-            # This is the unmodified truth from Whisper
-            self.logger.info(f"[STT RAW] '{text}'")
-
-            # TASK 15: Mark STT end
-            self.current_probe.mark("stt_end")
-
-            # PHASE 16: Capture for observer snapshot
-            self._last_wake_timestamp = datetime.now()
-            self._last_transcript = text
-
-            # SmartTiming: Set dynamic timeout for next recording based on query type
-            self.dynamic_silence_timeout = self.get_dynamic_timeout(text)
-
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Transcribed: '{text}'"
-            )
-
+            audio_bytes = capture_audio_stage(self, initial_frames=initial_frames)
+            text = transcribe_audio_stage(self, audio_bytes)
             if overrides.get("force_passive_listening"):
                 self.logger.info(
                     f"[Iteration {self.interaction_count}] Passive listening override active; skipping intent/command"
