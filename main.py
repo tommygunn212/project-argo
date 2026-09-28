@@ -59,6 +59,10 @@ from core.frontend_overrides import (
     FrontendOverrideDependencies,
     dispatch_frontend_override,
 )
+from core.frontend_diagnostics import (
+    FrontendDiagnosticsDependencies,
+    dispatch_frontend_diagnostics,
+)
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -481,43 +485,23 @@ async def _handle_diagnostics(websocket):
     
     Phase 1: Detect and explain problems.
     """
-    global diagnostics_ref
-    if repair_service_ref:
-        result = await asyncio.to_thread(repair_service_ref.handle_text, "Run diagnostics")
-        broadcast_msg("recovery_result", result)
-        return
-    
-    try:
-        if diagnostics_ref is None:
-            diagnostics_ref = SystemDiagnostics()
-        
-        # Run all health checks
-        diagnostics_ref.check_all()
-        summary = diagnostics_ref.get_summary()
-        
-        # Send results to UI
-        await websocket.send(json.dumps({
-            "type": "diagnostics_result",
-            "payload": summary
-        }))
-        
-        # Log for visibility
-        log_event(f"DIAGNOSTICS: {summary['summary']}", stage="diagnostics")
-        
-        # If there are errors with recovery actions, propose them
-        if recovery_ref and summary.get("errors"):
-            for error in summary["errors"]:
-                if "recovery_action" in diagnostics_ref.last_check.get(error["name"], {}).__dict__:
-                    action = diagnostics_ref.last_check[error["name"]].recovery_action
-                    if action:
-                        recovery_ref.propose(action, error["message"])
-        
-    except Exception as e:
-        logger.error(f"Diagnostics failed: {e}", exc_info=True)
-        await websocket.send(json.dumps({
-            "type": "diagnostics_result",
-            "payload": {"overall": "error", "summary": f"Diagnostics failed: {e}"}
-        }))
+    def set_diagnostics(value) -> None:
+        global diagnostics_ref
+        diagnostics_ref = value
+
+    await dispatch_frontend_diagnostics(
+        FrontendDiagnosticsDependencies(
+            get_repair_service=lambda: repair_service_ref,
+            get_diagnostics=lambda: diagnostics_ref,
+            set_diagnostics=set_diagnostics,
+            diagnostics_factory=SystemDiagnostics,
+            get_recovery=lambda: recovery_ref,
+            broadcast=broadcast_msg,
+            log_event=log_event,
+            logger=logger,
+        ),
+        websocket,
+    )
 
 
 async def _handle_recovery_response(payload: dict):
