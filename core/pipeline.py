@@ -106,6 +106,7 @@ from core.pipeline_clarification import (
 from core.pipeline_conversation_policy import (
     get_action_risk,
     get_response_style,
+    is_executable_command,
     minimal_ack,
 )
 
@@ -919,38 +920,7 @@ class ArgoPipeline:
         return "Could you please rephrase that?"
 
     def _is_executable_command(self, user_text: str) -> bool:
-        if not user_text:
-            return False
-        text = user_text.strip().lower()
-        tokens = re.findall(r"\w+", text)
-        if not tokens:
-            return False
-        
-        # Volume control patterns (even without action verb prefix)
-        if re.search(r"\bvolume\s+\d{1,3}%?\b", text):  # "volume 50%"
-            return True
-        if re.search(r"\b(lower|raise|increase|decrease)\s+(the\s+)?volume\b", text):  # "lower volume"
-            return True
-        if re.search(r"\b(louder|quieter|mute|unmute)\b", text):  # "louder", "mute"
-            return True
-        
-        action_verbs = {
-            "open", "close", "quit", "exit", "shutdown", "shut", "delete", "run", "start", "stop",
-            "enable", "disable", "install", "remove", "play", "pause", "resume", "next", "skip",
-            "set", "change", "turn", "launch", "mute", "unmute", "lower", "raise",
-        }
-        first = tokens[0]
-        if first not in action_verbs:
-            return False
-        if text.endswith("?"):
-            return False
-        if re.search(r"\b(what|why|how|who|when|where|explain|describe|define)\b", text):
-            return False
-        if re.search(r"\b(would|could|can|should|might|maybe|perhaps|possibly)\b", text):
-            return False
-        if re.search(r"\bwhat happens if\b|\bwhat if\b", text):
-            return False
-        return True
+        return is_executable_command(user_text)
 
     def _has_music_keywords(self, text: str) -> bool:
         if not text:
