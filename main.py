@@ -8,7 +8,6 @@ import websockets
 import json
 import threading
 import logging
-import numpy as np
 import os
 import sys
 import time
@@ -49,9 +48,7 @@ from core.pipeline import ArgoPipeline
 from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
-from core.classic_capture import finish_classic_capture
-from core.classic_barge_in import ClassicBargeInGate
-from core.classic_capture_tracker import CaptureFrameResult, ClassicCaptureTracker
+from core.classic_capture_loop import run_classic_capture_loop
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
@@ -899,7 +896,6 @@ def main_loop():
     barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
 
     # --- AMBIENT NOISE CALIBRATION ---
-    barge_in_gate = ClassicBargeInGate()
     vad_threshold = config_vad_threshold
 
     def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
@@ -934,143 +930,30 @@ def main_loop():
         pipeline.transition_state("IDLE")
         broadcast_msg("status", "IDLE")
     
-    capture = ClassicCaptureTracker()
-    silence_seconds = 0.4
-    POST_TTS_COOLDOWN = 0.75  # seconds to suppress VAD after TTS ends (echo guard)
+    def disable_listening() -> None:
+        global LISTENING_ENABLED
+        LISTENING_ENABLED = False
 
-    def runtime_float(key: str, default: float, minimum: float, maximum: float) -> float:
-        try:
-            value = float(RUNTIME_OVERRIDES.get(key, default))
-        except (TypeError, ValueError):
-            value = default
-        return max(minimum, min(maximum, value))
-    
-    while SERVER_ENABLED:
-        if pipeline.illegal_transition:
-            LISTENING_ENABLED = False
-            time.sleep(0.1)
-            continue
-        if not LISTENING_ENABLED:
-            time.sleep(0.1)
-            continue
-        frame = audio.read_frame()
-        if frame is None:
-            continue
-            
-        # VAD Logic
-        # Frame is float32. L2 Norm of 512 samples.
-        volume = np.linalg.norm(frame) * 10
-        active_vad_threshold = runtime_float("vad_threshold", vad_threshold, 0.001, 20.0)
-        active_barge_in_threshold = runtime_float("barge_in_threshold", barge_in_threshold, 0.001, 30.0)
-        active_silence_seconds = runtime_float("silence_seconds", silence_seconds, 0.1, 5.0)
-        active_silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * active_silence_seconds)
-        
-        owner = audio.get_audio_owner() if audio else "NONE"
-        try:
-            from core.music_player import get_music_player
-            music_playing = get_music_player().is_playing()
-        except Exception:
-            music_playing = False
-        passive_listen = owner not in ("NONE", "STT", "MUSIC")
-        if owner == "MUSIC" and music_playing:
-            passive_listen = False
-
-        # Trigger Recording (only when LISTENING to avoid illegal transitions)
-        # Echo guard: suppress VAD for a short cooldown after TTS finishes
-        in_echo_cooldown = (time.time() - pipeline.tts_finished_at) < POST_TTS_COOLDOWN
-        if (
-            not passive_listen
-            # Smooth Voice owns the microphone: the browser is already
-            # publishing this same audio to the realtime model, so recording
-            # it here would be ARGO listening to herself.
-            and VOICE_MODE != VOICE_MODE_SMOOTH
-            and not pipeline.is_speaking
-            and not capture.is_recording
-            and not in_echo_cooldown
-            and volume >= active_vad_threshold
-            and pipeline.current_state == "LISTENING"
-        ):
-            interaction_id = str(uuid.uuid4())
-            logger.info(f"[VAD] Speech detected (volume: {volume:.2f}, threshold: {active_vad_threshold})")
-            log_event(
-                f"VAD_START rms={volume:.2f} threshold={active_vad_threshold}",
-                stage="vad",
-                interaction_id=interaction_id,
-            )
-            sound_cues.set_capture_active(True)
-            preroll = audio.get_preroll()
-            capture.begin(interaction_id, preroll)
-            pipeline.transition_state("TRANSCRIBING", interaction_id=interaction_id)
-        
-        # --- BARGE-IN: If speech detected during TTS ---
-        # Skip barge-in if temporarily suppressed (for short deterministic responses like time queries)
-        # Echo-aware: Raise barge-in threshold during TTS to prevent self-hearing triggers.
-        # Speaker echo is typically 1-2x the normal VAD threshold; real human voice close to mic is 3-5x.
-        barge_in_suppressed = pipeline.is_barge_in_suppressed() if hasattr(pipeline, 'is_barge_in_suppressed') else False
-        barge_in = barge_in_gate.evaluate(
-            now=time.time(),
-            is_speaking=pipeline.is_speaking,
-            volume=volume,
-            threshold=active_barge_in_threshold,
-            enabled=RUNTIME_OVERRIDES.get("barge_in_enabled", True),
-            suppressed=barge_in_suppressed,
-        )
-        if barge_in.pending:
-            continue
-        if barge_in.triggered:
-            allowed = pipeline.current_state == "SPEAKING"
-            logger.info(f"!!! BARGE-IN TRIGGERED: Interrupting TTS (rms={volume:.2f}, threshold={barge_in.effective_threshold:.2f}) !!!")
-            log_event(
-                f"BARGE_IN rms={volume:.2f} threshold={barge_in.effective_threshold:.2f} stage={pipeline.current_state} allowed={allowed}",
-                stage="audio",
-                interaction_id=pipeline.current_interaction_id,
-            )
-            broadcast_msg("barge_in", {
-                "interaction_id": pipeline.current_interaction_id,
-                "rms": float(volume),
-                "threshold": float(barge_in.effective_threshold),
-                "stage": str(pipeline.current_state),
-                "allowed": bool(allowed),
-            })
-            _interrupt_current_response("BARGE_IN", target_state="LISTENING")
-            
-            # Reset state to listen to new command
-            if not capture.is_recording:
-                sound_cues.set_capture_active(True)
-                preroll = audio.get_preroll()
-            else:
-                preroll = ()
-            capture.begin_barge_in(preroll)
-
-        if capture.is_recording and not passive_listen:
-            capture_result = capture.observe(
-                frame,
-                volume=volume,
-                voice_threshold=active_vad_threshold,
-                silence_limit=active_silence_threshold,
-                frame_ms=(BLOCK_SIZE / INPUT_SAMPLE_RATE) * 1000,
-            )
-            if capture_result is CaptureFrameResult.PREMATURE_SILENCE:
-                logger.debug(f"[VAD] Ignoring premature VAD_END (voiced_ms={capture.voiced_ms:.1f})")
-                continue
-            if capture_result is CaptureFrameResult.COMPLETE:
-                log_event("VAD_END", stage="vad", interaction_id=capture.interaction_id)
-                sound_cues.set_capture_active(False)
-                sound_cues.play("listening_end", interaction_id=capture.interaction_id, block=True)
-
-                finish_classic_capture(
-                    capture.speech_buffer,
-                    audio=audio,
-                    pipeline=pipeline,
-                    interaction_id=capture.interaction_id,
-                    voice_mode=VOICE_MODE,
-                    smooth_voice_mode=VOICE_MODE_SMOOTH,
-                    next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
-                    sound_cues=sound_cues,
-                    logger=logger,
-                    event_logger=log_event,
-                )
-                capture.mark_dispatched()
+    run_classic_capture_loop(
+        audio=audio,
+        pipeline=pipeline,
+        get_server_enabled=lambda: SERVER_ENABLED,
+        get_listening_enabled=lambda: LISTENING_ENABLED,
+        disable_listening=disable_listening,
+        get_voice_mode=lambda: VOICE_MODE,
+        smooth_voice_mode=VOICE_MODE_SMOOTH,
+        runtime_overrides=RUNTIME_OVERRIDES,
+        input_sample_rate=INPUT_SAMPLE_RATE,
+        block_size=BLOCK_SIZE,
+        vad_threshold=vad_threshold,
+        barge_in_threshold=barge_in_threshold,
+        broadcast=broadcast_msg,
+        interrupt_current_response=_interrupt_current_response,
+        next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
+        sound_cues=sound_cues,
+        logger=logger,
+        event_logger=log_event,
+    )
 
 if __name__ == "__main__":
     # Engine selection/loading belongs to STTEngineManager. The former local
