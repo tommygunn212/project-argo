@@ -87,22 +87,14 @@ from pathlib import Path
 from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
-    detect_context,
     detect_recall_query,
     format_recall_response,
-    get_confidence_instruction,
 )
 from wrapper.behavior_policy import (
     FAMILIARITY_STATE,
-    build_behavior_instruction,
-    build_casual_humor_instruction,
     classify_query_type,
+    build_casual_humor_instruction,
     detect_plausible_hallucination,
-    get_familiarity_level,
-    infer_canonical_knowledge,
-    is_casual_question,
-    select_behavior_profile,
-    select_primary_frame,
     should_inject_observational_humor,
     update_familiarity,
     validate_human_first_sentence,
@@ -112,9 +104,6 @@ from wrapper.behavior_policy import (
 from wrapper.cli_policy import (
     classify_input,
     classify_verbosity,
-    get_cli_formatting_suppression,
-    get_persona_text,
-    get_verbosity_text,
     validate_cli_format,
 )
 from wrapper.preflight import (
@@ -125,6 +114,7 @@ from wrapper.preflight import (
 )
 from wrapper.ollama_generation import generate_ollama_response
 from wrapper.replay_context import build_replay_context
+from wrapper.prompt_composition import compose_prompt
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -137,9 +127,8 @@ try:
 except ImportError:
     pass  # dotenv optional; use system environment variables if not installed
 
-# Import Phase 4D drift monitor
+# Preserve direct-script imports of project-level packages.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from system.runtime.drift_monitor import get_drift_monitor
 
 # Import Argo Memory (RAG-based interaction recall)
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1472,138 +1461,26 @@ def _run_argo_internal(
     replay_policy = replay_context.policy
     context_strength = replay_context.context_strength
 
-    # ________________________________________________________________________
-    # Step 1.5: CLI Context Guard (Suppress GUI Explanations)
-    # ________________________________________________________________________
-    
-    # In CLI context (headless execution), suppress GUI-specific explanations
-    execution_context = detect_context()
-    if execution_context == "cli":
-        context_strength = "weak"  # Force minimal explanations in headless mode
-    
-    # ________________________________________________________________________
-    # Step 1.6: Phase 4C Behavior Selection
-    # ________________________________________________________________________
-    
-    query_type = classify_query_type(user_input)
-    has_canonical_knowledge = infer_canonical_knowledge(user_input)
-    behavior_profile = select_behavior_profile(query_type, context_strength, has_canonical_knowledge)
-    
-    # ________________________________________________________________________
-    # Step 1.7: Phase 5A Judgment Gate (Single-Frame Selection)
-    # ________________________________________________________________________
-    
-    # PATCH 5B.2: Pass is_casual_q to select_primary_frame for frame correction
-    is_casual_q = is_casual_question(user_input)  # Detect early for frame selection
-    primary_frame = select_primary_frame(query_type, context_strength, is_casual_q)
-    
-    # ________________________________________________________________________
-    # Step 1.8: Phase 5B Familiarity Check & Phase 5B.2 Casual Question Detection
-    # ________________________________________________________________________
-    
-    familiarity_level = get_familiarity_level()
-    # is_casual_q already detected in Step 1.7 for frame correction
-    
-    # ________________________________________________________________________
-    # Step 1.9: Build behavior instruction with frame & personality enforcement
-    # ________________________________________________________________________
-    
-    behavior_instruction = build_behavior_instruction(behavior_profile, execution_context, has_canonical_knowledge, primary_frame, familiarity_level, user_input, is_casual_q, voice_mode)
-    
-    # Phase 4C may override verbosity classification
-    if behavior_profile["verbosity_override"]:
-        classified_verbosity = behavior_profile["verbosity_override"]
-    
-    # ________________________________________________________________________
-    # Step 1.9: Phase 4D Pre-Generation Honesty Enforcement
-    # ________________________________________________________________________
-    
-    drift_monitor = get_drift_monitor()
-    
-    # Check if we should enforce uncertainty
-    query_demands_certainty = query_type == "factual" or query_type == "instructional"
-    uncertainty_enforcement = drift_monitor.check_preconditions_uncertainty(
-        query_type=query_type,
-        has_canonical_knowledge=has_canonical_knowledge,
-        query_demands_certainty=query_demands_certainty,
+    prompt = compose_prompt(
+        user_input=user_input,
+        active_mode=active_mode,
+        persona=persona,
+        classified_verbosity=classified_verbosity,
+        context_strength=context_strength,
+        replay_block=replay_block,
+        voice_mode=voice_mode,
+        mode_enforcement=MODE_ENFORCEMENT,
     )
-    
-    # Get current corrective behavior overrides (from drift signals)
-    drift_corrections = drift_monitor.apply_corrections()
-    
-    # Apply drift corrections to behavior profile
-    if drift_corrections.get("force_verbosity"):
-        classified_verbosity = drift_corrections["force_verbosity"]
-    if drift_corrections.get("force_explanation_depth"):
-        behavior_profile["explanation_depth"] = drift_corrections["force_explanation_depth"]
-    
-    # ________________________________________________________________________
-    # Step 2: Build final prompt
-    # ________________________________________________________________________
-    
-    # Get persona text (may be empty for neutral)
-    persona_text = get_persona_text(persona)
-    
-    # Get verbosity text (always present: either concise or detailed instruction)
-    verbosity_text = get_verbosity_text(classified_verbosity)
-    
-    # Get CLI formatting suppression (if any)
-    cli_formatting_text = get_cli_formatting_suppression(execution_context)
-    
-    # Get confidence instruction based on context strength
-    confidence_text = get_confidence_instruction(context_strength)
-    
-    # Get uncertainty enforcement if applicable
-    uncertainty_text = ""
-    if uncertainty_enforcement:
-        uncertainty_text = (
-            "You lack canonical knowledge on this topic. "
-            "Provide only what you can verify. "
-            f"Required phrasing: {uncertainty_enforcement['require_phrases'][0]}. "
-            f"Prohibited: {', '.join(uncertainty_enforcement['prohibit_phrases'])}. "
-            "Declare gaps explicitly."
-        )
-    
-    # Build prompt: mode enforcement (if any) -> persona (if any) -> behavior -> uncertainty (if any) -> verbosity -> cli formatting (if any) -> confidence -> replay -> user input
-    prompt_parts = []
-    
-    # SYSTEM OVERRIDE: Inject confidence-first bias as an ironclad first-line constraint
-    # When trusted + casual, this MUST be the very first thing the model processes
-    if familiarity_level == "trusted" and is_casual_q:
-        prompt_parts.append(
-            "RESPOND ACCORDING TO THIS CONSTRAINT, NO EXCEPTIONS:\n\n"
-            "Your first sentence must be a direct claim about causation.\n"
-            "Your first sentence MUST start with exactly one of these:\n"
-            "1. \"People do this because\"\n"
-            "2. \"What's really happening is\"\n"
-            "3. \"This happens because\"\n\n"
-            "Your first sentence MUST NOT start with any of these:\n"
-            "- \"The phenomenon\"\n"
-            "- \"This behavior\"\n"
-            "- \"In humans\"\n"
-            "- \"This can be attributed\"\n"
-            "- \"Research suggests\"\n\n"
-            "After you answer the first sentence, you can explain as needed.\n"
-            "But DO NOT open with academic framing or neutral exposition.\n"
-            "Stay in human voice from the first word."
-        )
-    
-    if active_mode:
-        prompt_parts.append(MODE_ENFORCEMENT)
-    if persona_text:
-        prompt_parts.append(persona_text)
-    prompt_parts.append(behavior_instruction)
-    if uncertainty_text:
-        prompt_parts.append(uncertainty_text)
-    prompt_parts.append(verbosity_text)
-    if cli_formatting_text:
-        prompt_parts.append(cli_formatting_text)
-    prompt_parts.append(confidence_text)
-    if replay_block:
-        prompt_parts.append(replay_block.rstrip())
-    prompt_parts.append(user_input)
-    
-    full_prompt = "\n\n".join(prompt_parts).encode("utf-8")
+    full_prompt = prompt.full_prompt
+    classified_verbosity = prompt.classified_verbosity
+    execution_context = prompt.execution_context
+    query_type = prompt.query_type
+    has_canonical_knowledge = prompt.has_canonical_knowledge
+    behavior_profile = prompt.behavior_profile
+    is_casual_q = prompt.is_casual_question
+    primary_frame = prompt.primary_frame
+    drift_monitor = prompt.drift_monitor
+    uncertainty_enforcement = prompt.uncertainty_enforcement
 
     # ________________________________________________________________________
     # ________________________________________________________________________
