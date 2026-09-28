@@ -130,6 +130,7 @@ from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
 from core.pipeline_conversation_gates import dispatch_conversation_gate
+from core.pipeline_confidence_gate import apply_confidence_gate
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -4762,86 +4763,12 @@ class ArgoPipeline(PipelineMemoryMixin):
             return
 
         request_kind = self._classify_request_kind(user_text)
-        filler_match = re.fullmatch(
-            r"(okay\.?\s*)+|\.+", user_text, flags=re.IGNORECASE
+        confidence_result = apply_confidence_gate(
+            self, user_text, stt_conf, early_intent, interaction_id
         )
-        if not self.strict_lab_mode:
-            compact_len = len(re.sub(r"\s+", "", user_text))
-            low_conf_guard = stt_conf < self._personal_mode_min_confidence
-            short_text_guard = compact_len < self._personal_mode_min_text_len
-            if low_conf_guard or short_text_guard:
-                early_intent = None
-                try:
-                    early_intent = self._intent_parser.parse(user_text)
-                except Exception:
-                    early_intent = None
-                if early_intent and self._allow_low_conf_music_command(early_intent, user_text):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but executable music command; continuing"
-                    )
-                elif early_intent and early_intent.intent_type == IntentType.APP_LAUNCH and self._is_executable_command(user_text):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but executable app launch; continuing"
-                    )
-                elif (
-                    early_intent
-                    and early_intent.intent_type == IntentType.APP_CONTROL
-                    and getattr(early_intent, "action", None) == "close"
-                    and self._is_executable_command(user_text)
-                ):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but executable app close; continuing"
-                    )
-                elif re.match(r"^(close|quit|exit|shut down|shutdown)\b", user_text.strip().lower()):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but explicit close command; continuing"
-                    )
-                elif user_text.strip().endswith("?") or re.match(r"^(what|why|how|who|when|where)\b", user_text.strip().lower()):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but explicit question; continuing"
-                    )
-                elif re.match(r"^count\b", user_text.strip().lower()):
-                    self.logger.info(
-                        "[PERSONAL_MODE] Low confidence but explicit count command; continuing"
-                    )
-                else:
-                    self.logger.warning(
-                        "[PERSONAL_MODE] Guarded utterance len=%s conf=%.2f thresholds(len=%s, conf=%.2f)",
-                        compact_len,
-                        stt_conf,
-                        self._personal_mode_min_text_len,
-                        self._personal_mode_min_confidence,
-                    )
-                    self._record_timeline("PERSONAL_LOW_CONF_GUARD", stage="pipeline", interaction_id=interaction_id)
-
-        if self.strict_lab_mode:
-            if stt_conf < 0.30 or filler_match:
-                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or filler; skipping")
-                if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
-                    self.speak("I didn’t catch that. Try a complete question.", interaction_id=interaction_id)
-                    self._low_conf_notice_given = True
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-            if stt_conf < 0.35 or not user_text.strip():
-                user_text_lower = user_text.lower()
-                if is_system_keyword(user_text):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
-                elif re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
-                elif re.search(r"\bvolume\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but volume intent detected; continuing")
-                elif re.search(r"\b(remember|save this|from now on|memory|forget)\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but memory intent detected; continuing")
-                elif any(term in user_text_lower for term in {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but stop intent detected; continuing")
-                elif stt_conf < 0.15 or not user_text.strip():
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
-                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
-                        self.speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=interaction_id)
-                        self._low_conf_notice_given = True
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-
+        early_intent = confidence_result.intent
+        if confidence_result.handled:
+            return
         # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
         from core.canonical_answers import get_canonical_answer
         topic, matched = self._classify_canonical_topic(user_text)
