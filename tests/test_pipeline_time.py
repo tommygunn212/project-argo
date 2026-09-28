@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from core.pipeline_time import LOCATION_TO_TIMEZONE, PipelineTimeService
+from core.pipeline_time import LOCATION_TO_TIMEZONE, PipelineTimeService, TimeDependencies
 
 
 class Host:
@@ -19,8 +19,18 @@ def fixed_now(tz=None):
     return current.astimezone(tz) if tz else current
 
 
+def service_for(host):
+    return PipelineTimeService(
+        TimeDependencies(
+            logger=host.logger,
+            deliver_response=host._deliver_canonical_response,
+        ),
+        now=fixed_now,
+    )
+
+
 def test_time_status_uses_injected_clock():
-    service = PipelineTimeService(Host(), now=fixed_now)
+    service = service_for(Host())
 
     assert service.format_time_status(None) == "It's 12:34 PM."
     assert service.format_time_status("day") == "Today is Monday."
@@ -28,14 +38,14 @@ def test_time_status_uses_injected_clock():
 
 
 def test_world_time_uses_known_location_and_injected_clock():
-    service = PipelineTimeService(Host(), now=fixed_now)
+    service = service_for(Host())
 
     assert LOCATION_TO_TIMEZONE["tokyo"] == "Asia/Tokyo"
     assert service.format_world_time("Tokyo") == "It's 9:34 PM in Tokyo."
 
 
 def test_unknown_world_time_location_is_deterministic():
-    service = PipelineTimeService(Host(), now=fixed_now)
+    service = service_for(Host())
 
     assert service.format_world_time("Qwerty") == (
         "I don't have timezone data for Qwerty. Try a major city name."
@@ -43,7 +53,7 @@ def test_unknown_world_time_location_is_deterministic():
 
 
 def test_short_timezone_alias_does_not_match_inside_unknown_location():
-    service = PipelineTimeService(Host(), now=fixed_now)
+    service = service_for(Host())
 
     assert service.format_world_time("Atlantis") == (
         "I don't have timezone data for Atlantis. Try a major city name."
@@ -51,14 +61,14 @@ def test_short_timezone_alias_does_not_match_inside_unknown_location():
 
 
 def test_known_location_can_still_match_inside_a_phrase():
-    service = PipelineTimeService(Host(), now=fixed_now)
+    service = service_for(Host())
 
     assert service.format_world_time("time in Tokyo") == "It's 9:34 PM in Time In Tokyo."
 
 
 def test_time_response_preserves_barge_in_suppression():
     host = Host()
-    service = PipelineTimeService(host, now=fixed_now)
+    service = service_for(host)
 
     assert service.respond_time_status(
         SimpleNamespace(subintent="day"), "id", False, None

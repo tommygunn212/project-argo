@@ -77,7 +77,11 @@ from core.pipeline_system_volume import (
     SystemVolumeDependencies,
 )
 from core.pipeline_apps import PipelineAppService
-from core.pipeline_time import LOCATION_TO_TIMEZONE as TIMEZONE_MAP, PipelineTimeService
+from core.pipeline_time import (
+    LOCATION_TO_TIMEZONE as TIMEZONE_MAP,
+    PipelineTimeService,
+    TimeDependencies,
+)
 from core.pipeline_request_classifier import (
     classify_request_kind,
     classify_request_type,
@@ -210,7 +214,12 @@ class ArgoPipeline:
             )
         )
         self._apps = PipelineAppService(self)
-        self._time_responses = PipelineTimeService(self)
+        self._time_responses = PipelineTimeService(
+            TimeDependencies(
+                logger=self.logger,
+                deliver_response=self._deliver_canonical_response,
+            )
+        )
         self._streaming_responses = PipelineStreamingResponseService(self)
         self._response_generation = PipelineResponseGenerationService(self)
         self._last_stt_metrics = None

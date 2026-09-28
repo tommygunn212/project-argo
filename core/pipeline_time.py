@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 
@@ -46,19 +47,19 @@ LOCATION_TO_TIMEZONE = {
 }
 
 
-class TimeHost(Protocol):
+@dataclass(frozen=True)
+class TimeDependencies:
     logger: Any
-
-    def _deliver_canonical_response(self, *args, **kwargs) -> bool: ...
+    deliver_response: Callable[..., bool]
 
 
 class PipelineTimeService:
     def __init__(
         self,
-        host: TimeHost,
+        dependencies: TimeDependencies,
         now: Callable[..., datetime] = datetime.now,
     ) -> None:
-        self._host = host
+        self._dependencies = dependencies
         self._now = now
 
     def format_world_time(self, location: str) -> str:
@@ -81,7 +82,9 @@ class PipelineTimeService:
             time_text = current.strftime("%I:%M %p").lstrip("0")
             return f"It's {time_text} in {location.title()}."
         except Exception as exc:
-            self._host.logger.error(f"[WORLD_TIME] Error getting time for {location}: {exc}")
+            self._dependencies.logger.error(
+                f"[WORLD_TIME] Error getting time for {location}: {exc}"
+            )
             return f"Couldn't get the time for {location}."
 
     def respond_world_time(
@@ -112,7 +115,7 @@ class PipelineTimeService:
         )
 
     def _deliver(self, message, interaction_id, replay_mode, overrides) -> bool:
-        return self._host._deliver_canonical_response(
+        return self._dependencies.deliver_response(
             message,
             interaction_id,
             replay_mode,
