@@ -51,6 +51,10 @@ from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture_loop import run_classic_capture_loop
 from core.classic_main_runtime import ClassicMainRuntime, run_classic_main_runtime
 from core.frontend_text_input import FrontendTextDependencies, dispatch_frontend_text
+from core.frontend_websocket import (
+    FrontendWebSocketDependencies,
+    serve_frontend_websocket,
+)
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -285,80 +289,29 @@ async def send_to_clients(msg):
             connected_clients.discard(ws)
 
 async def websocket_handler(websocket):
-    connected_clients.add(websocket)
-    try:
-        # Immediately sync status on connection so UI doesn't stay "Initializing"
-        await websocket.send(json.dumps({"type": "status", "payload": CURRENT_STATUS}))
-        await websocket.send(json.dumps({"type": "config", "payload": {"hash": get_config_hash()}}))
-        await websocket.send(json.dumps({"type": "runtime_overrides", "payload": get_runtime_overrides()}))
-        await websocket.send(json.dumps({"type": "audio_owner", "payload": {"owner": "UNKNOWN", "contested": False}}))
-        await websocket.send(json.dumps({"type": "db_status", "payload": get_db_status(MUSIC_DB_PATH)}))
-
-        # Sync model info for late-joining UIs (avoid "Unknown")
-        if pipeline_ref:
-            try:
-                stt_name = getattr(pipeline_ref, "stt_model_name", "unknown")
-                if stt_name and stt_name != "unknown":
-                    await websocket.send(json.dumps({"type": "log", "payload": f"Loading Whisper Model: {stt_name}..."}))
-                if getattr(pipeline_ref, "stt_model", None) is not None:
-                    await websocket.send(json.dumps({"type": "log", "payload": "STT model warmed up"}))
-
-                llm_name = getattr(pipeline_ref, "llm_model_name", "unknown")
-                if llm_name and llm_name != "unknown":
-                    await websocket.send(json.dumps({"type": "log", "payload": "LLM model warmed up"}))
-
-                voice_key = getattr(pipeline_ref, "current_voice_key", None)
-                if voice_key:
-                    await websocket.send(json.dumps({"type": "log", "payload": f"Voice switched to {voice_key}"}))
-
-                # Send active engine config so frontend dropdowns sync with backend
-                engine_config = {
-                    "tts_engine": getattr(pipeline_ref, "_tts_engine", "edge"),
-                    "tts_model": getattr(pipeline_ref, "_tts_model", "tts-1"),
-                    "tts_voice": getattr(pipeline_ref, "current_voice_key", "nova"),
-                }
-                await websocket.send(json.dumps({"type": "engine_config", "payload": engine_config}))
-            except Exception:
-                pass
-
-        async for message in websocket:
-            try:
-                data = json.loads(message)
-            except Exception:
-                continue
-            msg_type = data.get("type")
-            payload = data.get("payload")
-            if msg_type == "set_voice" and pipeline_ref:
-                pipeline_ref.set_voice(payload)
-            if msg_type == "replay" and pipeline_ref and payload:
-                t = threading.Thread(target=pipeline_ref.replay_interaction, args=(payload,), daemon=True)
-                t.start()
-            if msg_type == "text_input" and pipeline_ref and payload:
-                _handle_text_input(payload)
-            if msg_type == "run_diagnostics":
-                await _handle_diagnostics(websocket)
-            if msg_type == "recovery_response" and payload:
-                await _handle_recovery_response(payload)
-            if msg_type == "code_repair_request" and isinstance(payload, dict):
-                await asyncio.to_thread(_handle_code_repair_request, payload)
-            if msg_type == "code_repair_response" and payload:
-                await asyncio.to_thread(_handle_code_repair_response, payload)
-            if msg_type == "code_repair_status" and code_repair_ref:
-                await websocket.send(json.dumps({"type": "code_repair_jobs", "payload": code_repair_ref.snapshot()}))
-            if msg_type == "code_repair_apply" and isinstance(payload, dict) and code_repair_ref:
-                result = await asyncio.to_thread(code_repair_ref.apply_if_approved,
-                    payload.get("action_id"), payload.get("patch_sha256"), payload.get("approved"))
-                broadcast_msg("code_repair_result", result)
-            if msg_type == "control" and payload:
-                _handle_control(payload)
-            if msg_type == "override" and payload:
-                _handle_override(payload)
-            if msg_type == "next_override" and payload:
-                _handle_next_override(payload)
-            if msg_type == "clear_overrides":
-                _handle_clear_overrides()
-    finally:
-        connected_clients.discard(websocket)
+    await serve_frontend_websocket(
+        websocket,
+        FrontendWebSocketDependencies(
+            connected_clients=connected_clients,
+            get_current_status=lambda: CURRENT_STATUS,
+            get_config_hash=get_config_hash,
+            get_runtime_overrides=get_runtime_overrides,
+            get_database_status=lambda: get_db_status(MUSIC_DB_PATH),
+            get_pipeline=lambda: pipeline_ref,
+            get_code_repair=lambda: code_repair_ref,
+            handle_text_input=_handle_text_input,
+            handle_diagnostics=_handle_diagnostics,
+            handle_recovery_response=_handle_recovery_response,
+            handle_code_repair_request=_handle_code_repair_request,
+            handle_code_repair_response=_handle_code_repair_response,
+            handle_control=_handle_control,
+            handle_override=_handle_override,
+            handle_next_override=_handle_next_override,
+            handle_clear_overrides=_handle_clear_overrides,
+            broadcast=broadcast_msg,
+            thread_factory=threading.Thread,
+        ),
+    )
 
 
 def _run_noise_calibration():
