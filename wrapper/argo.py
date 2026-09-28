@@ -125,6 +125,7 @@ from wrapper.transcription_workflow import (
     transcribe_with_confirmation,
 )
 from wrapper.execution_workflow import ExecutionWorkflow, execute_approved_plan
+from wrapper.dry_run_workflow import DryRunWorkflow, simulate_with_confirmation
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
@@ -803,65 +804,16 @@ def dry_run_and_confirm(plan_artifact: ExecutionPlanArtifact) -> tuple:
                 # Ready for v1.4.0 actual execution
                 execute_plan_for_real(plan, report)
     """
-    if not EXECUTION_ENGINE_AVAILABLE:
-        print("⚠ Execution engine (v1.3.0) not available.", file=sys.stderr)
-        return False, None
-    
-    # Initialize execution engine
-    engine = ExecutionEngine()
-    
-    # Simulate execution (NO REAL CHANGES)
-    report = engine.dry_run(
-        plan=plan_artifact,
-        intent_id=getattr(plan_artifact, 'intent_id', None),
-        transcription_id=getattr(plan_artifact, 'transcription_id', None)
+    return simulate_with_confirmation(
+        DryRunWorkflow(
+            engine_available=EXECUTION_ENGINE_AVAILABLE,
+            engine_factory=(
+                ExecutionEngine if EXECUTION_ENGINE_AVAILABLE else None
+            ),
+            read_confirmation=input,
+        ),
+        plan_artifact,
     )
-    
-    # Display dry-run results
-    print(f"\n{'='*70}", file=sys.stderr)
-    print(f"DRY-RUN SIMULATION RESULTS", file=sys.stderr)
-    print(f"{'='*70}", file=sys.stderr)
-    print(f"\n{report.summary()}", file=sys.stderr)
-    print(f"\n{'='*70}", file=sys.stderr)
-    
-    # Risk warnings
-    if report.highest_risk_detected == "critical":
-        print(f"🚨 CRITICAL RISK: This plan has irreversible actions.", file=sys.stderr)
-        print(f"   Proceed only if you understand the consequences.", file=sys.stderr)
-    elif report.highest_risk_detected == "risky":
-        print(f"⚠️  RISKY: Partial rollback available if execution fails.", file=sys.stderr)
-    elif report.highest_risk_detected == "cautious":
-        print(f"ℹ️  CAUTION: Plan is fully reversible but changes system state.", file=sys.stderr)
-    
-    if not report.execution_feasible:
-        print(f"\n❌ EXECUTION NOT FEASIBLE: {report.blocking_reason}", file=sys.stderr)
-        print(f"   Simulation indicates this plan cannot be executed safely.", file=sys.stderr)
-        return False, report
-    
-    # Approval request
-    print(f"\n{'='*70}", file=sys.stderr)
-    if report.highest_risk_detected == "safe":
-        print(f"Approve execution of this plan? (yes/no): ", end="", file=sys.stderr)
-    else:
-        print(f"⚠️  Execute despite {report.highest_risk_detected} risk? (yes/no): ", end="", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # Get user approval
-    try:
-        response = input().strip().lower()
-    except EOFError:
-        # Piped input: assume no approval
-        response = "no"
-    
-    # Process approval
-    if response in ["yes", "y", "yep", "yeah", "ok", "sure"]:
-        report.user_approved_execution = True
-        print(f"✅ Execution approved. Ready for real execution (v1.4.0+).\n", file=sys.stderr)
-        return True, report
-    else:
-        report.user_approved_execution = False
-        print(f"❌ Execution rejected. Plan will not be executed.\n", file=sys.stderr)
-        return False, report
 
 
 def execute_and_confirm(
