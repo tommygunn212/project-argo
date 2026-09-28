@@ -131,6 +131,7 @@ from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
 from core.pipeline_conversation_gates import dispatch_conversation_gate
 from core.pipeline_confidence_gate import apply_confidence_gate
+from core.pipeline_canonical_stage import run_canonical_stage
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -4769,82 +4770,18 @@ class ArgoPipeline(PipelineMemoryMixin):
         early_intent = confidence_result.intent
         if confidence_result.handled:
             return
-        # CANONICAL INTERCEPTION: Classify and intercept before any LLM routing
-        from core.canonical_answers import get_canonical_answer
-        topic, matched = self._classify_canonical_topic(user_text)
-        if topic == "SYSTEM_HEALTH":
-            self.logger.info(f"[CANONICAL] SYSTEM_HEALTH matched keywords: {sorted(matched)} | LLM BYPASSED")
-            if self._respond_with_system_health(user_text, None, interaction_id, replay_mode, overrides):
-                return
-            topic = None
-        if topic == "ARGO_IDENTITY":
-            self.logger.info(f"[CANONICAL] ARGO_IDENTITY matched keywords: {sorted(matched)} | routing to LLM with persona")
-            topic = None  # Let the LLM handle identity questions with personality
-        if topic == "ARGO_GOVERNANCE":
-            self.logger.info(f"[CANONICAL] ARGO_GOVERNANCE matched keywords: {sorted(matched)} | LLM BYPASSED")
-            if self._respond_with_argo_governance(None, interaction_id, replay_mode, overrides):
-                return
-            topic = None
-        if topic:
-            self._session_flags["clarification_asked"] = False
-        if self._is_convo_recall_request(user_text):
-            response = self._handle_convo_recall()
-            self.broadcast("log", f"Argo: {response}")
-            self._append_convo_ledger("argo", response)
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        canonical_result = run_canonical_stage(
+            self,
+            user_text,
+            stt_conf,
+            interaction_id,
+            replay_mode,
+            overrides,
+        )
+        if canonical_result.handled:
             return
-        if topic and topic not in {"SYSTEM_HEALTH", "COUNT"}:
-            phrase_match = any(" " in m for m in matched)
-            self.logger.debug(
-                "[STT] confidence_used=%s phrase_match=%s",
-                stt_conf,
-                phrase_match,
-            )
-            if not phrase_match and stt_conf < 0.5:
-                self.logger.info(f"[CANONICAL] Low confidence ({stt_conf:.2f}) without phrase match; deferring to LLM")
-                topic = None
-        if topic == "COUNT":
-            response = self._build_count_response(user_text)
-            self.logger.info(f"[CANONICAL] Intercepted topic: COUNT | Matched: {sorted(matched)} | LLM BYPASSED")
-            self.broadcast("log", f"Argo: {response}")
-            self._append_convo_ledger("argo", response)
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response, enforce_confidence=False, deterministic=True)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-        if topic:
-            answer = get_canonical_answer(topic)
-            self.logger.info(f"[CANONICAL] Intercepted topic: {topic} | Matched: {sorted(matched)} | LLM BYPASSED")
-            self.broadcast("log", f"Argo: {answer}")
-            self._append_convo_ledger("argo", answer or "")
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(answer or "", enforce_confidence=False, deterministic=True)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-            return
-
+        topic = canonical_result.topic
+        matched = canonical_result.matched
         if self._is_non_propositional_utterance(user_text, request_kind):
             self.logger.info("[LLM] Non-propositional utterance detected; prompting for clarification")
             self._record_timeline("NON_PROPOSITIONAL_GUARD", stage="pipeline", interaction_id=interaction_id)
