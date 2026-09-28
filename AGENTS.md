@@ -71,6 +71,13 @@ both Classic and Smooth Voice. It uses the local AnythingLLM "Tommy Knowledge
 Base" workspace. Do not restore a second repo-index RAG path; source-code
 questions belong to normal code/search tools, not Tommy's authored knowledge.
 
+**Backend composition** — `main.py` owns process startup, WebSocket control,
+and the classic microphone loop. Browser HTTP routes live in
+`core/frontend_http.py` and receive callbacks from `main.py`; do not import the
+composition root from the route module. `core/pipeline.py` remains the classic
+pipeline facade, while its memory policy methods are owned by
+`core/pipeline_memory.py` through `PipelineMemoryMixin`.
+
 **Personality** — `core/persona_briefs.py` is the single source of truth.
 Seven personas, each producing a distinct instruction set with a
 `v3-<sha>` fingerprint. Never stack persona text from more than one place.
@@ -275,9 +282,12 @@ Dashboard: `http://localhost:8000/v2` — **not** `/`, which is the retired one.
   bugs fixed in atomic commits: see `git log --oneline 1faa6c0..`.
   `core/livekit_config.py` was then split behind its compatible facade, and
   AnythingLLM became the single RAG service for both voice paths. Next cleanup
-  candidates, in order: the repo root (stale `*_COMPLETE.md` reports, loose
-  logs, three frontends), then `core/pipeline.py`. Re-run the Windows suite and
-  a live voice proof after changes to either runtime path.
+  cleanup removed the tracked archives, completion reports, duplicate source
+  backups, and stale documentation; Git history is the archive. HTTP routing
+  was extracted from `main.py`, and memory behavior from `core/pipeline.py`.
+  Next candidates are the classic pipeline's canonical-response handlers and
+  `handle_user_text`; keep each extraction cohesive and compatibility-safe.
+  Re-run the Windows suite and a live voice proof after runtime changes.
 
 - Memory round trip unproven live: say a decision, stop Smooth Voice, reconnect,
   ask. `recall` is a tool the model *chooses* to call; if she answers from thin

@@ -61,6 +61,10 @@ The Tools tab includes a manual Phone Vision upload path. It sends an image only
 when the user presses Analyze; continuous camera-frame streaming is intentionally
 not implemented.
 
+`main.py` is the backend composition root and classic microphone loop.
+`core/frontend_http.py` owns browser HTTP routing and receives explicit runtime
+callbacks from the composition root, avoiding duplicated process state.
+
 ### Classic Voice Reliability Boundaries (v1.9.1)
 
 The classic path streams OpenAI TTS through `AudioManager` rather than global
@@ -105,6 +109,7 @@ Memory contract:
 - Backend: SQLite default (`data/memory.db`), PostgreSQL optional through `core.memory_store`
 - Memory is advisory, never authoritative
 - Memory cannot trigger actions
+- Classic-pipeline memory policy lives in `core.pipeline_memory.PipelineMemoryMixin`; `core.pipeline.ArgoPipeline` keeps the compatible public method surface
 - Conversation-turn storage is separate from authored knowledge retrieval; both voice paths query authored knowledge through `core.knowledge_service`
 
 STT design:
