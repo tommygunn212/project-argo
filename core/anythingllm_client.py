@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -31,6 +32,7 @@ logger = logging.getLogger("ARGO.AnythingLLM")
 DEFAULT_BASE_URL = "http://127.0.0.1:3001"
 DEFAULT_WORKSPACE = "tommy-knowledge-base"
 DEFAULT_TIMEOUT = 45.0
+MAX_ANSWER_CHARS = 32_000
 
 
 def query_workspace(
@@ -52,7 +54,8 @@ def query_workspace(
     if not workspace:
         return {"ok": False, "error": "no AnythingLLM workspace configured"}
 
-    url = f"{base_url.rstrip('/')}/api/workspace/{workspace}/stream-chat"
+    workspace_path = quote(str(workspace), safe="")
+    url = f"{base_url.rstrip('/')}/api/workspace/{workspace_path}/stream-chat"
     try:
         response = requests.post(
             url,
@@ -100,9 +103,14 @@ def query_workspace(
                 }
             elif event_type == "textResponseChunk":
                 text = event.get("textResponse") or ""
-                if text:
+                if isinstance(text, str) and text:
                     answer_parts.append(text)
-                if event.get("sources"):
+                    if sum(map(len, answer_parts)) > MAX_ANSWER_CHARS:
+                        return {
+                            "ok": False,
+                            "error": "AnythingLLM answer exceeded the voice response limit",
+                        }
+                if isinstance(event.get("sources"), list):
                     sources = event["sources"]
             elif event_type == "finalizeResponseStream":
                 saw_finalize = True
@@ -112,12 +120,14 @@ def query_workspace(
 
     if error_message:
         return {"ok": False, "error": error_message}
-    if not answer_parts and not saw_finalize:
-        return {"ok": False, "error": "AnythingLLM closed the connection with no answer"}
+    answer = "".join(answer_parts).strip()
+    if not answer:
+        detail = "finalized an empty answer" if saw_finalize else "closed the connection with no answer"
+        return {"ok": False, "error": f"AnythingLLM {detail}"}
 
     return {
         "ok": True,
-        "answer": "".join(answer_parts).strip(),
+        "answer": answer,
         "sources": [
             {"title": s.get("title"), "source": s.get("url") or s.get("chunkSource")}
             for s in sources
