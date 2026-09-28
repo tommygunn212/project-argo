@@ -3143,133 +3143,17 @@ class ArgoPipeline(
         tts_engine = self._tts_engine
 
         def _tts_consumer():
-            """Drain sentence queue, pre-fetch next TTS audio while current plays."""
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-            first_sentence = True
-            prefetched = None  # (sentence_text, pcm_bytes) or None
-            prefetch_exec = None
-            tts_generation = None
-            try:
-                while True:
-                    # ── Get next sentence (pre-fetched or from queue) ──
-                    if prefetched is not None:
-                        sentence, pcm_data = prefetched
-                        prefetched = None
-                    else:
-                        try:
-                            sentence = sentence_q.get(timeout=0.1)
-                        except queue.Empty:
-                            continue
-                        if sentence is None:  # poison pill
-                            break
-                        if self.stop_signal.is_set():
-                            break
-                        pcm_data = None  # will synthesize below
+            from core.streaming_tts import consume_tts_sentences
 
-                    # Acquire audio + transition on first sentence only
-                    if first_sentence:
-                        first_sentence = False
-                        try:
-                            self.audio.acquire_audio("TTS", interaction_id=interaction_id)
-                        except Exception as e:
-                            self.logger.error(f"[TTS-STREAM] Audio ownership error: {e}")
-                            break
-                        self.transition_state("SPEAKING", interaction_id=interaction_id, source="tts")
-                        self.is_speaking = True
-                        self._record_timeline("TTS_START", stage="tts", interaction_id=interaction_id)
-                        tts_started.set()
-
-                    if self.stop_signal.is_set():
-                        break
-
-                    # Play sentence
-                    self.logger.info(f"[TTS-STREAM] Speaking sentence ({len(sentence)} chars)")
-                    try:
-                        if tts_engine == "openai":
-                            if self._openai_tts is None:
-                                from core.openai_tts import OpenAIRealtimeTTS
-                                voice = self.openai_voices.get(self.current_voice_key, "nova")
-                                tts_model = self._tts_model
-                                self._openai_tts = OpenAIRealtimeTTS(
-                                    voice=voice, model=tts_model,
-                                    output_device=getattr(self.audio, "_output_device_index", None),
-                                    on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
-                                )
-                                self._openai_tts._instructions = self._TTS_INSTRUCTIONS
-                            if tts_generation is None:
-                                if chinese_lesson:
-                                    # Let the opening native-language phrase clear the speakers
-                                    # before echo/barge-in detection resumes.
-                                    self._openai_tts.suppress_interrupt(3.0)
-                                tts_generation = self._openai_tts.begin_response()
-                            elif self._openai_tts.is_cancelled(tts_generation):
-                                break
-                            # A waiting prefetch worker also catches sentences that
-                            # arrive after current playback has already started.
-                            from core.sentence_prefetch import prefetch_next
-                            if prefetch_exec is None:
-                                prefetch_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-prefetch")
-                            prefetch_future = prefetch_exec.submit(
-                                prefetch_next, sentence_q, self._openai_tts,
-                                tts_generation, self.stop_signal, self.logger,
-                            )
-                            if pcm_data is None:
-                                self._openai_tts.speak(sentence, generation=tts_generation)
-                            else:
-                                self._openai_tts.play_pcm(pcm_data, generation=tts_generation)
-                            if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
-                                prefetch_future.cancel()
-                                break
-                            deadline = time.monotonic() + 30
-                            while True:
-                                if self.stop_signal.is_set() or self._openai_tts.is_cancelled(tts_generation):
-                                    prefetch_future.cancel()
-                                    prefetched = None
-                                    break
-                                try:
-                                    prefetched = prefetch_future.result(timeout=0.05)
-                                    break
-                                except FutureTimeout:
-                                    if time.monotonic() >= deadline:
-                                        self.logger.warning("[TTS-STREAM] Prefetch exceeded turn deadline; cancelling speech")
-                                        self._openai_tts.stop()
-                                        prefetch_future.cancel()
-                                        prefetched = None
-                                        break
-                            if prefetched is None:
-                                break
-                        else:
-                            if self._edge_tts is None:
-                                from core.output_sink import EdgeTTSOutputSink
-                                self._edge_tts = EdgeTTSOutputSink(voice=self.voices.get(self.current_voice_key, "en-US-AriaNeural"))
-                            self._edge_tts.speak(sentence)
-                    except Exception as e:
-                        self.logger.error(f"[TTS-STREAM] Sentence TTS error: {e}")
-                        tts_error.append(e)
-                        if tts_engine == "openai" and self._openai_tts is not None:
-                            self._openai_tts.stop()
-                        break
-            finally:
-                if prefetch_exec is not None:
-                    try:
-                        prefetch_exec.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        prefetch_exec.shutdown(wait=False)
-                # Release audio ownership
-                if tts_started.is_set():
-                    if self.current_interaction_id != interaction_id:
-                        self.logger.info(
-                            f"[TTS-STREAM] Skipping stale cleanup for {interaction_id}; "
-                            f"current={self.current_interaction_id}"
-                        )
-                    else:
-                        try:
-                            self.audio.release_audio("TTS", interaction_id=interaction_id)
-                        except Exception as e:
-                            self.logger.error(f"[TTS-STREAM] release_audio error: {e}")
-                        self.is_speaking = False
-                        self.tts_finished_at = time.time()
-                        self._record_timeline("TTS_DONE", stage="tts", interaction_id=interaction_id)
+            consume_tts_sentences(
+                self,
+                sentence_q,
+                interaction_id=interaction_id,
+                tts_engine=tts_engine,
+                chinese_lesson=chinese_lesson,
+                tts_started=tts_started,
+                tts_errors=tts_error,
+            )
 
         # ── Stream LLM tokens and detect sentences ───────────────────
         self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
