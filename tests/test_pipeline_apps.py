@@ -83,3 +83,56 @@ def test_focus_gate_runs_before_focus_mutation(monkeypatch):
         SimpleNamespace(target="notepad"), "id", False, None
     )
     assert host.deliveries[0][0][0] == "App focus blocked by policy (disabled)."
+
+
+def test_launch_rejects_files_urls_and_arguments():
+    reject = PipelineAppService.has_disallowed_launch_tokens
+
+    assert reject("open https://example.com")
+    assert reject(r"open C:\notes.txt")
+    assert reject("open notepad --help")
+    assert not reject("open notepad")
+
+
+def test_blocked_launch_does_not_start_process(monkeypatch):
+    host = Host()
+    host.gate = (False, "disabled")
+    service = PipelineAppService(host)
+    monkeypatch.setattr(apps_module, "resolve_app_launch_target", lambda *_: "notepad")
+    monkeypatch.setattr(
+        apps_module,
+        "launch_app",
+        lambda *_: (_ for _ in ()).throw(AssertionError("launch must not run")),
+    )
+
+    assert service.respond_launch(
+        SimpleNamespace(target=None),
+        "open notepad",
+        1.0,
+        True,
+        "id",
+        False,
+        None,
+    )
+    assert host.deliveries[0][0][0] == "App launch blocked by policy (disabled)."
+
+
+def test_low_confidence_launch_requires_executable_command(monkeypatch):
+    host = Host()
+    service = PipelineAppService(host)
+    monkeypatch.setattr(
+        apps_module,
+        "resolve_app_launch_target",
+        lambda *_: (_ for _ in ()).throw(AssertionError("resolution must not run")),
+    )
+
+    assert service.respond_launch(
+        SimpleNamespace(target=None),
+        "maybe notepad",
+        0.1,
+        False,
+        "id",
+        False,
+        None,
+    )
+    assert host.deliveries[0][0][0] == "App launch command unclear. Please repeat."

@@ -50,7 +50,6 @@ from core.app_control import (
     write_text_to_app,
 )
 from core.app_registry import APP_REGISTRY
-from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
 from core.app_registry import resolve_app_name
 
 # TTS bypass reason for deterministic commands (for logging/debugging)
@@ -2311,64 +2310,18 @@ class ArgoPipeline:
         )
 
     def _has_disallowed_app_launch_tokens(self, text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        if re.search(r"https?://|www\.", lowered):
-            return True
-        if re.search(r"[a-zA-Z]:\\", text):
-            return True
-        if re.search(r"\\\\", text):
-            return True
-        if re.search(r"\s--?\w+", lowered):
-            return True
-        if re.search(r"\s/\w+", lowered):
-            return True
-        if re.search(r"[\"']", text):
-            return True
-        if re.search(r"\.(txt|docx|xlsx|pdf|png|jpg|jpeg|gif|mp3|mp4|exe)\b", lowered):
-            return True
-        return False
+        return self._apps.has_disallowed_launch_tokens(text)
 
     def _respond_with_app_launch(self, intent, user_text: str, stt_conf: float, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if stt_conf < self._personal_mode_min_confidence and not self._is_executable_command(user_text):
-            message = "App launch command unclear. Please repeat."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-
-        if self._has_disallowed_app_launch_tokens(user_text):
-            self.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
-            message = "App launch only supports core apps without files, URLs, or arguments."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-
-        app_key = getattr(intent, "target", None) or resolve_app_launch_target(user_text)
-        if not app_key:
-            self.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
-            message = f"I can open {', '.join(get_supported_launch_displays())}."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-
-        allowed, reason = self._evaluate_gates("app_launch", "app_launch", interaction_id)
-        if not allowed:
-            self.logger.info(f"[APP_LAUNCH] app={app_key} result=failed source=voice")
-            message = f"App launch blocked by policy ({reason})."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-
-        ok = launch_app(app_key)
-        display_name = {
-            "notepad": "Notepad",
-            "calculator": "Calculator",
-            "microsoft edge": "Microsoft Edge",
-            "file explorer": "File Explorer",
-            "powershell": "PowerShell",
-        }.get(app_key, app_key.title())
-        result = "success" if ok else "failed"
-        self.logger.info(f"[APP_LAUNCH] app={app_key} result={result} source=voice")
-        message = f"Opening {display_name}." if ok else f"I couldn't open {display_name}."
-        self.logger.info(f"Argo: {message}")
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._apps.respond_launch(
+            intent,
+            user_text,
+            stt_conf,
+            self._is_executable_command(user_text),
+            interaction_id,
+            replay_mode,
+            overrides,
+        )
 
     def _allow_low_conf_music_command(self, intent, user_text: str) -> bool:
         if not intent or intent.intent_type not in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:

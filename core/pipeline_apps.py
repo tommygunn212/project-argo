@@ -14,6 +14,7 @@ from core.app_control import (
     open_app,
 )
 from core.app_registry import APP_REGISTRY, get_supported_app_displays, resolve_app_name
+from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
 
 
 class AppHost(Protocol):
@@ -181,3 +182,77 @@ class PipelineAppService:
             )
         _ok, message, _ = focus_app_deterministic(target)
         return self._deliver(message, interaction_id, replay_mode, overrides)
+
+    @staticmethod
+    def has_disallowed_launch_tokens(text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        return any(
+            (
+                re.search(r"https?://|www\.", lowered),
+                re.search(r"[a-zA-Z]:\\", text),
+                re.search(r"\\\\", text),
+                re.search(r"\s--?\w+", lowered),
+                re.search(r"\s/\w+", lowered),
+                re.search(r"[\"']", text),
+                re.search(r"\.(txt|docx|xlsx|pdf|png|jpg|jpeg|gif|mp3|mp4|exe)\b", lowered),
+            )
+        )
+
+    def respond_launch(
+        self,
+        intent,
+        user_text: str,
+        stt_conf: float,
+        executable_command: bool,
+        interaction_id: str,
+        replay_mode: bool,
+        overrides: dict | None,
+    ) -> bool:
+        host = self._host
+        if stt_conf < host._personal_mode_min_confidence and not executable_command:
+            return self._log_and_deliver(
+                "App launch command unclear. Please repeat.",
+                interaction_id,
+                replay_mode,
+                overrides,
+            )
+        if self.has_disallowed_launch_tokens(user_text):
+            host.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
+            return self._log_and_deliver(
+                "App launch only supports core apps without files, URLs, or arguments.",
+                interaction_id,
+                replay_mode,
+                overrides,
+            )
+        app_key = getattr(intent, "target", None) or resolve_app_launch_target(user_text)
+        if not app_key:
+            host.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
+            return self._log_and_deliver(
+                f"I can open {', '.join(get_supported_launch_displays())}.",
+                interaction_id,
+                replay_mode,
+                overrides,
+            )
+        allowed, reason = host._evaluate_gates("app_launch", "app_launch", interaction_id)
+        if not allowed:
+            host.logger.info(f"[APP_LAUNCH] app={app_key} result=failed source=voice")
+            return self._log_and_deliver(
+                f"App launch blocked by policy ({reason}).",
+                interaction_id,
+                replay_mode,
+                overrides,
+            )
+        ok = launch_app(app_key)
+        display_name = {
+            "notepad": "Notepad",
+            "calculator": "Calculator",
+            "microsoft edge": "Microsoft Edge",
+            "file explorer": "File Explorer",
+            "powershell": "PowerShell",
+        }.get(app_key, app_key.title())
+        result = "success" if ok else "failed"
+        host.logger.info(f"[APP_LAUNCH] app={app_key} result={result} source=voice")
+        message = f"Opening {display_name}." if ok else f"I couldn't open {display_name}."
+        return self._log_and_deliver(message, interaction_id, replay_mode, overrides)
