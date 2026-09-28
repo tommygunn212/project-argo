@@ -115,6 +115,7 @@ from wrapper.preflight import (
 from wrapper.ollama_generation import generate_ollama_response
 from wrapper.replay_context import build_replay_context
 from wrapper.prompt_composition import compose_prompt
+from wrapper.post_generation import audit_and_record_response
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -1472,15 +1473,6 @@ def _run_argo_internal(
         mode_enforcement=MODE_ENFORCEMENT,
     )
     full_prompt = prompt.full_prompt
-    classified_verbosity = prompt.classified_verbosity
-    execution_context = prompt.execution_context
-    query_type = prompt.query_type
-    has_canonical_knowledge = prompt.has_canonical_knowledge
-    behavior_profile = prompt.behavior_profile
-    is_casual_q = prompt.is_casual_question
-    primary_frame = prompt.primary_frame
-    drift_monitor = prompt.drift_monitor
-    uncertainty_enforcement = prompt.uncertainty_enforcement
 
     # ________________________________________________________________________
     # ________________________________________________________________________
@@ -1505,120 +1497,17 @@ def _run_argo_internal(
             resume_wake_word_detector()
 
     # ________________________________________________________________________
-    # Step 4: Post-Generation Violation Detection & Logging
-    # ________________________________________________________________________
-    
-    # Validate CLI format (if CLI context)
-    cli_format_valid, cli_format_error = validate_cli_format(output, execution_context)
-    if not cli_format_valid:
-        print(f"⚠ CLI Format Violation: {cli_format_error}", file=sys.stderr)
-    
-    # Validate scope (Phase 5A judgment gate)
-    scope_valid, scope_drift = validate_scope(output)
-    if not scope_valid:
-        # Soft failure: log drift, apply temporary compression bias
-        drift_monitor.flag_signal("scope_expansion", {"force_verbosity": "short"}, duration=2)
-    
-    # Validate personality discipline (Phase 5B) and check casual humor (Phase 5B.2)
-    personality_valid, personality_violation, soft_failure = validate_personality_discipline(output, query_type, has_canonical_knowledge, execution_context, is_casual_q)
-    if not personality_valid:
-        # Hard failure: personality violation revokes personality
-        update_familiarity(False, "personality_discipline")
-    elif soft_failure:
-        # Soft failure: casual question where observational opener was missing
-        # Log it but don't demote
-        pass  # Logged implicitly, no state change
-    else:
-        # No violation: update familiarity on success
-        update_familiarity(True)
-    
-    # PATCH 5B.2: Validate human-first sentence for casual + human frame
-    human_first_valid, human_first_violation = validate_human_first_sentence(output, is_casual_q, primary_frame)
-    if not human_first_valid:
-        # Hard failure: casual human frame requires human-centered opening
-        update_familiarity(False, "frame_blending")  # Treat as frame violation
-    
-    # PATCH 5B.2: Check for plausible hallucinations without canonical grounding
-    grounding_valid, grounding_violation = detect_plausible_hallucination(output, has_canonical_knowledge, primary_frame)
-    if not grounding_valid:
-        # Soft failure: biological claim without grounding or downgrade language
-        # Log only, no demotion (user can still use plain-language explanation)
-        pass
-    
-    # Log interaction for drift analysis
-    drift_monitor.log_interaction(
-        user_prompt=user_input,
-        model_response=output,
-        query_type=query_type,
-        has_canonical_knowledge=has_canonical_knowledge,
-        behavior_profile=behavior_profile,
-        verbosity=classified_verbosity,
-    )
-    
-    # Detect violations (post-generation)
-    violations = drift_monitor.detect_violations()
-    
-    # Detect drift signals
-    drift_signals = drift_monitor.detect_drift()
-    
-    # Flag any new drift signals for correction
-    for signal in drift_signals:
-        drift_monitor.flag_signal(
-            signal["signal"],
-            signal["corrective_action"],
-            signal["duration_turns"],
-        )
-    
-    # ________________________________________________________________________
-    # Step 5: Build Final Log Record
-    # ________________________________________________________________________
-    
-    timestamp_iso = datetime.now().isoformat(timespec="seconds")
-    
-    # Build behavior log record
-    behavior_log = {
-        "query_type": query_type,
-        "verbosity_override": behavior_profile["verbosity_override"],
-        "explanation_depth": behavior_profile["explanation_depth"],
-        "correction_style": behavior_profile["correction_style"],
-    }
-    
-    # Build honesty enforcement log
-    honesty_log = {
-        "uncertainty_enforced": uncertainty_enforcement is not None,
-        "violations_detected": len(violations),
-        "drift_signals_detected": len(drift_signals),
-    }
-    
-    if violations:
-        honesty_log["violations"] = [v["type"] for v in violations]
-    if drift_signals:
-        honesty_log["drift_signals"] = [s["signal"] for s in drift_signals]
-    
-    _append_daily_log(
-        timestamp_iso=timestamp_iso,
+    audit_and_record_response(
+        user_input=user_input,
+        output=output,
+        prompt=prompt,
         session_id=SESSION_ID,
-        user_prompt=user_input,
-        model_response=output,
         active_mode=active_mode,
         replay_n=replay_n,
         replay_session=replay_session,
-        persona=persona,
-        verbosity=classified_verbosity,
         replay_policy=replay_policy,
-        behavior_profile=behavior_log,
-        honesty_enforcement=honesty_log,
+        persona=persona,
     )
-    
-    # Store to Argo Memory (RAG-based interaction recall)
-    # Strip any composed memory context from the original input before storing
-    original_input = user_input
-    if original_input.startswith("From your history:"):
-        # Extract the original input after the memory context prefix
-        parts = original_input.split("\n\n", 1)
-        if len(parts) > 1:
-            original_input = parts[1]
-    store_interaction(original_input, output)
 
 
 # ============================================================================
