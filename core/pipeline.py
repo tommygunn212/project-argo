@@ -121,6 +121,7 @@ from system_health import (
 from system_profile import get_system_profile, get_gpu_profile
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryMixin
+from core.pipeline_domain_dispatch import dispatch_domain_intent
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5633,116 +5634,10 @@ class ArgoPipeline(PipelineMemoryMixin):
             if self._respond_with_self_diagnostics(interaction_id, replay_mode, overrides):
                 return
 
-        # ── Writing & Productivity ────────────────────────────────────
-        if intent and intent.intent_type == IntentType.WRITE_EMAIL:
-            if self._respond_with_write_email(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.WRITE_BLOG:
-            if self._respond_with_write_blog(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.WRITE_DOCUMENT:
-            if self._respond_with_write_document(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.WRITE_NOTE:
-            if self._respond_with_write_note(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.EDIT_DRAFT:
-            if self._respond_with_edit_draft(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.LIST_DRAFTS:
-            if self._respond_with_list_drafts(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.READ_DRAFT:
-            if self._respond_with_read_draft(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.SEND_EMAIL:
-            if self._respond_with_send_email(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.SEARCH_DOCS:
-            if self._respond_with_search_docs(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.EXPORT_DATA:
-            if self._respond_with_export_data(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.SMART_HOME_CONTROL:
-            if self._respond_with_smart_home_control(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.SMART_HOME_STATUS:
-            if self._respond_with_smart_home_status(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.SET_REMINDER:
-            if self._respond_with_set_reminder(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.LIST_REMINDERS:
-            if self._respond_with_list_reminders(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.CANCEL_REMINDER:
-            if self._respond_with_cancel_reminder(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.CALENDAR_ADD:
-            if self._respond_with_calendar_add(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.CALENDAR_QUERY:
-            if self._respond_with_calendar_query(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.CANCEL_CALENDAR:
-            if self._respond_with_cancel_calendar(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        # ── Computer Vision dispatch ────────────────────────────────
-
-        if intent and intent.intent_type == IntentType.VISION_DESCRIBE:
-            if self._respond_with_vision_describe(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.VISION_READ_ERROR:
-            if self._respond_with_vision_read_error(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.VISION_QUESTION:
-            if self._respond_with_vision_question(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        # ── File System dispatch ────────────────────────────────────
-
-        if intent and intent.intent_type == IntentType.FILE_SEARCH:
-            if self._respond_with_file_search(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.FILE_LARGE:
-            if self._respond_with_file_large(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.FILE_RECENT:
-            if self._respond_with_file_recent(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.FILE_INFO:
-            if self._respond_with_file_info(intent, user_text, interaction_id, replay_mode, overrides):
-                return
-
-        # ── Task Planner dispatch ───────────────────────────────────
-
-        if intent and intent.intent_type == IntentType.TASK_PLAN:
-            if self._respond_with_task_plan(intent, user_text, interaction_id, replay_mode, overrides):
-                return
+        if dispatch_domain_intent(
+            self, intent, user_text, interaction_id, replay_mode, overrides
+        ):
+            return
 
         if intent and intent.intent_type == IntentType.SYSTEM_INFO:
             allowed, reason = self._evaluate_gates("system_health", "system_health", interaction_id)
