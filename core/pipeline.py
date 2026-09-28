@@ -99,6 +99,7 @@ from core.pipeline_response_delivery import (
     ResponseDeliveryDependencies,
     deliver_canonical_response,
 )
+from core.pipeline_response_controls import resolve_spoken_response_controls
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1395,43 +1396,7 @@ class ArgoPipeline:
 
     def _get_spoken_response_controls(self) -> dict:
         """Return runtime-tunable controls for voice responses."""
-        defaults = {
-            "temperature": 0.55,
-            "max_tokens": 360,
-            "max_sentences": 6,
-            "verbosity": 3,
-        }
-
-        try:
-            temperature = float(self.runtime_overrides.get("temperature", defaults["temperature"]))
-        except Exception:
-            temperature = defaults["temperature"]
-        temperature = max(0.0, min(2.0, temperature))
-
-        try:
-            max_tokens = int(self.runtime_overrides.get("max_tokens", defaults["max_tokens"]))
-        except Exception:
-            max_tokens = defaults["max_tokens"]
-        max_tokens = max(80, min(2048, max_tokens))
-
-        try:
-            max_sentences = int(self.runtime_overrides.get("max_sentences", defaults["max_sentences"]))
-        except Exception:
-            max_sentences = defaults["max_sentences"]
-        max_sentences = max(1, min(20, max_sentences))
-
-        try:
-            verbosity = int(self.runtime_overrides.get("verbosity", defaults["verbosity"]))
-        except Exception:
-            verbosity = defaults["verbosity"]
-        verbosity = max(1, min(5, verbosity))
-
-        return {
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "max_sentences": max_sentences,
-            "verbosity": verbosity,
-        }
+        return resolve_spoken_response_controls(self.runtime_overrides)
 
     @staticmethod
     def _chinese_lesson_variant(user_text: str) -> str | None:
