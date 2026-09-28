@@ -47,8 +47,6 @@ from core.app_control import (
 from core.app_registry import APP_REGISTRY
 from core.app_registry import resolve_app_name
 
-# TTS bypass reason for deterministic commands (for logging/debugging)
-TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
 from core.memory_store import get_memory_store
 from core.mem0_memory import get_mem0_memory
 from core.conversation_buffer import ConversationBuffer
@@ -97,6 +95,10 @@ from core.pipeline_ambiguity import (
     is_non_propositional_utterance,
 )
 from core.pipeline_reset import PipelineResetDependencies, hard_reset_pipeline
+from core.pipeline_response_delivery import (
+    ResponseDeliveryDependencies,
+    deliver_canonical_response,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1775,38 +1777,37 @@ class ArgoPipeline:
         intent_type: str | None = None,
         response_type: ResponseType = ResponseType.SYSTEM,
     ) -> bool:
-        # Apply persona formatting based on response type
-        persona_name = self._resolve_personality_mode()
-        message = apply_persona(message, response_type, persona_name)
-        
-        # Log when TTS is allowed despite low STT confidence for deterministic commands
-        if deterministic and stt_conf is not None and stt_conf < self._personal_mode_min_confidence:
-            self.logger.info(
-                f"[TTS] Allowed despite low STT confidence "
-                f"(reason={TTS_ALLOWED_REASON_DETERMINISTIC}, "
-                f"confidence={stt_conf:.2f}, intent={intent_type or 'unknown'})"
-            )
-        self.broadcast("log", f"Argo: {message}")
-        if not self.stop_signal.is_set() and not replay_mode:
-            tts_text = self._sanitize_tts_text(message, enforce_confidence=enforce_confidence, deterministic=deterministic)
-            tts_override = (overrides or {}).get("suppress_tts", False)
-            if force_tts:
-                tts_override = False
-            if tts_override:
-                self.logger.info("[TTS] Suppressed for next interaction override")
-            elif tts_text and (force_tts or self.runtime_overrides.get("tts_enabled", True)):
-                if suppress_barge_in_seconds:
-                    self._pending_barge_in_suppression = suppress_barge_in_seconds
-                    if self._edge_tts is not None and hasattr(self._edge_tts, "suppress_interrupt"):
-                        try:
-                            self._edge_tts.suppress_interrupt(suppress_barge_in_seconds)
-                        except Exception:
-                            pass
-                self.speak(tts_text, interaction_id=interaction_id)
-        self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-        self.logger.info("--- Interaction Complete ---")
-        self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-        return True
+        def set_pending_barge_in_suppression(seconds: float) -> None:
+            self._pending_barge_in_suppression = seconds
+
+        return deliver_canonical_response(
+            ResponseDeliveryDependencies(
+                logger=self.logger,
+                broadcast=self.broadcast,
+                sanitize_tts_text=self._sanitize_tts_text,
+                speak=self.speak,
+                transition_state=self.transition_state,
+                record_timeline=self._record_timeline,
+                apply_persona=apply_persona,
+                set_pending_barge_in_suppression=set_pending_barge_in_suppression,
+            ),
+            message=message,
+            interaction_id=interaction_id,
+            replay_mode=replay_mode,
+            overrides=overrides,
+            persona_name=self._resolve_personality_mode(),
+            response_type=response_type,
+            stop_requested=self.stop_signal.is_set(),
+            tts_enabled=self.runtime_overrides.get("tts_enabled", True),
+            personal_mode_min_confidence=self._personal_mode_min_confidence,
+            edge_tts=self._edge_tts,
+            enforce_confidence=enforce_confidence,
+            force_tts=force_tts,
+            suppress_barge_in_seconds=suppress_barge_in_seconds,
+            deterministic=deterministic,
+            stt_conf=stt_conf,
+            intent_type=intent_type,
+        )
 
     # ── Writing & Productivity Handlers ───────────────────────────────
 
