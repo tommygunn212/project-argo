@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import core.pipeline_writing_responses as responses
+from core.pipeline import ArgoPipeline
 
 
 class _Logger:
@@ -117,3 +118,32 @@ def test_writing_llm_failure_is_contained():
 
     assert pipeline._writing_llm_call("prompt", "interaction-1") == ""
     assert any("provider offline" in message for message in pipeline.logger.errors)
+
+
+def test_pipeline_composes_writing_service_and_preserves_public_facade():
+    assert not issubclass(ArgoPipeline, responses.PipelineWritingResponseMixin)
+    pipeline = object.__new__(ArgoPipeline)
+    calls = []
+    names = (
+        "_writing_llm_call",
+        "_respond_with_write_email",
+        "_respond_with_write_document",
+        "_respond_with_write_blog",
+        "_respond_with_write_note",
+        "_respond_with_edit_draft",
+    )
+    pipeline._writing_responses = type(
+        "WritingDouble",
+        (),
+        {
+            name: (lambda method_name: lambda _self, *args, **kwargs: calls.append(
+                (method_name, args, kwargs)
+            ) or "ok")(name)
+            for name in names
+        },
+    )()
+
+    assert pipeline._writing_llm_call("prompt", "id") == "ok"
+    for name in names[1:]:
+        assert getattr(pipeline, name)(None, "text", "id", False, {}) == "ok"
+    assert [name for name, _args, _kwargs in calls] == list(names)

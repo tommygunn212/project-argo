@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 from tools.writing import (
     build_blog_prompt,
     build_document_prompt,
@@ -164,4 +166,41 @@ class PipelineWritingResponseMixin:
         update_draft(draft, new_content.strip())
         response = f"Draft updated. Now {draft.word_count} words. Say 'read the draft' to hear changes."
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+
+class WritingResponseHost(Protocol):
+    """Pipeline capabilities required by writing and editing workflows."""
+
+    logger: Any
+
+    def generate_response(self, prompt: str, **kwargs: Any) -> str: ...
+
+    def transition_state(self, state: str, **kwargs: Any) -> Any: ...
+
+    def _desktop_write_status(self, desktop_text: str, user_text: str, interaction_id: str) -> str: ...
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+
+class PipelineWritingResponseService(PipelineWritingResponseMixin):
+    """Composed writing handlers with explicit generation and delivery dependencies."""
+
+    def __init__(self, host: WritingResponseHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    def generate_response(self, prompt: str, **kwargs: Any) -> str:
+        return self._host.generate_response(prompt, **kwargs)
+
+    def transition_state(self, state: str, **kwargs: Any) -> Any:
+        return self._host.transition_state(state, **kwargs)
+
+    def _desktop_write_status(self, desktop_text: str, user_text: str, interaction_id: str) -> str:
+        return self._host._desktop_write_status(desktop_text, user_text, interaction_id)
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool:
+        return self._host._deliver_canonical_response(message, *args, **kwargs)
 

@@ -91,7 +91,7 @@ from core.pipeline_draft_responses import PipelineDraftResponseService
 from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningService
-from core.pipeline_writing_responses import PipelineWritingResponseMixin
+from core.pipeline_writing_responses import PipelineWritingResponseService
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
@@ -109,10 +109,7 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 # ============================================================================
 # 2) PIPELINE ORCHESTRATOR
 # ============================================================================
-class ArgoPipeline(
-    PipelineWritingResponseMixin,
-    PipelineMemoryMixin,
-):
+class ArgoPipeline(PipelineMemoryMixin):
     def __init__(self, audio_manager, websocket_broadcast):
         self.logger = logging.getLogger("ARGO.Pipeline")
         self.audio = audio_manager
@@ -145,6 +142,7 @@ class ArgoPipeline(
         self._scheduling_responses = PipelineSchedulingService(self)
         self._task_planning = PipelineTaskPlanningService(self)
         self._draft_responses = PipelineDraftResponseService(self)
+        self._writing_responses = PipelineWritingResponseService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -348,6 +346,24 @@ class ArgoPipeline(
 
     def _respond_with_export_data(self, *args, **kwargs):
         return self._draft_responses._respond_with_export_data(*args, **kwargs)
+
+    def _writing_llm_call(self, *args, **kwargs):
+        return self._writing_responses._writing_llm_call(*args, **kwargs)
+
+    def _respond_with_write_email(self, *args, **kwargs):
+        return self._writing_responses._respond_with_write_email(*args, **kwargs)
+
+    def _respond_with_write_document(self, *args, **kwargs):
+        return self._writing_responses._respond_with_write_document(*args, **kwargs)
+
+    def _respond_with_write_blog(self, *args, **kwargs):
+        return self._writing_responses._respond_with_write_blog(*args, **kwargs)
+
+    def _respond_with_write_note(self, *args, **kwargs):
+        return self._writing_responses._respond_with_write_note(*args, **kwargs)
+
+    def _respond_with_edit_draft(self, *args, **kwargs):
+        return self._writing_responses._respond_with_edit_draft(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
