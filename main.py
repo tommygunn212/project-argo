@@ -49,6 +49,7 @@ from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture_loop import run_classic_capture_loop
+from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
@@ -418,132 +419,37 @@ def _hard_reset_pipeline(reason: str) -> dict:
 
 
 def _handle_control(command):
-    global LISTENING_ENABLED, SERVER_ENABLED
-    cmd = None
-    data = {}
-    if isinstance(command, dict):
-        cmd = str(command.get("command", "")).upper()
-        data = command.get("data", {}) or {}
-    else:
-        cmd = str(command).upper()
-    if cmd == "PAUSE":
-        log_event("UI_CMD_STOP_VAD", stage="ui")
-        LISTENING_ENABLED = False
-        log_event("CONTROL_PAUSE", stage="control")
-        if pipeline_ref:
-            _interrupt_current_response("UI_PAUSE", target_state="IDLE")
-        if audio_ref:
-            try:
-                audio_ref.stop()
-            except Exception:
-                pass
-        broadcast_msg("status", "IDLE")
-    elif cmd in ("RESUME", "USE_CLASSIC_VOICE"):
-        if cmd == "USE_CLASSIC_VOICE":
-            # The explicit switch: the only thing that takes the microphone
-            # back from Smooth Voice.
-            _set_voice_mode(VOICE_MODE_CLASSIC, "user switched to classic voice")
-        elif VOICE_MODE == VOICE_MODE_SMOOTH:
-            # A disconnect, a dead worker, a reconnect or a second tab must
-            # never reopen the classic microphone behind Tommy's back.
-            logger.warning(
-                "[VoiceMode] refused RESUME: Smooth Voice owns the microphone"
-            )
-            log_event("UI_CMD_START_VAD_REFUSED", stage="ui")
-            broadcast_msg(
-                "log",
-                "Smooth Voice owns the microphone. Switch to classic voice to use it.",
-            )
-            broadcast_msg("voice_mode", {"mode": VOICE_MODE, "reason": "resume refused"})
-            return
-        log_event("UI_CMD_START_VAD", stage="ui")
-        LISTENING_ENABLED = True
-        log_event("CONTROL_RESUME", stage="control")
-        if audio_ref:
-            try:
-                audio_ref.start()
-            except Exception:
-                pass
-        # Ensure main loop thread is alive (may have died from a restart race)
-        _start_main_loop_thread()
-        if pipeline_ref:
-            if pipeline_ref.current_state in {"IDLE", "LISTENING"}:
-                pipeline_ref.transition_state("LISTENING", source="ui")
-    elif cmd == "SERVER_STOP":
-        log_event("UI_CMD_STOP_SERVER", stage="ui")
-        log_event("CONTROL_SERVER_STOP", stage="control")
-        broadcast_msg("log", "Server stopping (pipeline thread)...")
-        SERVER_ENABLED = False
-        LISTENING_ENABLED = False
-        _interrupt_current_response("SERVER_STOP", target_state="IDLE")
-        # A wedged turn keeps holding pipeline.processing_lock, and every later
-        # input is then dropped as "System busy". Interrupting does not clear
-        # that, which is why stopping the server used to leave ARGO stalled.
-        _hard_reset_pipeline("SERVER_STOP")
-        if audio_ref:
-            try:
-                audio_ref.stop()
-            except Exception:
-                pass
-        broadcast_msg("status", "IDLE")
-    elif cmd == "HARD_STOP":
-        log_event("UI_CMD_HARD_STOP", stage="ui")
-        result = _hard_reset_pipeline("HARD_STOP")
-        LISTENING_ENABLED = False
-        broadcast_msg("log", f"Hard stop: {result.get('actions')}")
-        broadcast_msg("status", "IDLE")
-    elif cmd == "SERVER_START":
-        log_event("UI_CMD_START_SERVER", stage="ui")
-        log_event("CONTROL_SERVER_START", stage="control")
-        started = _start_main_loop_thread()
-        broadcast_msg("log", "Server start requested" if started else "Server already running")
-    elif cmd == "SERVER_RESTART":
-        log_event("UI_CMD_RESTART_SERVER", stage="ui")
-        log_event("CONTROL_SERVER_RESTART", stage="control")
-        SERVER_ENABLED = False
-        LISTENING_ENABLED = False
-        _interrupt_current_response("SERVER_RESTART", target_state="IDLE")
-        if audio_ref:
-            try:
-                audio_ref.stop()
-            except Exception:
-                pass
-        # Wait for old main_loop thread to exit (calibration takes up to 2s)
-        if main_loop_thread and main_loop_thread.is_alive():
-            main_loop_thread.join(timeout=5.0)
-        started = _start_main_loop_thread()
-        broadcast_msg("log", "Server restart requested" if started else "Server already running")
-    elif cmd == "FORCE_RELEASE_AUDIO":
-        log_event("UI_CMD_FORCE_RELEASE_AUDIO", stage="ui")
-        _interrupt_current_response("UI_FORCE_RELEASE", target_state="LISTENING")
-    elif cmd == "RESET_INTERACTION":
-        log_event("UI_CMD_RESET_INTERACTION", stage="ui")
-        if pipeline_ref:
-            try:
-                pipeline_ref.reset_interaction()
-            except Exception:
-                pass
-        broadcast_msg("status", "LISTENING")
-    elif cmd == "CALIBRATE_NOISE":
-        log_event("UI_CMD_CALIBRATE_NOISE", stage="ui")
-        broadcast_msg("log", "Noise calibration requested...")
-        # Run in a thread so the websocket handler doesn't block
-        threading.Thread(target=_run_noise_calibration, daemon=True).start()
-    elif cmd == "FULL_RESET" or cmd == "FORCE_RESET":
-        log_event("UI_CMD_FORCE_RESET", stage="ui")
-        SERVER_ENABLED = False
-        LISTENING_ENABLED = False
-        _interrupt_current_response("FULL_RESET", target_state="IDLE")
-        if audio_ref:
-            try:
-                audio_ref.stop()
-            except Exception:
-                pass
-        _handle_clear_overrides()
-        NEXT_INTERACTION_OVERRIDES.clear()
-        time.sleep(0.3)
-        started = _start_main_loop_thread()
-        broadcast_msg("log", "Full reset requested" if started else "Server already running")
+    def set_listening(enabled: bool) -> None:
+        global LISTENING_ENABLED
+        LISTENING_ENABLED = enabled
+
+    def set_server(enabled: bool) -> None:
+        global SERVER_ENABLED
+        SERVER_ENABLED = enabled
+
+    dispatch_backend_control(
+        BackendControlRuntime(
+            smooth_voice_mode=VOICE_MODE_SMOOTH,
+            classic_voice_mode=VOICE_MODE_CLASSIC,
+            get_voice_mode=lambda: VOICE_MODE,
+            set_voice_mode=_set_voice_mode,
+            set_listening_enabled=set_listening,
+            set_server_enabled=set_server,
+            get_pipeline=lambda: pipeline_ref,
+            get_audio=lambda: audio_ref,
+            get_main_loop_thread=lambda: main_loop_thread,
+            start_main_loop_thread=_start_main_loop_thread,
+            interrupt_current_response=_interrupt_current_response,
+            hard_reset_pipeline=_hard_reset_pipeline,
+            run_noise_calibration=_run_noise_calibration,
+            clear_overrides=_handle_clear_overrides,
+            next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
+            broadcast=broadcast_msg,
+            event_logger=log_event,
+            logger=logger,
+        ),
+        command,
+    )
 
 
 def _handle_override(payload: dict):
