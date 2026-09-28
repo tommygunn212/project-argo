@@ -149,11 +149,7 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
             _normalize_phrase("what time is it and how's my system doing?"): IntentType("knowledge_time_system"),
         }
         norm_input = _normalize_phrase(text_original)
-        # DEBUG: Print normalization and mapping keys
-        print(f"[DEBUG] norm_input: '{norm_input}'")
-        print(f"[DEBUG] must_pass_phrases keys: {list(must_pass_phrases.keys())}")
         if norm_input in must_pass_phrases:
-            print(f"[DEBUG] MUST_PASS MATCH: '{norm_input}' -> {must_pass_phrases[norm_input]}")
             return Intent(
                 intent_type=must_pass_phrases[norm_input],
                 confidence=1.0,
