@@ -1293,66 +1293,7 @@ def _run_argo_internal(
     replay_reason: str = "continuation",
     voice_mode: bool = False
 ) -> None:
-    """
-    Execute a single interaction with the Jarvis model.
-    
-    Flow:
-    1. Classify input intent (gating check)
-    2. Classify input verbosity (response length preference)
-    3. Handle rejected input or route commands
-    4. Optional replay: prepend previous turns to context (not sticky, skipped in voice_mode)
-    5. Optional mode: inject mode enforcement rules
-    6. Optional persona: inject tone adjustment (presentation only)
-    7. Optional verbosity: inject response length control (presentation only)
-    8. Send prompt to Ollama's "jarvis" model
-    9. Log the interaction (user input, response, metadata)
-    10. Print response to stdout
-    
-    Voice Mode (voice_mode=True):
-    - Skips replay injection (always stateless)
-    - Adds explicit stateless prompt guardrail
-    - Enforces single-turn execution
-    - CRITICAL for Option B compliance
-    
-    Intent Gating (strict mode):
-    - "empty", "ambiguous", "low_intent" → reject and request clarification
-    - "command" → route to command handler
-    - "valid" → proceed to LLM
-    
-    In non-strict mode, all input proceeds to the LLM.
-    
-    Verbosity Classification:
-    - Deterministic: if input contains long-form cues, set to "long", else "short"
-    - Cues: "explain in detail", "detailed explanation", "walk me through", etc.
-    - Effect: injects response-length instruction into prompt (presentation only)
-    
-    Persona: presentation-only adjustment to tone/style (does not affect logic).
-    
-    Replay is mutually exclusive:
-    - replay_session=True: use all turns from current session
-    - replay_n=N: use last N turns across all sessions
-    - both False: no replay
-    - voice_mode=True: forced to no replay (stateless)
-    
-    Logging captures:
-    - Raw user input (before any injection)
-    - Model response (or gating rejection if applicable)
-    - Whether replay was used
-    - Active mode (if any)
-    - Persona (if not default)
-    - Verbosity setting for this turn
-    - Session ID and timestamp
-    
-    Args:
-        user_input: User's raw message
-        active_mode: Conversation mode name (e.g., "brainstorm") or None
-        replay_n: If using --replay last:N, the value N; else None
-        replay_session: True if using --replay session; False otherwise
-        strict_mode: If True (default), reject low-intent input; if False, allow LLM to ask for clarification
-        persona: Persona name for tone adjustment (default: "neutral")
-        verbosity: Response length control, "short" or "long" (default: "short")
-        voice_mode: If True, force stateless execution (no replay, no memory)
-    """
+    """Run one classified, optionally contextualized wrapper interaction."""
     # ________________________________________________________________________
     # Step 0: Intent Classification & Gating
     # ________________________________________________________________________
