@@ -62,7 +62,7 @@ class TestOutputSinkInterface(unittest.TestCase):
     
     def test_piper_sink_creation(self):
         """PiperOutputSink can be instantiated."""
-        sink = PiperOutputSink()
+        sink = PiperOutputSink(piper_path="echo")
         self.assertIsInstance(sink, OutputSink)
         self.assertIsNotNone(sink.piper_path)
         self.assertIsNotNone(sink.voice_path)
@@ -92,7 +92,7 @@ class TestGlobalInstance(unittest.TestCase):
         """set_output_sink() replaces global instance."""
         import core.output_sink as sink_module
         
-        new_sink = PiperOutputSink()
+        new_sink = PiperOutputSink(piper_path="echo")
         set_output_sink(new_sink)
         
         retrieved = get_output_sink()
@@ -136,7 +136,7 @@ class TestPiperOutputSink(unittest.TestCase):
     """Test PiperOutputSink implementation."""
     
     def setUp(self):
-        self.sink = PiperOutputSink()
+        self.sink = PiperOutputSink(piper_path="echo")
     
     async def async_test_send_returns_immediately(self):
         """send() returns immediately (non-blocking)."""
