@@ -100,6 +100,7 @@ from core.pipeline_response_delivery import (
     deliver_canonical_response,
 )
 from core.pipeline_response_controls import resolve_spoken_response_controls
+from core.pipeline_clarification import get_clarification_prompt
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -956,35 +957,7 @@ class ArgoPipeline:
         Returns:
             Targeted clarification prompt (one sentence, one choice max)
         """
-        # If we have specific candidates, present them
-        if candidates and len(candidates) == 2:
-            return f"{candidates[0]} or {candidates[1]}?"
-        if candidates and len(candidates) > 2:
-            # Pick first two most likely
-            return f"{candidates[0]} or {candidates[1]}?"
-        
-        # Intent-specific clarifications
-        if intent:
-            if intent.intent_type == IntentType.APP_CONTROL:
-                return "Which app?"
-            if intent.intent_type == IntentType.APP_LAUNCH:
-                return "Which app should I open?"
-            if intent.intent_type == IntentType.MUSIC:
-                return "What would you like to hear?"
-            if intent.intent_type == IntentType.VOLUME_CONTROL:
-                return "Louder or quieter?"
-        
-        # Fallback - personality-loaded alternatives
-        import random
-        _quips = [
-            "Come again?",
-            "You gotta give me more than that.",
-            "I caught words but not intent. What do you need?",
-            "Say that again but with a destination.",
-            "I'm listening, but I need a bit more.",
-            "Not sure what to do with that one. What's the ask?",
-        ]
-        return random.choice(_quips)
+        return get_clarification_prompt(intent, candidates)
 
     def _get_clarification_prompt_legacy(self) -> str:
         """Return a clarification prompt string.
