@@ -32,6 +32,10 @@ data/*.db-shm
 
 # Temporary files
 temp/
+archive/
+backups/
+*.bak
+*.backup
 *.wav
 !assets/sounds/*.wav
 audio/debug/
