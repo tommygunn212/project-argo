@@ -97,6 +97,7 @@ from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
 from core.knowledge_answer_guard import enforce_knowledge_answer
 from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
+from core.streaming_tts_worker import StreamingTTSWorker
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -3037,9 +3038,6 @@ class ArgoPipeline:
         typically within ~1s of the LLM request, rather than waiting
         for the entire response.
         """
-        import queue
-        import threading as _threading
-
         if not self.llm_enabled:
             self.logger.info("LLM offline: skipping generation")
             return ""
@@ -3054,23 +3052,25 @@ class ArgoPipeline:
         prompt = "\n---\n".join([self._build_spoken_style_block(user_text, response_controls), prompt])
 
         # ── TTS consumer thread ──────────────────────────────────────
-        sentence_q: queue.Queue[Optional[str]] = queue.Queue()
-        tts_error = []
-        tts_started = _threading.Event()
         tts_engine = self._tts_engine
 
-        def _tts_consumer():
+        def _tts_consumer(sentence_queue, started, errors):
             from core.streaming_tts import consume_tts_sentences
 
             consume_tts_sentences(
                 self,
-                sentence_q,
+                sentence_queue,
                 interaction_id=interaction_id,
                 tts_engine=tts_engine,
                 chinese_lesson=chinese_lesson,
-                tts_started=tts_started,
-                tts_errors=tts_error,
+                tts_started=started,
+                tts_errors=errors,
             )
+
+        tts_worker = StreamingTTSWorker(
+            _tts_consumer,
+            enabled=not replay_mode and not (overrides or {}).get("suppress_tts", False),
+        )
 
         # ── Stream LLM tokens and detect sentences ───────────────────
         self._record_timeline("LLM_REQUEST_START", stage="llm", interaction_id=interaction_id)
@@ -3082,9 +3082,7 @@ class ArgoPipeline:
         response_truncated = False
 
         # Start TTS consumer thread (it blocks on the queue until sentences arrive)
-        tts_thread = _threading.Thread(target=_tts_consumer, daemon=True)
-        if not replay_mode and not (overrides or {}).get("suppress_tts", False):
-            tts_thread.start()
+        tts_worker.start()
 
         try:
             sys_msg = self._get_system_message(mode, serious_mode)
@@ -3116,10 +3114,10 @@ class ArgoPipeline:
                     )
                     if not complete:
                         break
-                    if complete and tts_thread.is_alive():
+                    if complete and tts_worker.is_alive:
                         tts_text = self._sanitize_tts_text(complete, enforce_confidence=False)
                         if tts_text:
-                            sentence_q.put(tts_text)
+                            tts_worker.enqueue(tts_text)
                             queued_chunks += 1
                             if queued_chunks >= response_controls["max_sentences"]:
                                 response_truncated = True
@@ -3130,10 +3128,10 @@ class ArgoPipeline:
 
             # Flush any remaining text in the buffer
             remainder = sentence_buffer.strip()
-            if remainder and tts_thread.is_alive() and not response_truncated:
+            if remainder and tts_worker.is_alive and not response_truncated:
                 tts_text = self._sanitize_tts_text(remainder, enforce_confidence=False)
                 if tts_text:
-                    sentence_q.put(tts_text)
+                    tts_worker.enqueue(tts_text)
 
         except Exception as e:
             self.logger.error(f"[LLM-STREAM] Error: {e}", exc_info=True)
@@ -3155,33 +3153,11 @@ class ArgoPipeline:
         if _display.strip():
             self.broadcast("log", f"Argo: {_display}")
 
-        # Signal TTS thread to finish and wait for it. On barge-in, do not let
-        # an uncancellable network prefetch hold the turn lock for seconds.
-        if self.stop_signal.is_set():
-            while True:
-                try:
-                    sentence_q.get_nowait()
-                except queue.Empty:
-                    break
-        sentence_q.put(None)
-        if tts_thread.is_alive():
-            join_started = time.time()
-            interrupt_seen_at = time.time() if self.stop_signal.is_set() else None
-            while tts_thread.is_alive():
-                tts_thread.join(timeout=0.1)
-                if not tts_thread.is_alive():
-                    break
-                if self.stop_signal.is_set():
-                    if interrupt_seen_at is None:
-                        interrupt_seen_at = time.time()
-                    if time.time() - interrupt_seen_at >= 0.75:
-                        self.logger.warning("[TTS-STREAM] TTS thread still unwinding after interrupt")
-                        self.stop_tts()
-                        break
-                elif time.time() - join_started >= 30:
-                    self.logger.warning("[TTS-STREAM] TTS thread did not finish within 30s")
-                    self.stop_tts()
-                    break
+        tts_worker.finish(
+            stop_signal=self.stop_signal,
+            stop_tts=self.stop_tts,
+            logger=self.logger,
+        )
 
         return full_response
 
