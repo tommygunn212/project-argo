@@ -55,6 +55,10 @@ from core.frontend_websocket import (
     FrontendWebSocketDependencies,
     serve_frontend_websocket,
 )
+from core.frontend_overrides import (
+    FrontendOverrideDependencies,
+    dispatch_frontend_override,
+)
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -408,47 +412,18 @@ def _handle_control(command):
 
 
 def _handle_override(payload: dict):
-    key = payload.get("key")
-    value = payload.get("value")
-    if not key:
-        return
-    set_runtime_override(key, value)
-    if key == "debug_level":
-        try:
-            logging.getLogger().setLevel(str(value).upper())
-        except Exception:
-            pass
-    if key == "tts_model" and pipeline_ref:
-        pipeline_ref.set_tts_model(str(value))
-    if key == "personality_mode":
-        # Runtime overrides are in-memory and process-local; the realtime worker
-        # runs in a separate process. Persist the selection so the next Smooth
-        # Voice session picks it up without restarting ARGO or the worker.
-        try:
-            from core.livekit_config import write_voice_personality
-
-            write_voice_personality(str(value))
-            log_event(f"VOICE_PERSONALITY_PERSISTED {value}", stage="ui")
-        except Exception:
-            logger.exception("[OVERRIDE] Could not persist voice personality")
-    if key == "realtime_voice":
-        # Smooth Voice's voice, not the classic pipeline's. Separate control,
-        # separate file, same cross-process reason as the personality.
-        try:
-            from core.livekit_config import write_realtime_voice
-
-            write_realtime_voice(str(value))
-            log_event(f"REALTIME_VOICE_PERSISTED {value}", stage="ui")
-        except Exception as exc:
-            logger.exception("[OVERRIDE] Could not persist realtime voice")
-            broadcast_msg("log", f"Voice not saved: {exc}")
-    if pipeline_ref and hasattr(pipeline_ref, "apply_runtime_tuning"):
-        try:
-            pipeline_ref.apply_runtime_tuning()
-        except Exception:
-            logger.exception("[OVERRIDE] Failed to apply runtime tuning")
-    log_event(f"UI_CMD_SET_OVERRIDE {key}={value}", stage="ui")
-    broadcast_msg("runtime_overrides", get_runtime_overrides())
+    dispatch_frontend_override(
+        FrontendOverrideDependencies(
+            set_runtime_override=set_runtime_override,
+            get_runtime_overrides=get_runtime_overrides,
+            get_pipeline=lambda: pipeline_ref,
+            set_root_log_level=logging.getLogger().setLevel,
+            log_event=log_event,
+            broadcast=broadcast_msg,
+            logger=logger,
+        ),
+        payload,
+    )
 
 
 def _handle_next_override(payload: dict):
