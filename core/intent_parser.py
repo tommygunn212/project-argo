@@ -1520,4 +1520,3 @@ class RuleBasedIntentParser(IntentMusicMixin, IntentParser):
             raw_text=text_original,
             serious_mode=serious_mode,
         )
-
