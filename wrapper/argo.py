@@ -87,16 +87,10 @@ from pathlib import Path
 from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
-    apply_replay_budget,
-    classify_context_strength,
-    classify_entry_type,
     detect_context,
     detect_recall_query,
-    filter_replay_entries,
     format_recall_response,
     get_confidence_instruction,
-    get_last_n_entries,
-    get_session_entries,
 )
 from wrapper.behavior_policy import (
     FAMILIARITY_STATE,
@@ -130,6 +124,7 @@ from wrapper.preflight import (
     neural_terminology_sink,
 )
 from wrapper.ollama_generation import generate_ollama_response
+from wrapper.replay_context import build_replay_context
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -1466,49 +1461,17 @@ def _run_argo_internal(
         return
     # ________________________________________________________________________
     
-    replay_block = ""
-    replay_policy = None
-    context_strength = "weak"
-    entry_types = []
+    replay_context = build_replay_context(
+        session_id=SESSION_ID,
+        replay_n=replay_n,
+        replay_session=replay_session,
+        replay_reason=replay_reason,
+        voice_mode=voice_mode,
+    )
+    replay_block = replay_context.block
+    replay_policy = replay_context.policy
+    context_strength = replay_context.context_strength
 
-    # CRITICAL: Skip replay in voice_mode for stateless execution
-    if not voice_mode and replay_session:
-        entries = get_session_entries(SESSION_ID)
-    elif not voice_mode and replay_n:
-        entries = get_last_n_entries(replay_n)
-    else:
-        entries = []
-
-    # Process replay entries: classify, filter, then budget
-    if entries:
-        # Step 1: Classify entry types
-        entry_types = [classify_entry_type(e.get("user_prompt", ""), e.get("model_response", "")) for e in entries]
-        
-        # Step 2: Filter entries by type based on replay reason (BEFORE budget)
-        entries, filter_stats = filter_replay_entries(entries, replay_reason, entry_types)
-        entry_types = [classify_entry_type(e.get("user_prompt", ""), e.get("model_response", "")) for e in entries]
-        
-        # Step 3: Apply replay budget to filtered entries
-        entries, replay_stats = apply_replay_budget(entries, max_chars=5500)
-        
-        # Combine stats: replay_policy includes both filter and budget information
-        replay_policy = {
-            **filter_stats,
-            **replay_stats,
-            "reason": replay_reason
-        }
-        
-        # Step 4: Determine context strength based on final replay diagnostics
-        context_strength = classify_context_strength(replay_policy, entry_types)
-        replay_policy["context_strength"] = context_strength
-        
-        # Format previous turns for context injection
-        replay_lines = []
-        for e in entries:
-            replay_lines.append(f"User: {e['user_prompt']}")
-            replay_lines.append(f"Assistant: {e['model_response']}")
-        replay_block = "\n".join(replay_lines) + "\n\n"
-    
     # ________________________________________________________________________
     # Step 1.5: CLI Context Guard (Suppress GUI Explanations)
     # ________________________________________________________________________
