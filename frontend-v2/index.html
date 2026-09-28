@@ -1986,8 +1986,8 @@ input[type="range"]::-moz-range-thumb {
           <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>HOME ASSISTANT</div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
             <div>
-              <div style="font-size:13px;color:var(--text-secondary)" id="haStatus">Checking connection...</div>
-              <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)" id="haUrl">http://172.31.109.193:8123</div>
+              <div style="font-size:13px;color:var(--text-secondary)" id="haStatus" aria-live="polite">Not checked yet</div>
+              <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)" id="haUrl">Configuration stays local</div>
             </div>
             <button class="btn btn-sm" onclick="refreshHA()">↻ Refresh</button>
           </div>
@@ -2152,7 +2152,7 @@ input[type="range"]::-moz-range-thumb {
           </div>
           <div class="config-item">
             <span class="config-key">Home Assistant</span>
-            <span class="config-val">172.31.109.193:8123</span>
+            <span class="config-val" id="haConfigStatus">Checking...</span>
           </div>
           <div class="config-item">
             <span class="config-key">Config Hash</span>
@@ -2916,8 +2916,41 @@ function sendDiagnostics() {
   addSystemLog('Diagnostics requested...');
 }
 
-function refreshHA() {
-  sendText('what smart home devices do I have');
+let haRefreshInFlight = false;
+async function refreshHA() {
+  if (haRefreshInFlight) return;
+  haRefreshInFlight = true;
+  const status = $('haStatus');
+  const url = $('haUrl');
+  const configStatus = $('haConfigStatus');
+  status.textContent = 'Checking connection...';
+  status.style.color = 'var(--text-secondary)';
+  try {
+    const response = await fetch('/api/home-assistant-status', {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    url.textContent = result.url || 'No Home Assistant URL configured';
+    if (!result.configured) {
+      status.textContent = 'Not configured — add the URL and token in config.json';
+      status.style.color = 'var(--accent2)';
+      configStatus.textContent = 'Not configured';
+    } else if (result.connected) {
+      status.textContent = 'Connected';
+      status.style.color = 'var(--accent3)';
+      configStatus.textContent = 'Connected';
+    } else {
+      status.textContent = 'Unavailable — check Home Assistant and the network';
+      status.style.color = 'var(--accent-red)';
+      configStatus.textContent = 'Unavailable';
+    }
+  } catch (error) {
+    status.textContent = 'Could not check Home Assistant — ARGO server error';
+    status.style.color = 'var(--accent-red)';
+    url.textContent = 'Status endpoint unavailable';
+    configStatus.textContent = 'Status error';
+  } finally {
+    haRefreshInFlight = false;
+  }
 }
 
 function requestCodeRepair() {
@@ -4553,6 +4586,7 @@ function init() {
   initGateSliders();
   connect();
   refreshRealtimeStatus();
+  refreshHA();
   addSystemLog('ARGO Interface v2.0 initialized');
 }
 

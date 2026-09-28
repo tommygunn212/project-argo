@@ -45,7 +45,13 @@ def is_home_assistant_configured() -> bool:
 
 # ── HTTP helpers ──────────────────────────────────────────────────────
 
-def _ha_request(method: str, path: str, body: Optional[dict] = None) -> dict:
+def _ha_request(
+    method: str,
+    path: str,
+    body: Optional[dict] = None,
+    *,
+    timeout: Optional[float] = None,
+) -> dict:
     """Make an authenticated request to the Home Assistant REST API."""
     cfg = _load_ha_config()
     url = cfg.get("url", "").rstrip("/")
@@ -61,8 +67,14 @@ def _ha_request(method: str, path: str, body: Optional[dict] = None) -> dict:
     data = json.dumps(body).encode("utf-8") if body else None
     req = Request(full_url, data=data, headers=headers, method=method)
 
+    request_timeout = timeout if timeout is not None else cfg.get("timeout_seconds", 10)
     try:
-        with urlopen(req, timeout=10) as resp:
+        request_timeout = max(0.5, min(float(request_timeout), 30.0))
+    except (TypeError, ValueError):
+        request_timeout = 10.0
+
+    try:
+        with urlopen(req, timeout=request_timeout) as resp:
             raw = resp.read().decode("utf-8")
             if not raw.strip():
                 return {}
@@ -81,6 +93,20 @@ def _ha_post(path: str, body: Optional[dict] = None) -> dict:
 
 def _ha_get(path: str) -> dict:
     return _ha_request("GET", path)
+
+
+def get_connection_status(timeout: float = 3.0) -> dict:
+    """Return a UI-safe Home Assistant readiness snapshot."""
+    cfg = _load_ha_config()
+    url = str(cfg.get("url") or "").rstrip("/")
+    configured = bool(url and cfg.get("token"))
+    if not configured:
+        return {"configured": False, "connected": False, "url": url}
+    try:
+        _ha_request("GET", "", timeout=timeout)
+    except (RuntimeError, ValueError):
+        return {"configured": True, "connected": False, "url": url}
+    return {"configured": True, "connected": True, "url": url}
 
 
 # ── Device discovery ──────────────────────────────────────────────────

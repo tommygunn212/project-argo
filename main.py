@@ -413,6 +413,17 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("[Mobile] access status failed")
                 self._send_json({"error": str(exc)}, status=500)
+        elif path == '/api/home-assistant-status':
+            try:
+                from tools.home_assistant import get_connection_status
+
+                self._send_json(get_connection_status())
+            except Exception:
+                logger.exception("[Home Assistant] status failed")
+                self._send_json(
+                    {"configured": False, "connected": False, "url": ""},
+                    status=500,
+                )
         elif path == '/api/livekit-token':
             try:
                 from core.livekit_config import build_livekit_token_response

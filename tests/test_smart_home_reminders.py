@@ -28,6 +28,7 @@ from tools.home_assistant import (
     resolve_entity,
     _infer_domain,
     _validate_entity_id,
+    get_connection_status,
     list_devices,
     is_home_assistant_configured,
 )
@@ -185,6 +186,33 @@ class TestHAConfig:
 
 
 class TestHABoundaries:
+    def test_status_reports_unconfigured_without_a_network_call(self):
+        with patch("tools.home_assistant._load_ha_config", return_value={}):
+            with patch("tools.home_assistant._ha_request") as request:
+                assert get_connection_status() == {
+                    "configured": False,
+                    "connected": False,
+                    "url": "",
+                }
+                request.assert_not_called()
+
+    def test_status_reports_unreachable_without_exposing_error_details(self):
+        cfg = {"url": "http://ha.local:8123", "token": "secret"}
+        with patch("tools.home_assistant._load_ha_config", return_value=cfg):
+            with patch("tools.home_assistant._ha_request", side_effect=RuntimeError("secret detail")):
+                assert get_connection_status() == {
+                    "configured": True,
+                    "connected": False,
+                    "url": "http://ha.local:8123",
+                }
+
+    def test_status_reports_live_connection(self):
+        cfg = {"url": "http://ha.local:8123", "token": "secret"}
+        with patch("tools.home_assistant._load_ha_config", return_value=cfg):
+            with patch("tools.home_assistant._ha_request", return_value={"message": "API running"}) as request:
+                assert get_connection_status(timeout=1.5)["connected"] is True
+                request.assert_called_once_with("GET", "", timeout=1.5)
+
     def test_ambiguous_device_name_is_not_silently_selected(self):
         devices = [
             {"entity_id": "light.kitchen_main", "name": "Kitchen light"},
