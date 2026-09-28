@@ -84,6 +84,7 @@ from core.pipeline_request_classifier import (
     meaningful_tokens,
 )
 from core.pipeline_settings import load_pipeline_settings
+from core.pipeline_transcription import TranscriptionDependencies, transcribe_audio
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1433,97 +1434,22 @@ class ArgoPipeline:
 
 
     def transcribe(self, audio_data, interaction_id: str = ""):
-        if self.stt_engine_manager is None or self.stt_engine_manager.model is None:
-            self.logger.error("[STT] Engine not initialized")
-            return ""
-        
-        self.logger.info(
-            f"[STT] Starting transcription (engine={self.stt_engine})... "
-            f"Audio len: {len(audio_data)}"
+        outcome = transcribe_audio(
+            TranscriptionDependencies(
+                logger=self.logger,
+                engine_manager=self.stt_engine_manager,
+                engine_name=self.stt_engine,
+                initial_prompt=self._stt_initial_prompt,
+                should_reject_audio=self._should_reject_audio,
+                record_timeline=self._record_timeline,
+                broadcast=self.broadcast,
+            ),
+            audio_data,
+            interaction_id,
         )
-        self._record_timeline("STT_START", stage="stt", interaction_id=interaction_id)
-        
-        start = time.perf_counter()
-        try:
-            # Basic audio metrics
-            duration_s = len(audio_data) / 16000.0 if len(audio_data) else 0
-            rms = float(np.sqrt(np.mean(audio_data ** 2))) if len(audio_data) else 0.0
-            peak = float(np.max(np.abs(audio_data))) if len(audio_data) else 0.0
-            silence_ratio = float(np.mean(np.abs(audio_data) < 0.01)) if len(audio_data) else 1.0
-
-            reject, reason = self._should_reject_audio(rms, silence_ratio, duration_s)
-            if reject:
-                self.logger.info(reason)
-                self._record_timeline(f"STT_DISCARD {reason}", stage="stt", interaction_id=interaction_id)
-                return ""
-
-            # Clamp normalization: avoid noise amplification
-            if peak > 1.0:
-                audio_data = audio_data / peak
-
-            # Use STT engine manager for transcription
-            stt_result = self.stt_engine_manager.transcribe(
-                audio_data,
-                language="en",
-                beam_size=1 if self.stt_engine == "faster" else None,
-                condition_on_previous_text=False if self.stt_engine == "faster" else None,
-                initial_prompt=self._stt_initial_prompt or None,
-            )
-            
-            text = stt_result["text"]
-            engine = stt_result["engine"]
-            duration_ms = stt_result["duration_ms"]
-            segments = stt_result.get("segments", [])
-            
-            # Log segments (defensive: handle both dict and dataclass formats)
-            for i, seg in enumerate(segments):
-                seg_text = seg.text if hasattr(seg, "text") else seg.get("text", "")
-                if hasattr(seg, "avg_logprob"):
-                    confidence = np.exp(seg.avg_logprob)
-                    self.logger.info(f"  Seg {i}: '{seg_text}' (conf={confidence:.2f})")
-                else:
-                    self.logger.info(f"  Seg {i}: '{seg_text}'")
-            
-            # Calculate confidence proxy
-            confidence_proxy = 0.0
-            if duration_s > 0:
-                confidence_proxy = min(1.0, (len(text) / max(1.0, duration_s * 10)) * (1.0 - silence_ratio))
-            
-            self.logger.info(
-                f"[STT] Done in {duration_ms:.0f}ms (engine={engine}): '{text}'"
-            )
-            
-            self._record_timeline(
-                f"STT_DONE engine={engine} len={len(text)} rms={rms:.4f} peak={peak:.4f} silence={silence_ratio:.2f} conf={confidence_proxy:.2f}",
-                stage="stt",
-                interaction_id=interaction_id,
-            )
-            
-            self.broadcast("stt_metrics", {
-                "interaction_id": interaction_id,
-                "engine": engine,
-                "text_len": len(text),
-                "duration_s": duration_s,
-                "rms": rms,
-                "peak": peak,
-                "silence_ratio": silence_ratio,
-                "confidence": confidence_proxy,
-            })
-            
-            self._last_stt_metrics = {
-                "engine": engine,
-                "text_len": len(text),
-                "duration_s": duration_s,
-                "rms": rms,
-                "peak": peak,
-                "silence_ratio": silence_ratio,
-                "confidence": confidence_proxy,
-            }
-            return text
-        except Exception as e:
-            self.logger.error(f"[STT] Failed: {e}", exc_info=True)
-            self._record_timeline("STT_ERROR", stage="stt", interaction_id=interaction_id)
-            return ""
+        if outcome.metrics is not None:
+            self._last_stt_metrics = outcome.metrics
+        return outcome.text
 
     def _stream_llm_text(
         self,
