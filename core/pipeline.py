@@ -78,7 +78,7 @@ from core.registries import is_capability_enabled, is_permission_allowed, is_mod
 from core.runtime_constants import GATES_ORDER, Gate
 from tools.home_assistant import execute_smart_home_command
 from core.personality import format_response as personality_format_response, get_personality_state
-from core.pipeline_memory import PipelineMemoryMixin
+from core.pipeline_memory import PipelineMemoryService
 from core.memory_command_service import MemoryCommandService
 from core.pipeline_domain_dispatch import dispatch_domain_intent
 from core.pipeline_platform_dispatch import dispatch_early_status, dispatch_platform_intent
@@ -110,7 +110,7 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 # ============================================================================
 # 2) PIPELINE ORCHESTRATOR
 # ============================================================================
-class ArgoPipeline(PipelineMemoryMixin):
+class ArgoPipeline:
     def __init__(self, audio_manager, websocket_broadcast):
         self.logger = logging.getLogger("ARGO.Pipeline")
         self.audio = audio_manager
@@ -235,6 +235,7 @@ class ArgoPipeline(PipelineMemoryMixin):
         self._pending_memory_write = None
         self._pending_memory = None
         self._memory_commands = MemoryCommandService(self)
+        self._memory_service = PipelineMemoryService(self)
         self._session_flags = {}
         self._stt_prompt_profile = "general"
         self._stt_initial_prompt = ""
@@ -366,6 +367,51 @@ class ArgoPipeline(PipelineMemoryMixin):
 
     def _respond_with_edit_draft(self, *args, **kwargs):
         return self._writing_responses._respond_with_edit_draft(*args, **kwargs)
+
+    def _append_convo_ledger(self, *args, **kwargs):
+        return self._memory_service._append_convo_ledger(*args, **kwargs)
+
+    def _get_previous_user_entry(self, *args, **kwargs):
+        return self._memory_service._get_previous_user_entry(*args, **kwargs)
+
+    def _is_convo_recall_request(self, *args, **kwargs):
+        return self._memory_service._is_convo_recall_request(*args, **kwargs)
+
+    def _handle_convo_recall(self, *args, **kwargs):
+        return self._memory_service._handle_convo_recall(*args, **kwargs)
+
+    def _find_color_statement(self, *args, **kwargs):
+        return self._memory_service._find_color_statement(*args, **kwargs)
+
+    def _handle_contextual_followup(self, *args, **kwargs):
+        return self._memory_service._handle_contextual_followup(*args, **kwargs)
+
+    def _get_project_namespace(self, *args, **kwargs):
+        return self._memory_service._get_project_namespace(*args, **kwargs)
+
+    def _is_sensitive_memory(self, *args, **kwargs):
+        return self._memory_service._is_sensitive_memory(*args, **kwargs)
+
+    def _get_memory_context(self, *args, **kwargs):
+        return self._memory_service._get_memory_context(*args, **kwargs)
+
+    def _store_mem0_fact(self, *args, **kwargs):
+        return self._memory_service._store_mem0_fact(*args, **kwargs)
+
+    def _delete_mem0_matching(self, *args, **kwargs):
+        return self._memory_service._delete_mem0_matching(*args, **kwargs)
+
+    def _clear_mem0_user(self, *args, **kwargs):
+        return self._memory_service._clear_mem0_user(*args, **kwargs)
+
+    def _store_durable_turn(self, *args, **kwargs):
+        return self._memory_service._store_durable_turn(*args, **kwargs)
+
+    def _parse_memory_write(self, *args, **kwargs):
+        return self._memory_service._parse_memory_write(*args, **kwargs)
+
+    def _handle_memory_command(self, *args, **kwargs):
+        return self._memory_service._handle_memory_command(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""

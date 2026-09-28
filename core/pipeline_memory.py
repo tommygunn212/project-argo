@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
+from typing import Any, Protocol
 
 from core.memory_command_parser import parse_memory_write
 from core.memory_command_service import MemoryCommandService
@@ -231,3 +232,55 @@ class PipelineMemoryMixin:
             service = MemoryCommandService(self)
             self._memory_commands = service
         return service.handle(user_text, interaction_id, replay_mode, overrides)
+
+
+class PipelineMemoryHost(Protocol):
+    """Pipeline state required by conversation and durable-memory helpers."""
+
+    logger: Any
+    _conversation_ledger: Any
+    _config: Any
+    _brain: Any
+    _mem0_memory: Any
+    _memory_store: Any
+    _memory_commands: MemoryCommandService
+
+    def _record_timeline(self, event: str, **kwargs: Any) -> Any: ...
+
+
+class PipelineMemoryService(PipelineMemoryMixin):
+    """Composed memory helpers backed by explicitly declared pipeline state."""
+
+    def __init__(self, host: PipelineMemoryHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    @property
+    def _conversation_ledger(self) -> Any:
+        return self._host._conversation_ledger
+
+    @property
+    def _config(self) -> Any:
+        return self._host._config
+
+    @property
+    def _brain(self) -> Any:
+        return self._host._brain
+
+    @property
+    def _mem0_memory(self) -> Any:
+        return self._host._mem0_memory
+
+    @property
+    def _memory_store(self) -> Any:
+        return self._host._memory_store
+
+    @property
+    def _memory_commands(self) -> MemoryCommandService:
+        return self._host._memory_commands
+
+    def _record_timeline(self, event: str, **kwargs: Any) -> Any:
+        return self._host._record_timeline(event, **kwargs)
