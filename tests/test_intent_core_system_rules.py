@@ -2,10 +2,29 @@ from core.intent_models import IntentType
 from core.intent_parser import HARDWARE_KEYWORDS, SYSTEM_CPU_QUERIES
 from core.intent_parser import RuleBasedIntentParser
 from core.intent_rules.core_system import (
+    parse_control_intent,
     parse_full_system_status,
     parse_identity_or_governance,
     parse_system_health,
 )
+
+
+def test_control_intent_priority_and_serious_mode_policy():
+    silence = parse_control_intent("shut up and sleep", "shut up and sleep", True, {"sleep"})
+    sleep = parse_control_intent("sleep now", "sleep now", True, {"sleep"})
+    diagnostics = parse_control_intent(
+        "argo is broken", "argo is broken", True, {"sleep"}
+    )
+
+    assert silence.intent_type is IntentType.SILENCE_OVERRIDE
+    assert silence.serious_mode is False
+    assert sleep.intent_type is IntentType.SLEEP
+    assert sleep.serious_mode is True
+    assert diagnostics.intent_type is IntentType.SELF_DIAGNOSTICS
+
+
+def test_control_intent_returns_none_for_ordinary_text():
+    assert parse_control_intent("hello", "hello", False, {"sleep"}) is None
 
 
 def test_full_status_is_available_before_wake_word_stripping():

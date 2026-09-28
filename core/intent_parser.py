@@ -40,6 +40,7 @@ from core.intent_rules.core_system import (
     SYSTEM_MEMORY_QUERIES,
     SYSTEM_MOTHERBOARD_QUERIES,
     SYSTEM_OS_QUERIES,
+    parse_control_intent,
     parse_full_system_status,
     parse_identity_or_governance,
     parse_system_health,
@@ -53,7 +54,6 @@ from core.intent_rules.general import (
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
-    detect_self_diagnostics,
     detect_system_health,
     detect_temperature_query,
     is_system_keyword,
@@ -148,38 +148,11 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
 
         # SERIOUS_MODE signal already computed above
 
-        # Rule -1: SILENCE_OVERRIDE - "shut up" and equivalents (highest priority)
-        silence_phrases = {"shut up", "stop talking", "enough", "ok stop", "okay stop", "quiet", "be quiet"}
-        if any(phrase in text_lower for phrase in silence_phrases):
-            return Intent(
-                intent_type=IntentType.SILENCE_OVERRIDE,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=False,  # Never serious mode for this
-            )
-
-        # Rule 0: SLEEP keywords (highest priority - short-circuit)
-        if (
-            text_lower in self.sleep_phrases
-            or text_lower.startswith("go to sleep")
-            or text_lower == "sleep"
-            or text_lower.startswith("sleep ")
-        ):
-            return Intent(
-                intent_type=IntentType.SLEEP,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 0.045: SELF_DIAGNOSTICS - ARGO checks itself (Phase 1)
-        if detect_self_diagnostics(text_lower):
-            return Intent(
-                intent_type=IntentType.SELF_DIAGNOSTICS,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
+        control_intent = parse_control_intent(
+            text_original, text_lower, serious_mode, self.sleep_phrases
+        )
+        if control_intent is not None:
+            return control_intent
 
         platform_intent = parse_platform_intent(text_original, text_lower, serious_mode)
         if platform_intent is not None:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 
 from core.intent_models import Intent, IntentType
-from core.intent_system_rules import detect_system_health
+from core.intent_system_rules import detect_self_diagnostics, detect_system_health
 
 
 FULL_SYSTEM_PHRASES = [
@@ -65,6 +66,29 @@ _HARDWARE_GENERAL_RE = re.compile(
     r"|released|announcement|generation|lineup|should\s+i\s+get|worth|price|cost"
     r"|hotend|printer|3d|filament|nozzle|extruder)\b"
 )
+SILENCE_PHRASES = frozenset(
+    {"shut up", "stop talking", "enough", "ok stop", "okay stop", "quiet", "be quiet"}
+)
+
+
+def parse_control_intent(
+    raw_text: str,
+    normalized: str,
+    serious_mode: bool,
+    sleep_phrases: Collection[str],
+) -> Intent | None:
+    if any(phrase in normalized for phrase in SILENCE_PHRASES):
+        return Intent(IntentType.SILENCE_OVERRIDE, 1.0, raw_text, serious_mode=False)
+    if (
+        normalized in sleep_phrases
+        or normalized.startswith("go to sleep")
+        or normalized == "sleep"
+        or normalized.startswith("sleep ")
+    ):
+        return Intent(IntentType.SLEEP, 1.0, raw_text, serious_mode=serious_mode)
+    if detect_self_diagnostics(normalized):
+        return Intent(IntentType.SELF_DIAGNOSTICS, 1.0, raw_text, serious_mode=serious_mode)
+    return None
 
 
 def parse_full_system_status(raw_text: str, normalized: str, serious_mode: bool) -> Intent | None:
