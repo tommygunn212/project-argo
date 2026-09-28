@@ -124,6 +124,7 @@ from wrapper.wake_controls import (
     start_detector,
     stop_detector,
 )
+from wrapper.wake_interaction import WakeInteractionRuntime, run_wake_interaction
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -324,57 +325,21 @@ def _on_wake_word_detected():
         return
     if _state_machine is None:
         return
-    
-    current_state = _state_machine.current_state
-    
-    # [DIAGNOSTIC] Log wake-word detection
-    logger.warning("WAKE WORD DETECTED — FORCING RECORD")
-    
-    # Only process if in SLEEP or LISTENING
-    if current_state not in ["SLEEP", "LISTENING"]:
-        logger.debug(f"Wake-word ignored: in {current_state} state")
-        return
-    
-    # If SLEEP → transition to LISTENING (this wakes the system)
-    if current_state == "SLEEP":
-        logger.info("Wake-word detected in SLEEP - transitioning to LISTENING")
-        if not _state_machine.wake():
-            logger.debug("State machine rejected wake transition")
-            return
-        current_state = "LISTENING"
-    
-    # Now record the spoken question
-    try:
+
+    def load_voice_input():
         from voice_input import record_audio_on_wake_word, transcribe_audio
-        
-        logger.info("Waking up - recording user's question...")
-        audio = record_audio_on_wake_word()
-        
-        if audio is None or len(audio) == 0:
-            logger.warning("No audio recorded after wake-word")
-            return
-        
-        # Transcribe the question
-        logger.info("Transcribing wake-word audio...")
-        user_input = transcribe_audio(audio)
-        
-        if not user_input:
-            logger.warning("No speech transcribed from wake-word recording")
-            return
-        
-        logger.info(f"Wake-word transcription: '{user_input}'")
-        
-        # Process the command (transition to THINKING, generate LLM response, speak)
-        if _command_parser and _state_machine:
-            try:
-                logger.debug(f"Sending wake-word command to parser: '{user_input}'")
-                request = WakeWordRequest(confidence=0.95)
-                _command_parser.process_wake_word_event(request)
-            except Exception as e:
-                logger.error(f"Error processing wake-word event: {e}")
-    
-    except Exception as e:
-        logger.error(f"Error in wake-word callback: {e}")
+
+        return record_audio_on_wake_word, transcribe_audio
+
+    run_wake_interaction(
+        WakeInteractionRuntime(
+            state_machine=_state_machine,
+            command_parser=_command_parser,
+            request_factory=WakeWordRequest,
+            load_voice_input=load_voice_input,
+            logger=logger,
+        )
+    )
 
 def _get_current_state():
     """Get current state machine state for detector."""
