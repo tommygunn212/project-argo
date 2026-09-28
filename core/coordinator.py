@@ -22,22 +22,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 
 from core.intent_parser import Intent, IntentType, normalize_system_text, is_system_keyword
 from core.session_memory import SessionMemory
-from core.latency_probe import LatencyProbe, LatencyStats
-from core.coordinator_stages import (
-    capture_audio_stage,
-    dispatch_procedural_stage,
-    dispatch_simple_deterministic_stage,
-    parse_intent_stage,
-    process_transcript_stage,
-    transcribe_audio_stage,
-)
-from core.coordinator_system_health_stage import dispatch_system_health_stage
-from core.coordinator_response_stage import deliver_and_record_response
-from core.coordinator_response_guard import CoordinatorResponseGuard
-from core.coordinator_generation_stage import generate_interaction_response
-from core.coordinator_music_stage import (
-    stop_active_music_for_phrase,
-)
+from core.latency_probe import LatencyStats
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
@@ -52,6 +37,7 @@ from core.coordinator_text import (
     strip_code_blocks,
 )
 from core.coordinator_loop import run_coordinator_loop
+from core.coordinator_interaction import run_coordinator_interaction
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -795,122 +781,12 @@ class Coordinator(CoordinatorResponseMixin):
             self._input_stream_active = False
 
     def _handle_interaction(self, initial_frames: Optional[list] = None, mark_wake: bool = False) -> bool:
-        """
-        Process a single interaction from audio capture through response.
-
-        Returns:
-            True if an interaction was processed, False if skipped.
-        """
-        is_music_iteration = False
-        self.interaction_count += 1
-        self.logger.info(f"\n{'='*60}")
-        self.logger.info(f"[Loop] Iteration {self.interaction_count}/{self.MAX_INTERACTIONS}")
-        self.logger.info(f"[Loop] Memory: {self.memory}")
-        self.logger.info(f"{'='*60}")
-
-        overrides = dict(self.next_interaction_overrides)
-        if overrides:
-            log_event(f"NEXT_INTERACTION_OVERRIDES_APPLIED {overrides}")
-        self.next_interaction_overrides.clear()
-
-        try:
-            # Half-duplex: abort if speaking
-            if self._is_speaking.is_set():
-                self.logger.info("[Iteration] Skipping interaction: currently speaking")
-                self.interaction_count -= 1
-                return False
-            self._is_processing.set()
-            current_owner = self.audio_owner.get_owner()
-            if current_owner and not overrides.get("force_passive_listening"):
-                log_event(f"STT_BLOCKED_AUDIO_OWNER owner={current_owner}")
-                self.interaction_count -= 1
-                return False
-            # TASK 15: Initialize latency probe for this interaction
-            self.current_probe = LatencyProbe(self.interaction_count)
-            if mark_wake:
-                self.current_probe.mark("wake_detected")
-
-            audio_bytes = capture_audio_stage(self, initial_frames=initial_frames)
-            text = transcribe_audio_stage(self, audio_bytes)
-            transcript_result = process_transcript_stage(self, text, overrides)
-            if not transcript_result.continue_processing:
-                return transcript_result.interaction_result
-            text = transcript_result.text
-            stt_conf = transcript_result.stt_confidence
-            parse_result = parse_intent_stage(self, text, log_event)
-            if not parse_result.continue_processing:
-                return parse_result.interaction_result
-            intent = parse_result.intent
-            # 4. Fast-path deterministic commands (before LLM generation)
-            # Procedural and deterministic commands must execute immediately without LLM latency
-
-            response_guard = CoordinatorResponseGuard(self)
-
-            deterministic_result = dispatch_simple_deterministic_stage(
-                self, intent, text
-            )
-            if deterministic_result.handled:
-                response_guard.set_output(deterministic_result.output_produced)
-                response_guard.finalize()
-                return deterministic_result.interaction_result
-            if dispatch_system_health_stage(
-                self, intent, response_guard.mark_output, response_guard.finalize
-            ):
-                return True
-            procedural_result = dispatch_procedural_stage(
-                self, text, response_guard.mark_output, response_guard.finalize
-            )
-            if procedural_result.handled:
-                response_guard.set_output(procedural_result.output_produced)
-                return procedural_result.interaction_result
-
-            if stop_active_music_for_phrase(
-                self, text, response_guard.finalize
-            ):
-                return True
-            generation = generate_interaction_response(
-                self,
-                intent,
-                response_guard.mark_output,
-                response_guard.finalize,
-            )
-            response_guard.set_output(generation.output_produced)
-            is_music_iteration = generation.is_music_iteration
-            if generation.return_interaction:
-                return generation.interaction_result
-            response_text = generation.response_text
-            response_guard.set_output(deliver_and_record_response(
-                self,
-                intent=intent,
-                user_text=text,
-                response_text=response_text,
-                overrides=overrides,
-                output_produced=response_guard.output_produced,
-            ))
-
-            response_guard.finalize()
-
-            if is_music_iteration:
-                self.interaction_count -= 1
-                self.logger.info(
-                    f"[Iteration] Music iteration complete - decremented counter to {self.interaction_count}"
-                )
-
-            self._last_utterance_time = time.time()
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"[Iteration {self.interaction_count}] Failed: {e}"
-            )
-            raise
-        finally:
-            # HARDENING STEP 3: Reset audio authority after each interaction
-            try:
-                self.force_release_audio("ITERATION_END")
-            except Exception as e:
-                self.logger.warning(f"[Iteration] Error resetting audio owner: {e}")
-            self._is_processing.clear()
+        return run_coordinator_interaction(
+            self,
+            initial_frames=initial_frames,
+            mark_wake=mark_wake,
+            event_logger=log_event,
+        )
     
     def run(self) -> None:
         run_coordinator_loop(self)
