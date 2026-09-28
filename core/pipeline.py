@@ -133,6 +133,7 @@ from core.pipeline_conversation_gates import dispatch_conversation_gate
 from core.pipeline_confidence_gate import apply_confidence_gate
 from core.pipeline_canonical_stage import run_canonical_stage
 from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
+from core.pipeline_intent_stage import prepare_intent_stage
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -4737,7 +4738,6 @@ class ArgoPipeline(PipelineMemoryMixin):
                 self._deliver_canonical_response(repair_result["message"], interaction_id,
                     replay_mode, overrides, enforce_confidence=False, force_tts=True)
                 return
-        personal_question_bypass_logged = False
         try:
             stt_conf = max(0.0, min(1.0, float(confidence_hint)))
         except Exception:
@@ -4793,153 +4793,23 @@ class ArgoPipeline(PipelineMemoryMixin):
             overrides,
         ):
             return
-        # Reuse early_intent from fast-path check above (same text, same parser)
-        intent = early_intent
-
-        request_kind = self._classify_request_type(user_text, intent)
-        if (
-            (intent is None or intent.intent_type != IntentType.MUSIC)
-            and user_text.lower().startswith("play")
-            and self._music_noun_detected(user_text)
-        ):
-            keyword = user_text[4:].strip()
-            intent = Intent(
-                intent_type=IntentType.MUSIC,
-                confidence=1.0,
-                raw_text=user_text,
-                keyword=keyword or None,
-            )
-            request_kind = "ACTION"
-            self.logger.info("[INTENT_OVERRIDE] forced MUSIC due to play+music nouns")
-        safe_utterance = re.sub(r"\s+", " ", (user_text or "").replace("\n", " ").strip())
-        intent_type_label = intent.intent_type.value if intent else "None"
-        intent_artist = getattr(intent, "artist", None)
-        intent_title = getattr(intent, "title", None)
-        self.logger.info(
-            "[INTENT] intent=%s request_kind=%s artist=%s title=%s utterance=\"%s\"",
-            intent_type_label,
-            request_kind,
-            intent_artist,
-            intent_title,
-            safe_utterance,
+        intent_result = prepare_intent_stage(
+            self,
+            early_intent,
+            user_text,
+            topic,
+            matched,
+            stt_conf,
+            interaction_id,
+            replay_mode,
+            overrides,
         )
-        
-        # Phase 5: Commands bypass session context entirely
-        if request_kind == "ACTION":
-            self._conversation_buffer.clear(reason="command intent")
-        
-        if intent is None:
-            music_keywords = {
-                "play",
-                "pause",
-                "resume",
-                "shuffle",
-                "song",
-                "music",
-                "artist",
-                "album",
-                "next",
-                "skip",
-                "track",
-            }
-            detected_keywords = sorted({kw for kw in music_keywords if kw in safe_utterance.lower()})
-            if detected_keywords:
-                self.logger.warning(
-                    "[INTENT WARNING] intent=None but music keywords detected keywords=%s utterance=\"%s\"",
-                    detected_keywords,
-                    safe_utterance,
-                )
-        
-        # IDENTITY STATEMENT GATE: Detect "my name is X" BEFORE request classification gates
-        # This must happen before canonical/clarification/LLM routing
-        if not topic:
-            name_candidate = self._extract_name_from_statement(user_text)
-            if name_candidate and not self._session_flags.get("confirm_name", False):
-                self.logger.info(
-                    f"[MEMORY] candidate_detected type=identity.name value={name_candidate} conf_hint={stt_conf:.2f}"
-                )
-                self._pending_memory = {"key": "name", "value": name_candidate}
-                self._session_flags["confirm_name"] = True
-                response = f"Do you want me to remember that your name is {name_candidate}?"
-                self.logger.info("[MEMORY] confirmation_requested")
-                self._record_timeline("IDENTITY_CONFIRM_GATE", stage="pipeline", interaction_id=interaction_id)
-                self.broadcast("log", f"Argo: {response}")
-                self._append_convo_ledger("argo", response)
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-        
-        canonical_reason = "none"
-        if topic:
-            canonical_reason = f"topic:{topic}"
-        self.logger.info(f"[CANONICAL] classification={request_kind} canonical_reason={canonical_reason}")
-        self._record_timeline(
-            f"CLASSIFY {request_kind}",
-            stage="pipeline",
-            interaction_id=interaction_id,
-        )
-        if request_kind == "ACTION" and intent is None:
-            request_kind = "QUESTION"
-
-        ambiguity_prompt = self._ambiguous_short_question_prompt(user_text, request_kind, topic)
-        if ambiguity_prompt:
-            self.logger.info("[CLARIFY] triggered reason=ambiguous_short_question text=\"%s\"", safe_utterance)
-            self._record_timeline("AMBIGUOUS_SHORT_QUESTION_GUARD", stage="pipeline", interaction_id=interaction_id)
-            self._respond_with_clarification(
-                interaction_id,
-                replay_mode,
-                overrides,
-                prompt=ambiguity_prompt,
-            )
+        if intent_result.handled:
             return
-
-        low_confidence_audio = not self.strict_lab_mode and stt_conf < 0.50
-        if (
-            not self.strict_lab_mode
-            and request_kind == "QUESTION"
-            and low_confidence_audio
-            and not personal_question_bypass_logged
-        ):
-            self.logger.info("[PERSONAL_MODE] Question bypassed confidence gating")
-            personal_question_bypass_logged = True
-
-        # CLARIFICATION GATE: Low-mid confidence question without phrase/canonical match
-        if (
-            request_kind == "QUESTION"
-            and 0.35 <= stt_conf < 0.55
-            and not topic
-            and self.strict_lab_mode
-        ):
-            phrase_match_gate = any(" " in m for m in matched) if matched else False
-            clarify_asked_already = self._session_flags.get("clarification_asked", False)
-            
-            if not phrase_match_gate and not clarify_asked_already:
-                self._session_flags["clarification_asked"] = True
-                response = self._get_clarification_prompt()
-                self.logger.info(f"[CLARIFY] triggered conf={stt_conf:.2f} reason=ambiguous_question")
-                self._record_timeline("CLARIFY_GATE", stage="pipeline", interaction_id=interaction_id)
-                self.broadcast("log", f"Argo: {response}")
-                self._append_convo_ledger("argo", response)
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-
+        intent = intent_result.intent
+        request_kind = intent_result.request_kind
+        safe_utterance = intent_result.safe_utterance
+        low_confidence_audio = intent_result.low_confidence_audio
         if dispatch_music_volume(
             self,
             user_text,
