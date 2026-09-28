@@ -45,7 +45,6 @@ from core.intent_parser import RuleBasedIntentParser, Intent, IntentType, normal
 from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
 from core.music_player import get_music_player
 from core.music_status import query_music_status
-from core.audio_routing import get_audio_routing_status, set_audio_routing
 from core.app_control import (
     WRITABLE_APPS,
     app_status_response,
@@ -93,6 +92,7 @@ from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_
 from core.streaming_tts_worker import StreamingTTSWorker
 from core.streamed_text_collector import StreamedTextCollector
 from core.pipeline_bluetooth import PipelineBluetoothService
+from core.pipeline_audio_routing import PipelineAudioRoutingService
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -137,6 +137,7 @@ class ArgoPipeline:
         self._draft_responses = PipelineDraftResponseService(self)
         self._writing_responses = PipelineWritingResponseService(self)
         self._bluetooth = PipelineBluetoothService(self)
+        self._audio_routing = PipelineAudioRoutingService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -2242,80 +2243,21 @@ class ArgoPipeline:
         )
 
     def _format_audio_routing_status(self, status: dict) -> str:
-        output = status.get("default_output") or "Unknown"
-        input_dev = status.get("default_input") or "Unknown"
-        outputs = status.get("output_devices") or []
-        inputs = status.get("input_devices") or []
-        parts = [f"Audio output is set to {output}.", f"Input is {input_dev}."]
-        if outputs:
-            sample = ", ".join(outputs[:5])
-            parts.append(f"Available outputs: {sample}.")
-        if inputs:
-            sample = ", ".join(inputs[:5])
-            parts.append(f"Available inputs: {sample}.")
-        return " ".join(parts)
+        return self._audio_routing.format_status(status)
 
     def _is_audio_routing_status_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        status_phrases = {
-            "audio status",
-            "what audio device am i using",
-            "where is sound playing",
-            "are my headphones active",
-            "what speakers are active",
-            "audio routing status",
-        }
-        if any(p in lowered for p in status_phrases):
-            return True
-        if "audio" in lowered and any(term in lowered for term in {"status", "using", "playing", "active"}):
-            return True
-        return False
+        return self._audio_routing.is_status_text(text)
 
     def _is_audio_routing_control_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        control_phrases = {
-            "switch to",
-            "use",
-            "set audio output to",
-            "set audio input to",
-            "change audio device",
-            "change audio output",
-            "change audio input",
-        }
-        if any(p in lowered for p in control_phrases):
-            return True
-        return False
+        return self._audio_routing.is_control_text(text)
 
     def _respond_with_audio_routing_status(self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_audio_routing_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] Audio routing STATUS attempted control")
-            message = "Audio routing status cannot change devices. Say a control command explicitly."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        self.logger.info("[AUDIO_ROUTING] mode=STATUS")
-        status = get_audio_routing_status()
-        message = self._format_audio_routing_status(status)
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._audio_routing.respond_status(user_text, interaction_id, replay_mode, overrides)
 
     def _respond_with_audio_routing_control(self, intent, user_text: str, stt_conf: float, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_audio_routing_status_text(user_text) and not self._is_audio_routing_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] Audio routing CONTROL attempted status-only response")
-            message = "Audio routing control requires an explicit command."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if not self._is_audio_routing_control_text(user_text):
-            message = "Audio routing control requires an explicit command."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if stt_conf < self._personal_mode_min_confidence:
-            message = "Audio routing command unclear. Please repeat."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        self.logger.info(f"[AUDIO_ROUTING] mode=CONTROL action=switch target={getattr(intent, 'target', None)}")
-        allowed, reason = self._evaluate_gates("audio_routing_control", "audio_routing", interaction_id)
-        if not allowed:
-            message = f"Audio routing control blocked by policy ({reason})."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        action_target = getattr(intent, "target", None) or user_text
-        is_input = "input" in user_text.lower() or "mic" in user_text.lower() or "microphone" in user_text.lower()
-        ok, msg = set_audio_routing(action_target, is_input)
-        return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._audio_routing.respond_control(
+            intent, user_text, stt_conf, interaction_id, replay_mode, overrides
+        )
 
     def _is_app_status_text(self, text: str) -> bool:
         lowered = (text or "").lower()
