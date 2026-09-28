@@ -167,7 +167,7 @@ class DryRunExecutionReport:
     # User confirmation
     user_confirmed: bool = False
     user_confirmed_timestamp: Optional[str] = None
-    user_approved_execution: bool = False  # For dry_run_and_confirm() integration
+    user_approved_execution: bool = False  # Set only by an explicit approval gate
     user_approval_timestamp: Optional[str] = None
     
     # Version
