@@ -5322,11 +5322,6 @@ class ArgoPipeline(PipelineMemoryMixin):
             llm_context_scope = "buffered"
             self.logger.info(f"[LLM] Brain memory context active")
         
-        # Check if utterance starts with an imperative verb (should pass to LLM)
-        imperative_verbs = {"give", "tell", "show", "list", "generate", "create", "make", "find", "get", "pick", "choose", "suggest", "recommend", "explain", "describe", "say", "read", "write", "name", "calculate", "compute"}
-        first_word = (user_text or "").lower().split()[0] if user_text and user_text.strip() else ""
-        is_imperative = first_word in imperative_verbs
-        
         self.transition_state("THINKING", interaction_id=interaction_id, source="llm")
         self.logger.info(f"[LLM] context_scope={llm_context_scope}")
 
