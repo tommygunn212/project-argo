@@ -127,6 +127,7 @@ from core.pipeline_music_volume import dispatch_music_volume
 from core.pipeline_music_dispatch import dispatch_music_intent
 from core.pipeline_system_info import dispatch_system_info
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
+from core.pipeline_special_dispatch import dispatch_special_intent
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5272,43 +5273,10 @@ class ArgoPipeline(PipelineMemoryMixin):
         ):
             return
 
-        # SILENCE_OVERRIDE: "shut up" - one joke, then quiet mode
-        if intent and intent.intent_type == IntentType.SILENCE_OVERRIDE:
-            if self._respond_with_silence_override(interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.ARGO_IDENTITY:
-            self.logger.info("[INTENT] ARGO_IDENTITY detected; routing to LLM with persona")
-            # Fall through to LLM so persona handles identity naturally
-
-        if intent and intent.intent_type == IntentType.ARGO_GOVERNANCE:
-            if self._respond_with_argo_governance(intent, interaction_id, replay_mode, overrides):
-                return
-
-        if intent and intent.intent_type == IntentType.COUNT:
-            response = self._build_count_response(user_text)
-            self.broadcast("log", f"Argo: {response}")
-            if not self.stop_signal.is_set() and not replay_mode:
-                tts_text = self._sanitize_tts_text(response, enforce_confidence=False)
-                tts_override = (overrides or {}).get("suppress_tts", False)
-                if tts_override:
-                    self.logger.info("[TTS] Suppressed for next interaction override")
-                elif tts_text:
-                    self.speak(tts_text, interaction_id=interaction_id)
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            self.logger.info("--- Interaction Complete ---")
-            self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
+        if dispatch_special_intent(
+            self, intent, user_text, interaction_id, replay_mode, overrides
+        ):
             return
-
-        if intent and intent.intent_type in {IntentType.SYSTEM_HEALTH, IntentType.SYSTEM_STATUS}:
-            if self._respond_with_system_health(user_text, intent, interaction_id, replay_mode, overrides):
-                return
-
-        # Phase 1 & 2: Self-diagnostics - ARGO checks itself
-        if intent and intent.intent_type == IntentType.SELF_DIAGNOSTICS:
-            if self._respond_with_self_diagnostics(interaction_id, replay_mode, overrides):
-                return
-
         if dispatch_domain_intent(
             self, intent, user_text, interaction_id, replay_mode, overrides
         ):
