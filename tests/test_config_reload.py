@@ -16,4 +16,6 @@ def test_reloading_config_does_not_inherit_an_earlier_files_nested_values(tmp_pa
     reloaded = config_module.load_config(str(second))
 
     assert reloaded.get("audio.sample_rate") == 16_000
+    assert reloaded.get("rag.provider") == "anythingllm"
+    assert reloaded.get("rag.timeout_seconds") == 15
     assert config_module._DEFAULT_CONFIG["audio"]["sample_rate"] == 16_000

@@ -328,6 +328,13 @@ _DEFAULT_CONFIG = {
         "enable_tts_streaming": ENABLE_LLM_TTS_STREAMING,
         "required": REQUIRE_LLM
     },
+    "rag": {
+        "enabled": True,
+        "provider": "anythingllm",
+        "base_url": "http://127.0.0.1:3001",
+        "workspace": "tommy-knowledge-base",
+        "timeout_seconds": 15,
+    },
     "personality": {
         "mode": "tommy_gunn"
     },
