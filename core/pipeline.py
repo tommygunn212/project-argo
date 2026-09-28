@@ -119,6 +119,7 @@ from core.pipeline_music_dispatch import dispatch_music_intent
 from core.pipeline_system_info import dispatch_system_info
 from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
+from core.pipeline_self_diagnostics import respond_with_self_diagnostics
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
@@ -3585,82 +3586,10 @@ class ArgoPipeline(PipelineMemoryMixin):
             self, user_text, intent, interaction_id, replay_mode, overrides
         )
     def _respond_with_self_diagnostics(self, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        """Phase 1 & 2: ARGO checks itself and reports status.
-        
-        Runs diagnostics on all components (Ollama, Piper, Whisper, audio).
-        If problems found, proposes assisted recovery (requires user permission).
-        """
-        from core.self_diagnostics import SystemDiagnostics, AssistedRecovery
-        
-        def _finish(message: str) -> bool:
-            return self._deliver_canonical_response(
-                message,
-                interaction_id,
-                replay_mode,
-                overrides,
-                enforce_confidence=False,
-                force_tts=True,
-            )
-        
-        try:
-            diag = SystemDiagnostics()
-            diag.check_all()
-            summary = diag.get_summary()
-            
-            # Broadcast full results to UI
-            self.broadcast("diagnostics_result", summary)
-            
-            # Build spoken response
-            overall = summary.get("overall", "unknown")
-            if overall == "ok":
-                response = f"All systems operational. {summary.get('ok_count', 0)} components checked, all healthy."
-            elif overall == "warning":
-                warnings = summary.get("warnings", [])
-                if warnings:
-                    warn_names = ", ".join(w["name"] for w in warnings[:3])
-                    response = f"Systems mostly okay. Warnings on: {warn_names}."
-                else:
-                    response = "Systems okay with minor warnings."
-            elif overall == "error":
-                errors = summary.get("errors", [])
-                if errors:
-                    # Report first error with fix
-                    first_error = errors[0]
-                    err_name = first_error.get("name", "component")
-                    err_msg = first_error.get("message", "has an issue")
-                    err_fix = first_error.get("fix", "")
-                    
-                    response = f"Problem detected: {err_name} {err_msg}."
-                    if err_fix:
-                        response += f" Suggested fix: {err_fix}."
-                    
-                    # Propose recovery if available
-                    for comp_name, comp_health in diag.last_check.items():
-                        if comp_health.status.value == "error" and comp_health.recovery_action:
-                            # The server installs one shared manager so the
-                            # proposal here is the same proposal the UI approves.
-                            recovery = getattr(self, "recovery_manager", None)
-                            if recovery is None:
-                                recovery = AssistedRecovery(pipeline=self, broadcast_fn=self.broadcast)
-                            proposal = recovery.propose(
-                                comp_health.recovery_action,
-                                comp_health.message
-                            )
-                            if proposal:
-                                response += f" Want me to try restarting {err_name}?"
-                            break
-                else:
-                    response = "There's a problem but I couldn't identify it."
-            else:
-                response = "Diagnostics complete but status unclear."
-            
-            self.logger.info(f"[SELF_DIAGNOSTICS] {overall}: {summary.get('summary', '')}")
-            return _finish(response)
-            
-        except Exception as e:
-            self.logger.error(f"[SELF_DIAGNOSTICS] Failed: {e}", exc_info=True)
-            return _finish("I tried to check myself but something went wrong.")
-
+        """Compatibility facade for the extracted self-diagnostics stage."""
+        return respond_with_self_diagnostics(
+            self, interaction_id, replay_mode, overrides
+        )
     # SILENCE_OVERRIDE joke pool (fixed set, no dynamic generation)
     SILENCE_JOKES = [
         "Fine! I'll go polish my transistors.",
