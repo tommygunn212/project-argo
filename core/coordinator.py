@@ -85,13 +85,13 @@ from core.coordinator_stages import (
 )
 from core.coordinator_system_health_stage import dispatch_system_health_stage
 from core.coordinator_response_stage import deliver_and_record_response
+from core.coordinator_response_guard import CoordinatorResponseGuard
 from core.coordinator_music_stage import (
     dispatch_music_stage,
     stop_active_music_for_phrase,
 )
 from core.policy import (
     LLM_WATCHDOG_SECONDS,
-    RESPONSE_WATCHDOG_SECONDS,
     WATCHDOG_FALLBACK_RESPONSE,
 )
 from core.watchdog import Watchdog
@@ -893,56 +893,28 @@ class Coordinator(CoordinatorResponseMixin):
             # 4. Fast-path deterministic commands (before LLM generation)
             # Procedural and deterministic commands must execute immediately without LLM latency
 
-            response_watchdog = Watchdog("RESPONSE", RESPONSE_WATCHDOG_SECONDS)
-            response_watchdog.__enter__()
-            output_produced = False
-            response_watchdog_finalized = False
-
-            def _finalize_response_watchdog():
-                nonlocal output_produced, response_watchdog_finalized
-                if response_watchdog_finalized:
-                    return
-                response_watchdog.__exit__(None, None, None)
-                response_watchdog_finalized = True
-                if response_watchdog.triggered and not output_produced:
-                    self.logger.warning(
-                        "[WATCHDOG] NO_OUTPUT_DETECTED: elapsed=%.2fs",
-                        response_watchdog.elapsed_seconds,
-                    )
-                    if WATCHDOG_FALLBACK_RESPONSE:
-                        try:
-                            self._safe_speak(WATCHDOG_FALLBACK_RESPONSE)
-                            output_produced = True
-                        except Exception:
-                            pass
-                    # Reset to safe idle state
-                    self.stop_requested = False
-                    self._is_speaking.clear()
-
-            def _mark_output_produced():
-                nonlocal output_produced
-                output_produced = True
+            response_guard = CoordinatorResponseGuard(self)
 
             deterministic_result = dispatch_simple_deterministic_stage(
                 self, intent, text
             )
             if deterministic_result.handled:
-                output_produced = deterministic_result.output_produced
-                _finalize_response_watchdog()
+                response_guard.set_output(deterministic_result.output_produced)
+                response_guard.finalize()
                 return deterministic_result.interaction_result
             if dispatch_system_health_stage(
-                self, intent, _mark_output_produced, _finalize_response_watchdog
+                self, intent, response_guard.mark_output, response_guard.finalize
             ):
                 return True
             procedural_result = dispatch_procedural_stage(
-                self, text, _mark_output_produced, _finalize_response_watchdog
+                self, text, response_guard.mark_output, response_guard.finalize
             )
             if procedural_result.handled:
-                output_produced = procedural_result.output_produced
+                response_guard.set_output(procedural_result.output_produced)
                 return procedural_result.interaction_result
 
             if stop_active_music_for_phrase(
-                self, text, _finalize_response_watchdog
+                self, text, response_guard.finalize
             ):
                 return True
             # Generate response (LLM, with SessionMemory available)
@@ -954,10 +926,10 @@ class Coordinator(CoordinatorResponseMixin):
             self.current_probe.mark("llm_start")
 
             music_result = dispatch_music_stage(
-                self, intent, _mark_output_produced, _finalize_response_watchdog
+                self, intent, response_guard.mark_output, response_guard.finalize
             )
             if music_result.routed:
-                output_produced = music_result.output_produced
+                response_guard.set_output(music_result.output_produced)
                 is_music_iteration = music_result.is_music_iteration
                 if music_result.return_interaction:
                     return music_result.interaction_result
@@ -972,16 +944,16 @@ class Coordinator(CoordinatorResponseMixin):
                     )
                     response_text = WATCHDOG_FALLBACK_RESPONSE
                 self.current_probe.mark("llm_end")
-            output_produced = deliver_and_record_response(
+            response_guard.set_output(deliver_and_record_response(
                 self,
                 intent=intent,
                 user_text=text,
                 response_text=response_text,
                 overrides=overrides,
-                output_produced=output_produced,
-            )
+                output_produced=response_guard.output_produced,
+            ))
 
-            _finalize_response_watchdog()
+            response_guard.finalize()
 
             if is_music_iteration:
                 self.interaction_count -= 1
