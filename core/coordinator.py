@@ -84,13 +84,13 @@ from core.coordinator_stages import (
     transcribe_audio_stage,
 )
 from core.coordinator_system_health_stage import dispatch_system_health_stage
+from core.coordinator_response_stage import deliver_and_record_response
 from core.coordinator_music_stage import (
     dispatch_music_stage,
     stop_active_music_for_phrase,
 )
 from core.policy import (
     LLM_WATCHDOG_SECONDS,
-    TTS_WATCHDOG_SECONDS,
     RESPONSE_WATCHDOG_SECONDS,
     WATCHDOG_FALLBACK_RESPONSE,
 )
@@ -971,96 +971,14 @@ class Coordinator(CoordinatorResponseMixin):
                     )
                     response_text = WATCHDOG_FALLBACK_RESPONSE
                 self.current_probe.mark("llm_end")
-            # PHASE 16: Capture for observer snapshot
-            self._last_response = response_text
-
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Response: '{response_text}'"
+            output_produced = deliver_and_record_response(
+                self,
+                intent=intent,
+                user_text=text,
+                response_text=response_text,
+                overrides=overrides,
+                output_produced=output_produced,
             )
-            self.last_response_text = response_text
-
-            # If DEVELOP intent produced code, write/open in sandbox
-            if intent.intent_type == IntentType.DEVELOP:
-                code_block = self._extract_code_block(response_text)
-                if code_block:
-                    filename = self._infer_sandbox_filename(text, response_text)
-                    self.builder.write_script(filename, code_block)
-                    self.builder.open_in_vscode(filename)
-                    self._last_built_script = filename
-                    response_text = self._strip_code_blocks(response_text)
-
-            # 5. Speak response (with interrupt-on-voice support)
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Speaking response..."
-            )
-
-            # TASK 15: Mark TTS start
-            self.current_probe.mark("tts_start")
-
-            # Only speak if response is not empty (music playback has empty response)
-            if not self.runtime_overrides.get("tts_enabled", True):
-                self.logger.info("[TTS] Disabled by runtime override")
-            elif overrides.get("suppress_tts"):
-                self.logger.info("[TTS] Suppressed for next interaction override")
-            elif response_text and response_text.strip():
-                streamed_output = bool(getattr(self.generator, "_streamed_output", False))
-                if streamed_output:
-                    self.logger.debug("[TTS] Streaming enabled; skipping duplicate speak")
-                    output_produced = True
-                else:
-                    # TASK 17: Set speaking flag (half-duplex audio gate)
-                    self._is_speaking.set()
-                    try:
-                        # Speak and monitor for user interrupt (voice input during playback)
-                        with Watchdog("TTS", TTS_WATCHDOG_SECONDS) as tts_wd:
-                            self._speak_with_interrupt_detection(response_text)
-                        if tts_wd.triggered:
-                            self.logger.warning("[WATCHDOG] TTS exceeded watchdog threshold")
-                        output_produced = True
-                    finally:
-                        self._is_speaking.clear()
-            else:
-                self.logger.info(
-                    f"[Iteration {self.interaction_count}] "
-                    f"Response is empty, skipping TTS"
-                )
-
-            # TASK 15: Mark TTS end
-            self.current_probe.mark("tts_end")
-
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Response spoken"
-            )
-
-            # 6. Store in SessionMemory (v4)
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Storing in memory..."
-            )
-            self.memory.append(
-                user_utterance=text,
-                parsed_intent=intent.intent_type.value,
-                generated_response=response_text
-            )
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] "
-                f"Memory updated: {self.memory}"
-            )
-
-            # 7. Check for stop keyword in response
-            response_lower = response_text.lower()
-            for keyword in self.STOP_KEYWORDS:
-                if keyword in response_lower:
-                    self.logger.info(
-                        f"[Iteration {self.interaction_count}] "
-                        f"Stop keyword detected: '{keyword}'"
-                    )
-                    self.stop_requested = True
-                    break
-
-            # TASK 15: Log interaction latency and add to stats
-            self.current_probe.log_summary()
-            self.latency_stats.add_probe(self.current_probe)
 
             _finalize_response_watchdog()
 
