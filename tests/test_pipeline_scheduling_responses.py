@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import core.pipeline_scheduling_responses as responses
+from core.pipeline import ArgoPipeline
 
 
 class _Logger:
@@ -20,6 +21,35 @@ class _Pipeline(responses.PipelineSchedulingResponseMixin):
 
 def _call(pipeline, method, text):
     return getattr(pipeline, method)(None, text, "interaction-1", False, {})
+
+
+def test_pipeline_uses_composed_scheduling_service_with_public_facade():
+    assert not issubclass(ArgoPipeline, responses.PipelineSchedulingResponseMixin)
+    pipeline = object.__new__(ArgoPipeline)
+    calls = []
+    names = (
+        "_respond_with_set_reminder",
+        "_respond_with_list_reminders",
+        "_respond_with_cancel_reminder",
+        "_respond_with_calendar_add",
+        "_respond_with_calendar_query",
+        "_respond_with_cancel_calendar",
+    )
+    pipeline._scheduling_responses = type(
+        "SchedulingDouble",
+        (),
+        {
+            name: (lambda method_name: lambda _self, *args, **kwargs: calls.append(
+                (method_name, args, kwargs)
+            ) or True)(name)
+            for name in names
+        },
+    )()
+
+    for name in names:
+        assert getattr(pipeline, name)(None, "text", "id", False, {}) is True
+
+    assert [name for name, _args, _kwargs in calls] == list(names)
 
 
 def test_set_reminder_preserves_parsing_and_storage(monkeypatch):

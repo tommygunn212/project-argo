@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
+from typing import Any, Protocol
 
 from tools.reminders import (
     add_calendar_event,
@@ -102,4 +103,26 @@ class PipelineSchedulingResponseMixin:
         search = m.group(1).strip(" .,!?") if m else user_text
         response = cancel_calendar_event(search)
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
+
+
+class SchedulingResponseHost(Protocol):
+    """Small host contract required by reminder and calendar responses."""
+
+    logger: Any
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+
+class PipelineSchedulingService(PipelineSchedulingResponseMixin):
+    """Composed scheduling handlers backed by a narrow pipeline interface."""
+
+    def __init__(self, host: SchedulingResponseHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool:
+        return self._host._deliver_canonical_response(message, *args, **kwargs)
 

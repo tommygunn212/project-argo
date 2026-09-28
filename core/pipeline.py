@@ -88,7 +88,7 @@ from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
 from core.pipeline_draft_responses import PipelineDraftResponseMixin
-from core.pipeline_scheduling_responses import PipelineSchedulingResponseMixin
+from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningMixin
 from core.pipeline_writing_responses import PipelineWritingResponseMixin
@@ -112,7 +112,6 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 class ArgoPipeline(
     PipelineWritingResponseMixin,
     PipelineTaskPlanningMixin,
-    PipelineSchedulingResponseMixin,
     PipelineDraftResponseMixin,
     PipelineMemoryMixin,
 ):
@@ -145,6 +144,7 @@ class ArgoPipeline(
         self._personal_mode_min_text_len = PERSONAL_MODE_MIN_TEXT_LEN
         self._intent_parser = RuleBasedIntentParser()
         self._inspection_responses = PipelineInspectionService(self)
+        self._scheduling_responses = PipelineSchedulingService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -309,6 +309,24 @@ class ArgoPipeline(
 
     def _respond_with_file_info(self, *args, **kwargs):
         return self._inspection_responses._respond_with_file_info(*args, **kwargs)
+
+    def _respond_with_set_reminder(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_set_reminder(*args, **kwargs)
+
+    def _respond_with_list_reminders(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_list_reminders(*args, **kwargs)
+
+    def _respond_with_cancel_reminder(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_cancel_reminder(*args, **kwargs)
+
+    def _respond_with_calendar_add(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_calendar_add(*args, **kwargs)
+
+    def _respond_with_calendar_query(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_calendar_query(*args, **kwargs)
+
+    def _respond_with_cancel_calendar(self, *args, **kwargs):
+        return self._scheduling_responses._respond_with_cancel_calendar(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
