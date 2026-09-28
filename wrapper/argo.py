@@ -124,6 +124,7 @@ from wrapper.transcription_workflow import (
     TranscriptionWorkflow,
     transcribe_with_confirmation,
 )
+from wrapper.execution_workflow import ExecutionWorkflow, execute_approved_plan
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
@@ -904,72 +905,24 @@ def execute_and_confirm(
         None - errors are recorded in result artifact
     """
     
-    # Sanity check: execution engine available?
-    if not EXECUTION_ENGINE_AVAILABLE:
-        print("❌ Execution engine not available. Cannot execute plan.", file=sys.stderr)
-        return None
-    
-    # HARD GATES: All must pass
-    
-    # Gate 1: DryRunExecutionReport must exist
-    if dry_run_report is None:
-        print("❌ GATE 1 FAILED: No dry-run report provided. Execution aborted.", file=sys.stderr)
-        print("   Simulation must complete successfully before execution.", file=sys.stderr)
-        return None
-    
-    # Gate 2: Simulation status must be SUCCESS
-    if dry_run_report.simulation_status != SimulationStatus.SUCCESS:
-        print(f"❌ GATE 2 FAILED: Simulation status is {dry_run_report.simulation_status.value}.", file=sys.stderr)
-        print("   Only SUCCESS simulations can be executed.", file=sys.stderr)
-        if dry_run_report.blocking_reason:
-            print(f"   Reason: {dry_run_report.blocking_reason}", file=sys.stderr)
-        return None
-    
-    # Gate 3: User approval required
-    if not user_approved:
-        print("❌ GATE 3 FAILED: User has not approved execution.", file=sys.stderr)
-        print("   Execution requires explicit confirmation.", file=sys.stderr)
-        return None
-    
-    # Gate 4 & 5: Artifact IDs must match
-    if dry_run_report.execution_plan_id != plan_artifact.plan_id:
-        print("❌ GATES 4-5 FAILED: Artifact ID mismatch.", file=sys.stderr)
-        print(f"   Report plan ID: {dry_run_report.execution_plan_id}", file=sys.stderr)
-        print(f"   Artifact plan ID: {plan_artifact.plan_id}", file=sys.stderr)
-        print("   Execution aborted to prevent mismatched execution.", file=sys.stderr)
-        return None
-    
-    # ALL GATES PASSED - Execute the plan
-    print("\n" + "="*70, file=sys.stderr)
-    print("ALL HARD GATES PASSED - EXECUTING PLAN", file=sys.stderr)
-    print("="*70, file=sys.stderr)
-    
-    # Create execution mode and execute
-    execution_mode = ExecutionMode()
-    
-    result = execution_mode.execute_plan(
-        dry_run_report=dry_run_report,
-        plan_artifact=plan_artifact,
+    return execute_approved_plan(
+        ExecutionWorkflow(
+            engine_available=EXECUTION_ENGINE_AVAILABLE,
+            execution_mode_factory=(
+                ExecutionMode if EXECUTION_ENGINE_AVAILABLE else None
+            ),
+            simulation_status=(
+                SimulationStatus if EXECUTION_ENGINE_AVAILABLE else None
+            ),
+            execution_status=(
+                ExecutionStatus if EXECUTION_ENGINE_AVAILABLE else None
+            ),
+        ),
+        dry_run_report,
+        plan_artifact,
         user_approved=user_approved,
-        intent_id=intent_id
+        intent_id=intent_id,
     )
-    
-    # Report execution result
-    if result.execution_status == ExecutionStatus.SUCCESS:
-        print(f"\n✅ EXECUTION SUCCESSFUL", file=sys.stderr)
-        print(f"   {result.steps_succeeded}/{result.total_steps} steps completed", file=sys.stderr)
-    elif result.execution_status == ExecutionStatus.PARTIAL:
-        print(f"\n⚠️  EXECUTION PARTIAL", file=sys.stderr)
-        print(f"   {result.steps_succeeded}/{result.total_steps} steps succeeded", file=sys.stderr)
-        print(f"   {result.steps_failed}/{result.total_steps} steps failed", file=sys.stderr)
-    elif result.execution_status == ExecutionStatus.ROLLED_BACK:
-        print(f"\n⚠️  EXECUTION ROLLED BACK", file=sys.stderr)
-        print(f"   System state restored due to step failure", file=sys.stderr)
-    elif result.execution_status == ExecutionStatus.ABORTED:
-        print(f"\n❌ EXECUTION ABORTED", file=sys.stderr)
-        print(f"   Reason: {result.abort_reason}", file=sys.stderr)
-    
-    return result
 
 
 # ============================================================================
