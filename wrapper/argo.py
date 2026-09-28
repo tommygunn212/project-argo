@@ -1,67 +1,8 @@
-"""
-================================================================================
-ARGO (Autonomous-Resistant Governed Operator)
-Local-First AI Control System
-================================================================================
+"""Classic wrapper facade for CLI, wake, transcription, and execution flows.
 
-Module:      argo.py (Main Execution Engine)
-Creator:     Tommy Gunn (@tommygunn212)
-Version:     1.0.0
-Created:     December 2025
-Purpose:     Core orchestration layer for ARGO AI system
-
-================================================================================
-FEATURES
-================================================================================
-
-1. CONVERSATIONAL AI
-   - Direct interface to Ollama's llama3.1:8b model
-   - Example-based voice guidance (warm, confident, casual tone)
-   - Adaptive persona based on user familiarity and query type
-   - Full auditability with JSON logging of all interactions
-
-2. MEMORY & CONTEXT
-   - TF-IDF + topic fallback for relevant past interaction retrieval
-   - Automatic preference detection (tone, verbosity, humor, structure)
-   - Explicit memory storage (no background learning)
-   - Session-aware context building
-
-3. RECALL MODE
-   - Deterministic meta-query detection (what did we discuss?)
-   - Formatted conversation summaries without model re-inference
-   - No model inference for recall—deterministic list formatting
-
-4. CONVERSATION BROWSING
-   - Read-only access to past interactions by date or topic
-   - Search by keyword without modification
-   - Session isolation and management
-
-5. INTERACTIVE & SINGLE-SHOT MODES
-   - Multi-turn conversation with full context
-   - Single-shot query execution
-   - Natural input/output flow
-
-6. WHISPER AUDIO TRANSCRIPTION
-   - Audio-to-text conversion with explicit confirmation gate
-   - TranscriptionArtifact for full auditability
-   - No blind automation: user sees and approves every transcript
-   - Deterministic transcription (same audio → same text)
-   - Comprehensive logging of all transcription events
-
-================================================================================
-DEPENDENCIES
-================================================================================
-
-- Python 3.9+
-- requests (HTTP library for Ollama API)
-- ollama (Ollama Python wrapper)
-- openai-whisper (Audio transcription with confirmation gate)
-- memory.py (TF-IDF + topic retrieval)
-- prefs.py (Preference detection and application)
-- browsing.py (Conversation browser)
-- transcription.py (Whisper integration with TranscriptionArtifact)
-
-================================================================================
+The implementation lives in focused ``wrapper.*`` modules. This file preserves
+the historical import and script entry points used by the CLI and input shell.
+Smooth Voice uses ``livekit_realtime_agent.py`` and ``core.voice`` instead.
 """
 
 import sys
