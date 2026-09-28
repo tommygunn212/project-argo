@@ -41,6 +41,7 @@ from core.coordinator_text import (
 )
 from core.coordinator_loop import run_coordinator_loop
 from core.coordinator_interaction import run_coordinator_interaction
+from core.coordinator_wake import WakeEventDependencies, handle_wake_event
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -627,73 +628,39 @@ class Coordinator:
         Handle a queued wake event on the main coordinator thread.
         Owns state transitions, interaction ID increment, and recording start.
         """
-        # INSTRUMENTATION: Log wake word detection
-        log_event(f"WAKE_WORD detected (state={self.state_machine.current_state.value})")
+        def set_interaction_id(value: int) -> None:
+            self.interaction_id = value
 
-        if self._is_processing.is_set():
-            self.logger.info("[Wake] Already processing, ignoring wake event")
-            return
+        def set_stop_requested(value: bool) -> None:
+            self.stop_requested = value
 
-        if self._is_speaking.is_set():
-            self.logger.info("[Wake] BARGE-IN: Wake word detected while speaking")
-            log_event("BARGE_IN start")
+        def set_last_utterance_time(value: float) -> None:
+            self._last_utterance_time = value
 
-            try:
-                self.force_release_audio("BARGE_IN")
-                log_event("AUDIO KILLED")
-                self.logger.info("[Wake] Audio authority hard-killed output")
-            except Exception as e:
-                self.logger.warning(f"[Wake] Error hard-killing output: {e}")
-
-            try:
-                self.sink.stop_interrupt()
-                self.logger.info("[Wake] TTS stopped synchronously")
-            except Exception as e:
-                self.logger.warning(f"[Wake] Error stopping TTS: {e}")
-
-            self._is_speaking.clear()
-
-            try:
-                self._safe_transition(
-                    self.state_machine.listening,
-                    State.LISTENING,
-                    source="audio",
-                    interaction_id=str(self.interaction_id),
-                )
-                log_event("STATE_CHANGE SPEAKING -> LISTENING (barge-in)")
-                self.logger.info("[State] SPEAKING -> LISTENING (barge-in)")
-            except RuntimeError as e:
-                self.logger.error(f"[Wake] FATAL: Invalid state transition: {e}")
-                self.stop_requested = True
-                return
-            except Exception as e:
-                self.logger.warning(f"[Wake] Error setting LISTENING state: {e}")
-        else:
-            # Normal wake when not speaking
-            try:
-                if self.state_machine.is_asleep:
-                    self._safe_transition(
-                        self.state_machine.wake,
-                        State.LISTENING,
-                        source="audio",
-                        interaction_id=str(self.interaction_id),
-                    )
-            except RuntimeError as e:
-                self.logger.error(f"[Wake] FATAL: Invalid state transition: {e}")
-                self.stop_requested = True
-                return
-            except Exception as e:
-                self.logger.warning(f"[Wake] Error waking from sleep: {e}")
-                return
-
-        # LISTENING entry: increment interaction ID and validate
-        self.interaction_id += 1
-        self._assert_no_interaction_id_reuse()
-
-        self._last_utterance_time = time.time()
-        self._play_wake_ack()
-        # Process first interaction immediately using wake pre-roll
-        self._handle_interaction(mark_wake=True)
+        handle_wake_event(
+            WakeEventDependencies(
+                current_state=lambda: self.state_machine.current_state,
+                is_asleep=lambda: self.state_machine.is_asleep,
+                is_processing=self._is_processing.is_set,
+                is_speaking=self._is_speaking.is_set,
+                clear_speaking=self._is_speaking.clear,
+                force_release_audio=self.force_release_audio,
+                stop_speech=self.sink.stop_interrupt,
+                safe_transition=self._safe_transition,
+                listening_transition=lambda: self.state_machine.listening,
+                wake_transition=lambda: self.state_machine.wake,
+                get_interaction_id=lambda: self.interaction_id,
+                set_interaction_id=set_interaction_id,
+                set_stop_requested=set_stop_requested,
+                assert_no_interaction_id_reuse=self._assert_no_interaction_id_reuse,
+                set_last_utterance_time=set_last_utterance_time,
+                play_wake_ack=self._play_wake_ack,
+                handle_interaction=self._handle_interaction,
+                event_logger=log_event,
+                logger=self.logger,
+                time_now=time.time,
+            )
+        )
 
     def _is_input_active(self) -> bool:
         if self._input_stream_active:
