@@ -10,11 +10,14 @@ This repository contains long-lived design notes, milestone records, and current
 - `docs/VOICE_AUDIT_FIX_STATUS_2026-09-12.md` is the authoritative record for the current classic-voice repair scope, targeted verification, and remaining limits.
 - `docs/ARGO_NEXT_UPGRADES.md` tracks first-pass implementations and deliberately deferred product work.
 - `docs/TODO.md` is the active short backlog.
-- `TEST_VERIFICATION_COMMANDS.md` supplies the v1.9.1 focused regression command. It does not claim a full-suite count.
+- Root `README.md` and `AGENTS.md` supply the maintained verification commands.
 
 ## Historical records
 
-Files whose names include `COMPLETE`, dated milestone reports, older release notes, archived material, and `TEST_DEBT.md` preserve evidence and rationale from their stated dates. Do not combine their historical test counts, latency figures, or completion labels with the v1.9.1 state.
+Files whose names include `COMPLETE`, dated milestone reports, older release notes,
+and archived material preserve evidence and rationale from their stated dates. Do
+not combine their historical test counts, latency figures, or completion labels
+with the v1.9.1 state.
 
 ## Verified checkpoint
 

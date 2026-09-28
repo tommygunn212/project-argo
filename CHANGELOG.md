@@ -476,7 +476,8 @@
 - bare except: clauses replaced with logged exceptions throughout codebase
 
 ### Known Issues (Not Blocking)
-- 12 pre-existing test failures (test debt) — tracked in TEST_DEBT.md
+- At this historical release point, 12 tests were failing. This is not the
+  current suite state.
 - test_stt_hardening.py: outdated function signature
 - test_clarification_gate.py: assertion mismatch
 - test_confirmable_identity_memory.py: harness issues

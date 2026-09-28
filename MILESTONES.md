@@ -37,8 +37,9 @@ See `docs/VOICE_AUDIT_FIX_STATUS_2026-09-12.md` for measured facts and limits.
 - [✔] Test harness safety: import-time sys.exit() removed from 4 test files
 - [✔] bare except: clauses replaced with logged exceptions
 
-### Known Test Debt
-- 12 pre-existing test failures tracked in TEST_DEBT.md
+### Historical test state
+- This milestone originally recorded 12 failures. They are no longer current;
+  use the full suite output for the present baseline.
 
 ---
 

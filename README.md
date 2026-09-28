@@ -280,13 +280,13 @@ Highlights:
 ## Testing
 
 Run the test suite with:
-```bash
-pytest
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q --tb=line
+node --test tests\test_avatar_motion.cjs
 ```
 
-**Verification status (v1.9.1):** 141 focused Python regression tests and 4 JavaScript Cortana checks passed on 2026-09-12. This is not a full-suite baseline; historical test-count documents are retained for context and marked as stale where applicable.
-
-Known test failures are tracked in [TEST_DEBT.md](TEST_DEBT.md). These are non-blocking and do not affect runtime behavior.
+Treat the command output as the current test baseline. Historical release notes may
+contain older counts, but they are not evidence of the present suite state.
 
 ---
 
