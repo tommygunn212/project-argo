@@ -32,6 +32,7 @@ TARGETED_TESTS = [
     "tests/test_path_containment.py",
     "tests/test_filesystem_access.py",
     "tests/test_realtime_tools.py",
+    "tests/test_realtime_audio.py",
     "tests/test_livekit_config.py",
     "tests/test_realtime_personality.py",
     "tests/test_voice_mode_ownership.py",
@@ -162,13 +163,18 @@ def check_live_config(rep: Report) -> dict:
 
     rep.step("turn detection is configured", cfg.turn_detection == "semantic_vad",
              f"{cfg.turn_detection} / eagerness={cfg.turn_eagerness}")
-    rep.step("noise cancellation is on", cfg.noise_cancellation is True,
+    audio_safe = cfg.noise_cancellation is False and cfg.input_noise_reduction == "far_field"
+    rep.step("self-hosted audio filtering is configured safely", audio_safe,
              f"livekit BVC={cfg.noise_cancellation}, server={cfg.input_noise_reduction}")
     rep.step("a cough cannot interrupt", cfg.min_interruption_words >= 2,
              f"min_interruption_words={cfg.min_interruption_words}, "
              f"min_duration={cfg.min_interruption_duration}s")
-    rep.step("personality is the collaborator", cfg.personality == "argo",
-             f"personality={cfg.personality}")
+    from core import persona_briefs
+    selected = persona_briefs.get(cfg.personality)
+    persona_loaded = selected is not None and selected.block in cfg.instructions
+    rep.step("the selected personality reaches the session", persona_loaded,
+             f"personality={cfg.personality}, "
+             f"fingerprint={persona_briefs.instruction_fingerprint(cfg.instructions)}")
     same = cfg.fallback_model == cfg.model
     rep.step("there is a fallback model", bool(cfg.fallback_model),
              f"{cfg.model} -> {cfg.fallback_model}"
@@ -203,28 +209,18 @@ def check_urgent_interrupts(rep: Report) -> None:
 
 def check_instructions(rep: Report) -> None:
     from core.livekit_config import get_livekit_realtime_config
+    from core import persona_briefs
 
-    text = get_livekit_realtime_config().instructions.lower()
-
-    # Each phrase must appear ONLY inside a prohibition. Matching the bare
-    # phrase flagged "Do not repeat his question back" as asking for the very
-    # thing it forbids.
-    banned = {
-        "repeats the question": "repeat his question",
-        "canned acknowledgement": "great question",
-        "narrates internal steps": "narrate what you are about to do",
-    }
-    present = [
-        label for label, phrase in banned.items()
-        if phrase in text and not re.search(r"do not [^.]{0,40}" + re.escape(phrase), text)
-    ]
+    instructions = get_livekit_realtime_config().instructions
+    text = instructions.lower()
+    present = persona_briefs.find_banned(instructions)
     rep.step("instructions do not ask for the behaviours he banned", not present,
              ", ".join(present) or "none found")
 
     required = {
-        "match his length": "match his length",
-        "let him finish": "let him finish",
-        "stop when interrupted": "stop immediately",
+        "length target": "aim for about twenty seconds",
+        "hold the floor": "when he is thinking, say nothing at all",
+        "stop when interrupted": "stop instantly and listen",
     }
     missing = [label for label, phrase in required.items() if phrase not in text]
     rep.step("instructions cover turn-taking and length", not missing,
