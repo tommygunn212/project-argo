@@ -55,6 +55,7 @@ from wrapper.wake_controls import (
     stop_detector,
 )
 from wrapper.wake_interaction import WakeInteractionRuntime, run_wake_interaction
+from wrapper.state_controls import transition_to_speaking, transition_to_thinking
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -520,35 +521,21 @@ def execute_and_confirm(
 
 
 def _transition_to_thinking() -> bool:
-    """
-    Transition to THINKING state when command is accepted.
-    
-    Returns True if transition succeeded.
-    """
-    if not STATE_MACHINE_AVAILABLE or not _state_machine:
-        return False
-    
-    if _state_machine.accept_command():
-        print("[STATE] Accepted command (LISTENING -> THINKING)", file=sys.stderr)
-        return True
-    
-    return False
+    """Transition to THINKING state when a command is accepted."""
+    return transition_to_thinking(
+        STATE_MACHINE_AVAILABLE,
+        _state_machine,
+        lambda message: print(message, file=sys.stderr),
+    )
 
 
 def _transition_to_speaking() -> bool:
-    """
-    Transition to SPEAKING state when audio playback starts.
-    
-    Returns True if transition succeeded.
-    """
-    if not STATE_MACHINE_AVAILABLE or not _state_machine:
-        return False
-    
-    if _state_machine.start_audio():
-        print("[STATE] Starting audio (THINKING -> SPEAKING)", file=sys.stderr)
-        return True
-    
-    return False
+    """Transition to SPEAKING state when audio playback starts."""
+    return transition_to_speaking(
+        STATE_MACHINE_AVAILABLE,
+        _state_machine,
+        lambda message: print(message, file=sys.stderr),
+    )
 
 
 def run_argo(
