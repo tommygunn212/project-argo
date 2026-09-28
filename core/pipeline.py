@@ -121,6 +121,10 @@ from core.pipeline_rag_context import (
     retrieve_rag_context,
     should_use_rag_context,
 )
+from core.pipeline_runtime_state import (
+    PipelineRuntimeStateDependencies,
+    PipelineRuntimeStateService,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -566,82 +570,76 @@ class ArgoPipeline:
             self.llm_model_name = result.llm_model_name
         self.broadcast("status", "READY")
 
+    def _runtime_state_service(self) -> PipelineRuntimeStateService:
+        service = self.__dict__.get("_pipeline_runtime_state_service")
+        if service is None:
+            service = PipelineRuntimeStateService(
+                PipelineRuntimeStateDependencies(
+                    state_lock=self._state_lock,
+                    get_state=lambda: self.current_state,
+                    set_state=lambda value: setattr(self, "current_state", value),
+                    allowed_transitions=lambda state: self.ALLOWED_TRANSITIONS.get(
+                        state, set()
+                    ),
+                    stop_requested=lambda: self.stop_signal.is_set(),
+                    set_stop_signal=lambda: self.stop_signal.set(),
+                    get_is_speaking=lambda: self.is_speaking,
+                    set_is_speaking=lambda value: setattr(
+                        self, "is_speaking", value
+                    ),
+                    set_tts_finished_at=lambda value: setattr(
+                        self, "tts_finished_at", value
+                    ),
+                    current_interaction_id=lambda: self.current_interaction_id,
+                    append_timeline=lambda entry: self.timeline_events.append(entry),
+                    clear_illegal_transition=lambda: (
+                        setattr(self, "illegal_transition", False),
+                        setattr(self, "illegal_transition_details", None),
+                    ),
+                    mark_illegal_transition=lambda payload: (
+                        setattr(self, "illegal_transition", True),
+                        setattr(self, "illegal_transition_details", payload),
+                    ),
+                    broadcast=lambda event, payload: self.broadcast(event, payload),
+                    play_sound_cue=lambda cue, **kwargs: self._play_sound_cue(
+                        cue, **kwargs
+                    ),
+                    stop_active_cue=lambda reason, interaction_id: (
+                        self.sound_cues.stop_active_cue(
+                            reason, interaction_id=interaction_id
+                        )
+                    ),
+                    stop_tts=lambda: self.stop_tts(),
+                    force_release_audio=lambda reason, interaction_id: (
+                        self.audio.force_release_audio(
+                            reason, interaction_id=interaction_id
+                        )
+                    ),
+                    stop_playback=lambda: self.audio.stop_playback(),
+                    clear_buffers=lambda: self.audio.clear_buffers(),
+                    force_pipeline_state=lambda state, **kwargs: self.force_state(
+                        state, **kwargs
+                    ),
+                    record_event=log_event,
+                )
+            )
+            self._pipeline_runtime_state_service = service
+        return service
+
     def _record_timeline(self, event: str, stage: str, interaction_id: str = ""):
-        ts = int(time.monotonic() * 1000)
-        self.timeline_events.append({
-            "t": ts,
-            "id": interaction_id,
-            "stage": stage,
-            "event": event,
-        })
-        log_event(event, stage=stage, interaction_id=interaction_id)
+        self._runtime_state_service().record_timeline(
+            event, stage=stage, interaction_id=interaction_id
+        )
 
     def transition_state(self, new_state: str, interaction_id: str = "", source: str = "audio") -> bool:
-        with self._state_lock:
-            old_state = self.current_state
-            if (
-                old_state == "IDLE"
-                and new_state == "LISTENING"
-                and source == "audio"
-                and self.stop_signal.is_set()
-            ):
-                self._record_timeline(
-                    "STATE IDLE->LISTENING ignored after interrupt",
-                    stage="state",
-                    interaction_id=interaction_id,
-                )
-                return True
-            if new_state == old_state:
-                return True
-            allowed = new_state in self.ALLOWED_TRANSITIONS.get(old_state, set())
-            if not allowed:
-                self.illegal_transition = True
-                payload = {
-                    "from": old_state,
-                    "to": new_state,
-                    "allowed": list(self.ALLOWED_TRANSITIONS.get(old_state, set())),
-                    "source": source,
-                    "interaction_id": interaction_id,
-                }
-                self.illegal_transition_details = payload
-                self._record_timeline(
-                    f"ILLEGAL_TRANSITION {old_state}->{new_state} source={source}",
-                    stage="state",
-                    interaction_id=interaction_id,
-                )
-                self.broadcast("illegal_transition", payload)
-                self.broadcast("status", "ERROR")
-                self.broadcast("log", f"ILLEGAL TRANSITION: {old_state} → {new_state}")
-                self._play_sound_cue("error", interaction_id=interaction_id)
-                if self.is_speaking:
-                    try:
-                        self.stop_signal.set()
-                        self.stop_tts()
-                        self.audio.force_release_audio("ILLEGAL_TRANSITION", interaction_id=interaction_id)
-                        self.audio.stop_playback()
-                    except Exception:
-                        pass
-                return False
-            self.current_state = new_state
-            self._record_timeline(
-                f"STATE {old_state}->{new_state}",
-                stage="state",
-                interaction_id=interaction_id,
-            )
-            self.broadcast("status", new_state)
-            self._play_state_sound_cue(old_state, new_state, interaction_id)
-            return True
+        return self._runtime_state_service().transition_state(
+            new_state, interaction_id=interaction_id, source=source
+        )
 
     def force_state(self, new_state: str, interaction_id: str = "", source: str = "BARGE_IN"):
-        with self._state_lock:
-            old_state = self.current_state
-            self.current_state = new_state
-            self._record_timeline(
-                f"STATE {old_state}->{new_state} (forced, source={source})",
-                stage="state",
-                interaction_id=interaction_id,
-            )
-            self.broadcast("status", new_state)
+        self._runtime_state_service().force_state(
+            new_state, interaction_id=interaction_id, source=source
+        )
 
     def _play_sound_cue(self, cue: str, interaction_id: str = "", block: bool = False) -> None:
         try:
@@ -650,20 +648,12 @@ class ArgoPipeline:
             self.logger.debug("Sound cue failed", exc_info=True)
 
     def _play_state_sound_cue(self, old_state: str, new_state: str, interaction_id: str = "") -> None:
-        if new_state == "THINKING":
-            self._play_sound_cue("thinking_start", interaction_id=interaction_id)
-        elif new_state == "SPEAKING":
-            self._play_sound_cue("speaking_start", interaction_id=interaction_id, block=True)
-        elif new_state == "LISTENING":
-            if old_state == "SPEAKING":
-                self._play_sound_cue("speaking_end", interaction_id=interaction_id)
-            else:
-                self._play_sound_cue("listening_start", interaction_id=interaction_id)
+        self._runtime_state_service().play_state_sound_cue(
+            old_state, new_state, interaction_id
+        )
 
     def reset_interaction(self):
-        self.interrupt_current_response("RESET_INTERACTION", target_state="LISTENING")
-        self.illegal_transition = False
-        self.illegal_transition_details = None
+        self._runtime_state_service().reset_interaction()
 
     def stop_tts(self) -> None:
         """Force stop TTS playback (both Edge and OpenAI engines)."""
@@ -686,34 +676,12 @@ class ArgoPipeline:
         clear_buffers: bool = True,
     ) -> None:
         """Synchronously cancel active speech and release audio ownership."""
-        interaction_id = interaction_id or self.current_interaction_id
-        self._record_timeline(f"INTERRUPT {reason}", stage="interrupt", interaction_id=interaction_id)
-        try:
-            self.sound_cues.stop_active_cue(reason, interaction_id=interaction_id)
-        except Exception:
-            pass
-        self.stop_signal.set()
-        self.stop_tts()
-        try:
-            self.audio.force_release_audio(reason, interaction_id=interaction_id)
-        except Exception:
-            pass
-        try:
-            self.audio.stop_playback()
-        except Exception:
-            pass
-        if clear_buffers:
-            try:
-                self.audio.clear_buffers()
-            except Exception:
-                pass
-        self.is_speaking = False
-        self.tts_finished_at = time.time()
-        if target_state:
-            try:
-                self.force_state(target_state, interaction_id=interaction_id, source=reason)
-            except Exception:
-                pass
+        self._runtime_state_service().interrupt_current_response(
+            reason=reason,
+            interaction_id=interaction_id,
+            target_state=target_state,
+            clear_buffers=clear_buffers,
+        )
 
     def is_barge_in_suppressed(self) -> bool:
         """Check if barge-in is temporarily suppressed (for short deterministic responses)."""
