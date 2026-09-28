@@ -169,7 +169,7 @@ When the pipeline produces a response without calling the LLM (e.g., system heal
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ (Coordinator v3: Bounded Loop)                          │
+│ (Classic Coordinator: Bounded Loop)                     │
 │ - Max 3 interactions per session                         │
 │ - Clear stop conditions (stop keyword OR max reached)    │
 │ - No memory between turns                               │
@@ -446,7 +446,7 @@ text = apply_persona(text, ResponseType.ANSWER, "rick")
 
 ---
 
-### Layer 6: Coordinator v3 (Bounded Interaction Loop)
+### Layer 6: Classic Coordinator (Bounded Interaction Loop)
 
 **File:** `core/coordinator.py`
 
@@ -506,11 +506,11 @@ Clean exit with summary
 
 ### Layer 7: Run Script (Initialization & Cleanup)
 
-**File:** `run_coordinator_v3.py`
+**Files:** `main.py` (composition root) and `wrapper/argo.py` (classic facade)
 
 **Responsibility:**
 - Import all layers
-- Initialize Coordinator v3
+- Initialize the classic coordinator and its composed services
 - Run the bounded loop
 - Clean up and exit
 
@@ -592,7 +592,7 @@ while True:
 - Loop never exits (no bounds)
 - Everything tangled together
 
-**Solution: 7-layer pipeline with Coordinator v3**
+**Solution: 7-layer pipeline with the classic coordinator**
 
 ---
 

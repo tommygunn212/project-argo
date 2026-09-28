@@ -800,8 +800,8 @@ Enable verbose logging:
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-# Now run:
-python run_coordinator_v2.py
+# Now restart the backend and voice worker:
+RESTART_ARGO.bat
 ```
 
 ---
