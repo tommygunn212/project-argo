@@ -20,13 +20,12 @@ import warnings
 # Suppress sounddevice Windows cffi warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="sounddevice")
 
-from core.intent_parser import Intent, IntentType, normalize_system_text, is_system_keyword
 from core.session_memory import SessionMemory
 from core.latency_probe import LatencyStats
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
-from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
+from core.config import get_config, get_runtime_overrides
 from core.coordinator_responses import (
     CoordinatorResponseService,
     ResponseDeliveryDependencies,
@@ -412,26 +411,6 @@ class Coordinator:
         self.next_interaction_overrides.clear()
         log_event("NEXT_OVERRIDE_CLEARED")
     
-    def _assert_no_id_reuse(self, new_id: int) -> None:
-        """
-        FIX 1: Assertion - fatal if interaction_id reuses or decreases.
-        Every MIC OPEN must have a new, strictly increasing ID.
-        
-        Args:
-            new_id: The interaction_id for the upcoming MIC OPEN
-            
-        Raises:
-            RuntimeError: If ID reuse or decrease detected
-        """
-        if new_id <= self._last_mic_open_id:
-            error_msg = f"FATAL: Interaction ID violation - new_id={new_id}, last_mic_open_id={self._last_mic_open_id} (must strictly increase)"
-            self.logger.error(f"[Assert] {error_msg}")
-            raise RuntimeError(error_msg)
-        
-        # Update last seen ID
-        self._last_mic_open_id = new_id
-        self.logger.debug(f"[Assert] Interaction ID verified: {new_id} > {self._last_mic_open_id - 1}")
-
     def _assert_no_interaction_id_reuse(self):
         if not hasattr(self, "_last_mic_open_interaction_id"):
             self._last_mic_open_interaction_id = None
