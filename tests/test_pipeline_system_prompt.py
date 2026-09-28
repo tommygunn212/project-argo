@@ -18,10 +18,6 @@ def _pipeline(examples=""):
     "mode",
     ["argo", "tommy_gunn", "tommy_mix", "jarvis", "rick", "claptrap", "plain"],
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason="classic pipeline still duplicates persona text outside persona_briefs",
-)
 def test_classic_prompt_uses_exact_shared_persona_brief(mode):
     prompt = _pipeline()._get_system_message(mode, serious_mode=False)
 
