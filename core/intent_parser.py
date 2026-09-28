@@ -51,6 +51,7 @@ from core.intent_rules.general import (
     parse_generic_utterance,
     parse_performance_intent,
 )
+from core.intent_rules.router import parse_domain_intent
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
@@ -155,41 +156,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if control_intent is not None:
             return control_intent
 
-        platform_intent = parse_platform_intent(text_original, text_lower, serious_mode)
-        if platform_intent is not None:
-            return platform_intent
-
-        identity = parse_identity_or_governance(text_original, text_lower, serious_mode)
-        if identity is not None:
-            return identity
-
-        writing_intent = parse_writing_intent(text_original, text_lower, serious_mode)
-        if writing_intent is not None:
-            return writing_intent
-
-        task_plan_intent = parse_task_plan_intent(text_original, text_lower, serious_mode)
-        if task_plan_intent is not None:
-            return task_plan_intent
-
-        smart_home_intent = parse_smart_home_intent(text_original, text_lower, serious_mode)
-        if smart_home_intent is not None:
-            return smart_home_intent
-
-        scheduling_intent = parse_scheduling_intent(text_original, text_lower, serious_mode)
-        if scheduling_intent is not None:
-            return scheduling_intent
-
-        vision_intent = parse_vision_intent(text_original, text_lower, serious_mode)
-        if vision_intent is not None:
-            return vision_intent
-
-        filesystem_intent = parse_filesystem_intent(text_original, text_lower, serious_mode)
-        if filesystem_intent is not None:
-            return filesystem_intent
-
-        system_health = parse_system_health(text_original, text_lower, serious_mode)
-        if system_health is not None:
-            return system_health
+        domain_intent = parse_domain_intent(text_original, text_lower, serious_mode)
+        if domain_intent is not None:
+            return domain_intent
 
         contextual_intent = parse_development_or_tech(
             text_original,
