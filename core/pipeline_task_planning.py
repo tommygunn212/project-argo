@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 from tools.email_sender import send_email
 from tools.filesystem import format_file_list_for_speech, search_files
 from tools.home_assistant import execute_smart_home_command, parse_smart_home_command
@@ -182,4 +184,31 @@ class PipelineTaskPlanningMixin:
             "web_search": _web_search_fn,
             "draft_blog": _draft_blog_fn,
         }
+
+
+class TaskPlanningHost(Protocol):
+    """Pipeline capabilities needed by the multi-step planner."""
+
+    logger: Any
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool: ...
+
+    def _writing_llm_call(self, prompt: str, interaction_id: str) -> str: ...
+
+
+class PipelineTaskPlanningService(PipelineTaskPlanningMixin):
+    """Composed planner backed by the host's delivery and LLM capabilities."""
+
+    def __init__(self, host: TaskPlanningHost):
+        self._host = host
+
+    @property
+    def logger(self) -> Any:
+        return self._host.logger
+
+    def _deliver_canonical_response(self, message: str, *args: Any, **kwargs: Any) -> bool:
+        return self._host._deliver_canonical_response(message, *args, **kwargs)
+
+    def _writing_llm_call(self, prompt: str, interaction_id: str) -> str:
+        return self._host._writing_llm_call(prompt, interaction_id)
 

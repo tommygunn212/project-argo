@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import core.pipeline_task_planning as planning
+from core.pipeline import ArgoPipeline
 
 
 class _Logger:
@@ -118,3 +119,21 @@ def test_executor_summarize_uses_interaction_scoped_llm():
     assert pipeline.llm_prompts == [
         ("Summarize this concisely:\n\nlong material", "interaction-9")
     ]
+
+
+def test_pipeline_composes_planner_and_preserves_public_methods():
+    assert not issubclass(ArgoPipeline, planning.PipelineTaskPlanningMixin)
+    pipeline = object.__new__(ArgoPipeline)
+    calls = []
+    pipeline._task_planning = SimpleNamespace(
+        _respond_with_task_plan=lambda *args, **kwargs: calls.append(
+            ("respond", args, kwargs)
+        ) or True,
+        _build_plan_executor=lambda *args, **kwargs: calls.append(
+            ("executor", args, kwargs)
+        ) or {"ok": True},
+    )
+
+    assert pipeline._respond_with_task_plan(None, "plan", "id", False, {}) is True
+    assert pipeline._build_plan_executor("id") == {"ok": True}
+    assert [name for name, _args, _kwargs in calls] == ["respond", "executor"]

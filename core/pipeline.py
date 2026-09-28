@@ -90,7 +90,7 @@ from core.pipeline_self_diagnostics import respond_with_self_diagnostics
 from core.pipeline_draft_responses import PipelineDraftResponseMixin
 from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
-from core.pipeline_task_planning import PipelineTaskPlanningMixin
+from core.pipeline_task_planning import PipelineTaskPlanningService
 from core.pipeline_writing_responses import PipelineWritingResponseMixin
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
@@ -111,7 +111,6 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 # ============================================================================
 class ArgoPipeline(
     PipelineWritingResponseMixin,
-    PipelineTaskPlanningMixin,
     PipelineDraftResponseMixin,
     PipelineMemoryMixin,
 ):
@@ -145,6 +144,7 @@ class ArgoPipeline(
         self._intent_parser = RuleBasedIntentParser()
         self._inspection_responses = PipelineInspectionService(self)
         self._scheduling_responses = PipelineSchedulingService(self)
+        self._task_planning = PipelineTaskPlanningService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -327,6 +327,12 @@ class ArgoPipeline(
 
     def _respond_with_cancel_calendar(self, *args, **kwargs):
         return self._scheduling_responses._respond_with_cancel_calendar(*args, **kwargs)
+
+    def _respond_with_task_plan(self, *args, **kwargs):
+        return self._task_planning._respond_with_task_plan(*args, **kwargs)
+
+    def _build_plan_executor(self, *args, **kwargs):
+        return self._task_planning._build_plan_executor(*args, **kwargs)
 
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
