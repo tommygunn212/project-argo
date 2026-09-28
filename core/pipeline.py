@@ -116,6 +116,11 @@ from core.pipeline_music_text import (
     strip_music_politeness,
 )
 from core.pipeline_audio_policy import AudioRejectionThresholds, should_reject_audio
+from core.pipeline_rag_context import (
+    RagContextDependencies,
+    retrieve_rag_context,
+    should_use_rag_context,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -1041,48 +1046,24 @@ class ArgoPipeline:
         return True, ""
 
     def _get_rag_context(self, user_text: str, interaction_id: str) -> str:
-        if not is_capability_enabled("rag_query"):
-            return ""
-        if not is_permission_allowed("rag_query"):
-            return ""
-        if not is_module_enabled("rag"):
-            return ""
-        if not self._should_use_rag_context(user_text):
-            self.logger.info("[RAG] skipped for conversational turn")
-            self._record_timeline("RAG_SKIPPED_CONVERSATIONAL", stage="rag", interaction_id=interaction_id)
-            return ""
-        safe_query = " ".join(re.findall(r"[a-z0-9]+", (user_text or "").lower()))
-        safe_query = re.sub(r"\s+", " ", safe_query).strip()
-        token_count = len(safe_query.split()) if safe_query else 0
-        self.logger.info(f"[RAG] sanitized_rag_query='{safe_query}' tokens={token_count}")
-        if token_count < 2:
-            return ""
-        try:
-            from core.knowledge_service import format_prompt_context, query_knowledge
-            result = query_knowledge(safe_query, config=self.config)
-        except Exception as e:
-            self.logger.warning(f"[RAG] Query failed: {e}")
-            self._record_timeline("RAG_QUERY_ERROR", stage="rag", interaction_id=interaction_id)
-            return ""
-        context = format_prompt_context(result)
-        if not context:
-            error = result.get("error", "empty") if isinstance(result, dict) else "invalid_result"
-            self.logger.info("[RAG] Knowledge service returned no context: %s", error)
-            self._record_timeline("RAG_QUERY_EMPTY", stage="rag", interaction_id=interaction_id)
-            return ""
-        self._record_timeline("RAG_QUERY_HIT anythingllm", stage="rag", interaction_id=interaction_id)
-        return context
+        return retrieve_rag_context(
+            RagContextDependencies(
+                capability_enabled=is_capability_enabled,
+                permission_allowed=is_permission_allowed,
+                module_enabled=is_module_enabled,
+                should_use_context=self._should_use_rag_context,
+                logger=self.logger,
+                record_timeline=self._record_timeline,
+            ),
+            user_text=user_text,
+            interaction_id=interaction_id,
+            config=self.config,
+        )
 
     @staticmethod
     def _should_use_rag_context(user_text: str) -> bool:
         """Keep project retrieval out of normal, free-form conversation."""
-        text = (user_text or "").lower()
-        technical_terms = (
-            "argo", "home assistant", "jellyfin", "server", "config", "log", "error",
-            "code", "repo", "repository", "file", "database", "api", "livekit", "tts",
-            "stt", "whisper", "piper", "plugin", "deploy", "test", "debug",
-        )
-        return any(term in text for term in technical_terms)
+        return should_use_rag_context(user_text)
 
     @staticmethod
     def _is_low_confidence_stt_prompt_echo(user_text: str, confidence: float) -> bool:
