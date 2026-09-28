@@ -60,12 +60,12 @@ def test_a_genuinely_noisy_room_still_raises_the_threshold():
     assert adaptive(noisy) > adaptive(quiet)
 
 
-def test_the_ceiling_is_wired_into_main():
+def test_the_ceiling_is_wired_into_classic_runtime():
     """The constant has to exist where calibration runs, not just here."""
     import inspect
 
-    import main
+    from core.classic_main_runtime import run_classic_main_runtime
 
-    source = inspect.getsource(main.main_loop)
-    assert "CALIBRATION_MAX_MULTIPLE" in source
+    source = inspect.getsource(run_classic_main_runtime)
+    assert "calibration_max_multiple" in source
     assert "ceiling" in source

@@ -49,6 +49,7 @@ from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture_loop import run_classic_capture_loop
+from core.classic_main_runtime import ClassicMainRuntime, run_classic_main_runtime
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -788,77 +789,38 @@ def main_loop():
         broadcast_msg("status", "ERROR")
         return
     
-    # --- VAD SETTINGS ---
-    # Higher threshold = Less sensitive to background noise
-    # Lower threshold = Easier to trigger (more false positives)
-    # Default: 5.0, Quiet room: 3.0, Noisy environment: 7.0-10.0
-    config_vad_threshold = float(config.get("audio.vad_threshold", os.getenv("ARGO_VAD_THRESHOLD", "5.0")))
-    # Hard ceiling on what calibration may raise the threshold to, as a
-    # multiple of the configured baseline. Without it, one noisy calibration
-    # window makes ARGO permanently deaf until restart.
-    CALIBRATION_MAX_MULTIPLE = float(
-        config.get("audio.calibration_max_multiple", os.getenv("ARGO_CALIBRATION_MAX_MULTIPLE", "3.0"))
-    )
-    barge_in_threshold = float(config.get("audio.barge_in_threshold", os.getenv("ARGO_BARGE_IN_THRESHOLD", "6.0")))
-
-    # --- AMBIENT NOISE CALIBRATION ---
-    vad_threshold = config_vad_threshold
-
-    def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
-        nonlocal vad_threshold, barge_in_threshold
-        result = calibrate_ambient_noise(
-            audio,
-            server_enabled=SERVER_ENABLED,
-            current_vad_threshold=vad_threshold,
-            current_barge_in_threshold=barge_in_threshold,
-            config_vad_threshold=config_vad_threshold,
-            calibration_max_multiple=CALIBRATION_MAX_MULTIPLE,
-            input_sample_rate=INPUT_SAMPLE_RATE,
-            block_size=BLOCK_SIZE,
-            broadcast=broadcast_msg,
-            logger=logger,
-            duration_seconds=duration_sec,
-            multiplier=multiplier,
-        )
-        vad_threshold = result.vad_threshold
-        barge_in_threshold = result.barge_in_threshold
-        return vad_threshold
-    vad_threshold = calibrate_noise_floor()
-    _noise_calibrate_fn = calibrate_noise_floor
-
-    if LISTENING_ENABLED:
-        logger.info("Starting in always-listening mode (VAD-based)")
-        logger.info(f"VAD Threshold set to: {vad_threshold:.3f} (adaptive)")
-        pipeline.transition_state("LISTENING")
-    else:
-        logger.info("Starting with VAD paused")
-        logger.info(f"VAD Threshold set to: {vad_threshold:.3f} (adaptive)")
-        pipeline.transition_state("IDLE")
-        broadcast_msg("status", "IDLE")
-    
     def disable_listening() -> None:
         global LISTENING_ENABLED
         LISTENING_ENABLED = False
 
-    run_classic_capture_loop(
-        audio=audio,
-        pipeline=pipeline,
-        get_server_enabled=lambda: SERVER_ENABLED,
-        get_listening_enabled=lambda: LISTENING_ENABLED,
-        disable_listening=disable_listening,
-        get_voice_mode=lambda: VOICE_MODE,
-        smooth_voice_mode=VOICE_MODE_SMOOTH,
-        runtime_overrides=RUNTIME_OVERRIDES,
-        input_sample_rate=INPUT_SAMPLE_RATE,
-        block_size=BLOCK_SIZE,
-        vad_threshold=vad_threshold,
-        barge_in_threshold=barge_in_threshold,
-        broadcast=broadcast_msg,
-        interrupt_current_response=_interrupt_current_response,
-        next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
-        sound_cues=sound_cues,
-        logger=logger,
-        event_logger=log_event,
+    def set_noise_calibrator(callback) -> None:
+        global _noise_calibrate_fn
+        _noise_calibrate_fn = callback
+
+    run_classic_main_runtime(
+        ClassicMainRuntime(
+            audio=audio,
+            pipeline=pipeline,
+            config=config,
+            environment=os.environ,
+            get_server_enabled=lambda: SERVER_ENABLED,
+            get_listening_enabled=lambda: LISTENING_ENABLED,
+            disable_listening=disable_listening,
+            get_voice_mode=lambda: VOICE_MODE,
+            smooth_voice_mode=VOICE_MODE_SMOOTH,
+            runtime_overrides=RUNTIME_OVERRIDES,
+            input_sample_rate=INPUT_SAMPLE_RATE,
+            block_size=BLOCK_SIZE,
+            broadcast=broadcast_msg,
+            logger=logger,
+            calibrate_ambient_noise=calibrate_ambient_noise,
+            set_noise_calibrator=set_noise_calibrator,
+            run_capture_loop=run_classic_capture_loop,
+            interrupt_current_response=_interrupt_current_response,
+            next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
+            sound_cues=sound_cues,
+            event_logger=log_event,
+        )
     )
 
 if __name__ == "__main__":
