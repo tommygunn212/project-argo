@@ -46,9 +46,9 @@ except Exception:
 # ============================================================================
 from core.audio_manager import AudioManager, INPUT_SAMPLE_RATE, BLOCK_SIZE
 from core.pipeline import ArgoPipeline
-from core.startup_checks import check_ollama
-from core.database import music_db_exists, get_db_status
+from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
+from core.classic_runtime_startup import start_classic_runtime
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
 from core.repair_service import RepairService, ActiveDiagnostics
@@ -875,45 +875,7 @@ def main_loop():
     _init_recovery_system()
     
     try:
-        audio.start()
-
-        llm_backend = "ollama"
-        llm_config = config.get("llm", {})
-        if isinstance(llm_config, dict):
-            llm_backend = str(llm_config.get("backend", "ollama")).lower()
-        else:
-            llm_backend = str(config.get("llm.backend", "ollama")).lower()
-        require_llm = bool(config.get("llm.required", False))
-        llm_available = False
-
-        if llm_backend == "openai":
-            llm_available = bool(os.getenv("OPENAI_API_KEY"))
-            if require_llm and not llm_available:
-                raise RuntimeError("LLM required but OPENAI_API_KEY is not set")
-            elif not llm_available:
-                logger.info("LLM offline: OPENAI_API_KEY missing; running in no-brain mode")
-            else:
-                logger.info("OpenAI LLM configured")
-        else:
-            ollama_available = check_ollama()
-            llm_available = ollama_available
-            if require_llm and not ollama_available:
-                raise RuntimeError("LLM required but Ollama is not running")
-            elif not ollama_available:
-                logger.info("LLM offline: running in no-brain mode")
-            else:
-                logger.info("Ollama online")
-
-        db_ready = music_db_exists(MUSIC_DB_PATH)
-        db_status = get_db_status(MUSIC_DB_PATH)
-        if db_ready:
-            logger.info("Music DB detected")
-        else:
-            logger.info("Music DB not present (awaiting Jellyfin ingest)")
-        broadcast_msg("db_status", db_status)
-
-        pipeline.set_llm_enabled(llm_available)
-        pipeline.warmup()
+        start_classic_runtime(audio, pipeline, config, broadcast_msg, logger)
     except Exception as e:
         logger.critical(f"Startup Failed: {e}")
         broadcast_msg("status", "ERROR")
