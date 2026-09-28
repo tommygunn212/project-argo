@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from core.system_volume import (
     adjust_volume_percent,
@@ -14,19 +15,16 @@ from core.system_volume import (
 )
 
 
-class SystemVolumeHost(Protocol):
+@dataclass(frozen=True)
+class SystemVolumeDependencies:
     logger: Any
-
-    def _deliver_canonical_response(self, *args, **kwargs) -> bool: ...
-
-    def _evaluate_gates(
-        self, capability_key: str, module_key: str, interaction_id: str
-    ) -> tuple[bool, str]: ...
+    deliver_response: Callable[..., bool]
+    evaluate_gates: Callable[[str, str, str], tuple[bool, str]]
 
 
 class PipelineSystemVolumeService:
-    def __init__(self, host: SystemVolumeHost) -> None:
-        self._host = host
+    def __init__(self, dependencies: SystemVolumeDependencies) -> None:
+        self._dependencies = dependencies
 
     @staticmethod
     def is_system_volume_text(text: str) -> bool:
@@ -42,8 +40,8 @@ class PipelineSystemVolumeService:
     def respond_status(
         self, interaction_id: str, replay_mode: bool, overrides: dict | None
     ) -> bool:
-        host = self._host
-        allowed, reason = host._evaluate_gates(
+        dependencies = self._dependencies
+        allowed, reason = dependencies.evaluate_gates(
             "system_volume", "system_volume", interaction_id
         )
         if not allowed:
@@ -51,7 +49,7 @@ class PipelineSystemVolumeService:
         else:
             volume, muted = get_status()
             message = f"System volume is {volume}%. Muted: {'true' if muted else 'false'}."
-        return host._deliver_canonical_response(
+        return dependencies.deliver_response(
             message, interaction_id, replay_mode, overrides,
             enforce_confidence=False, force_tts=True,
         )
@@ -63,19 +61,19 @@ class PipelineSystemVolumeService:
         replay_mode: bool,
         overrides: dict | None,
     ) -> bool:
-        host = self._host
+        dependencies = self._dependencies
         if not self.is_system_volume_text(user_text):
             message = "System volume control requires a direct system volume command."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
-        allowed, reason = host._evaluate_gates(
+        allowed, reason = dependencies.evaluate_gates(
             "system_volume", "system_volume", interaction_id
         )
         if not allowed:
             message = f"System volume control blocked by policy ({reason})."
-            return host._deliver_canonical_response(
+            return dependencies.deliver_response(
                 message, interaction_id, replay_mode, overrides,
                 enforce_confidence=False, force_tts=True,
             )
@@ -112,7 +110,7 @@ class PipelineSystemVolumeService:
         else:
             message = "System volume control requires an explicit command."
 
-        host.logger.info(
+        dependencies.logger.info(
             f"[SYSTEM_VOLUME] prev={previous_volume} new={new_volume} muted={new_muted}"
         )
         if not ok and message:
@@ -123,7 +121,7 @@ class PipelineSystemVolumeService:
             response = f"System volume set to {new_volume}%."
         else:
             response = "System volume command failed."
-        return host._deliver_canonical_response(
+        return dependencies.deliver_response(
             response, interaction_id, replay_mode, overrides,
             enforce_confidence=False, force_tts=True,
         )

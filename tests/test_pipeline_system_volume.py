@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
 import core.pipeline_system_volume as volume_module
-from core.pipeline_system_volume import PipelineSystemVolumeService
+from core.pipeline_system_volume import (
+    PipelineSystemVolumeService,
+    SystemVolumeDependencies,
+)
 
 
 class Host:
@@ -18,6 +21,16 @@ class Host:
         return self.gate
 
 
+def service_for(host):
+    return PipelineSystemVolumeService(
+        SystemVolumeDependencies(
+            logger=host.logger,
+            deliver_response=host._deliver_canonical_response,
+            evaluate_gates=host._evaluate_gates,
+        )
+    )
+
+
 def test_system_volume_scope_excludes_music_apps_and_devices():
     classify = PipelineSystemVolumeService.is_system_volume_text
 
@@ -31,7 +44,7 @@ def test_system_volume_scope_excludes_music_apps_and_devices():
 def test_status_gate_runs_before_volume_probe(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineSystemVolumeService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         volume_module,
         "get_status",
@@ -45,7 +58,7 @@ def test_status_gate_runs_before_volume_probe(monkeypatch):
 def test_control_gate_runs_before_volume_mutation(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineSystemVolumeService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         volume_module,
         "set_volume_percent",
@@ -58,7 +71,7 @@ def test_control_gate_runs_before_volume_mutation(monkeypatch):
 
 def test_explicit_percentage_control_preserves_result(monkeypatch):
     host = Host()
-    service = PipelineSystemVolumeService(host)
+    service = service_for(host)
     calls = []
     monkeypatch.setattr(volume_module, "get_status", lambda: (70, False))
     monkeypatch.setattr(

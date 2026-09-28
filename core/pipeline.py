@@ -69,7 +69,10 @@ from core.pipeline_streaming_response import PipelineStreamingResponseService
 from core.pipeline_response_generation import PipelineResponseGenerationService
 from core.pipeline_bluetooth import BluetoothDependencies, PipelineBluetoothService
 from core.pipeline_audio_routing import PipelineAudioRoutingService
-from core.pipeline_system_volume import PipelineSystemVolumeService
+from core.pipeline_system_volume import (
+    PipelineSystemVolumeService,
+    SystemVolumeDependencies,
+)
 from core.pipeline_apps import PipelineAppService
 from core.pipeline_time import LOCATION_TO_TIMEZONE as TIMEZONE_MAP, PipelineTimeService
 from core.pipeline_request_classifier import (
@@ -189,7 +192,13 @@ class ArgoPipeline:
             )
         )
         self._audio_routing = PipelineAudioRoutingService(self)
-        self._system_volume = PipelineSystemVolumeService(self)
+        self._system_volume = PipelineSystemVolumeService(
+            SystemVolumeDependencies(
+                logger=self.logger,
+                deliver_response=self._deliver_canonical_response,
+                evaluate_gates=self._evaluate_gates,
+            )
+        )
         self._apps = PipelineAppService(self)
         self._time_responses = PipelineTimeService(self)
         self._streaming_responses = PipelineStreamingResponseService(self)
