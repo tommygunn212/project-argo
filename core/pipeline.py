@@ -18,7 +18,7 @@ import uuid
 import json
 import re
 import concurrent.futures
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from faster_whisper import WhisperModel
 import ollama
@@ -89,8 +89,8 @@ from tools.home_assistant import (
     resolve_entity as ha_resolve_entity, parse_smart_home_command,
 )
 from tools.reminders import (
-    add_reminder, list_reminders, cancel_reminder,
-    add_calendar_event, list_calendar_events, cancel_calendar_event,
+    add_reminder, list_reminders,
+    add_calendar_event, list_calendar_events,
     parse_reminder_request, parse_calendar_request,
     format_reminders_for_speech, format_calendar_for_speech,
     start_reminder_checker, stop_reminder_checker,
@@ -121,6 +121,7 @@ from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
 from core.pipeline_draft_responses import PipelineDraftResponseMixin
+from core.pipeline_scheduling_responses import PipelineSchedulingResponseMixin
 from core.pipeline_restricted_fallback import block_restricted_llm_fallback
 from core.pipeline_special_dispatch import dispatch_special_intent
 from core.pipeline_llm_stage import run_llm_stage
@@ -138,7 +139,11 @@ from personas import neutral, rick, claptrap, jarvis, tommy_gunn, tommy_mix, pla
 # ============================================================================
 # 2) PIPELINE ORCHESTRATOR
 # ============================================================================
-class ArgoPipeline(PipelineDraftResponseMixin, PipelineMemoryMixin):
+class ArgoPipeline(
+    PipelineSchedulingResponseMixin,
+    PipelineDraftResponseMixin,
+    PipelineMemoryMixin,
+):
     def __init__(self, audio_manager, websocket_broadcast):
         self.logger = logging.getLogger("ARGO.Pipeline")
         self.audio = audio_manager
@@ -3125,89 +3130,6 @@ class ArgoPipeline(PipelineDraftResponseMixin, PipelineMemoryMixin):
         except Exception as e:
             self.logger.error(f"[SMART_HOME] Error: {e}")
             response = f"Smart home error: {e}"
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    # ── Reminder handlers ───────────────────────────────────────────
-
-    def _respond_with_set_reminder(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """Set a new reminder from voice command."""
-        self.logger.info(f"[REMINDER] Set: {user_text}")
-        parsed = parse_reminder_request(user_text)
-        message = parsed.get("message", "")
-        due_at = parsed.get("due_at")
-        if not message or not due_at:
-            return self._deliver_canonical_response(
-                "I couldn't understand the reminder. Try: remind me to call Sarah in 30 minutes.",
-                interaction_id, replay_mode, overrides,
-            )
-        result = add_reminder(message, due_at)
-        friendly_time = due_at.strftime("%I:%M %p").lstrip("0")
-        if due_at.date() == datetime.now().date():
-            time_desc = f"today at {friendly_time}"
-        elif due_at.date() == (datetime.now() + timedelta(days=1)).date():
-            time_desc = f"tomorrow at {friendly_time}"
-        else:
-            time_desc = due_at.strftime("%A %B %d at %I:%M %p").lstrip("0")
-        response = f"Reminder set: {message}. I'll remind you {time_desc}."
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    def _respond_with_list_reminders(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """List active reminders."""
-        self.logger.info(f"[REMINDER] List: {user_text}")
-        reminders = list_reminders()
-        response = format_reminders_for_speech(reminders)
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    def _respond_with_cancel_reminder(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """Cancel a reminder matching spoken text."""
-        self.logger.info(f"[REMINDER] Cancel: {user_text}")
-        # Extract the search term after "cancel reminder about..."
-        import re as _re
-        m = _re.search(r"\b(?:cancel|delete|remove)\b.*?\breminder\b\s*(?:about|for|to)?\s*(.+)", user_text.lower())
-        search = m.group(1).strip(" .,!?") if m else user_text
-        response = cancel_reminder(search)
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    # ── Calendar handlers ───────────────────────────────────────────
-
-    def _respond_with_calendar_add(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """Add a calendar event from voice command."""
-        self.logger.info(f"[CALENDAR] Add: {user_text}")
-        parsed = parse_calendar_request(user_text)
-        title = parsed.get("title", "")
-        start_at = parsed.get("start_at")
-        location = parsed.get("location", "")
-        if not title or not start_at:
-            return self._deliver_canonical_response(
-                "I couldn't parse the event. Try: add a calendar event dentist appointment Friday at 2pm.",
-                interaction_id, replay_mode, overrides,
-            )
-        result = add_calendar_event(title, start_at, location=location)
-        friendly_time = start_at.strftime("%A %B %d at %I:%M %p").lstrip("0")
-        response = f"Event added: {title}, {friendly_time}."
-        if location:
-            response = f"Event added: {title} at {location}, {friendly_time}."
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    def _respond_with_calendar_query(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """List upcoming calendar events."""
-        self.logger.info(f"[CALENDAR] Query: {user_text}")
-        lower = user_text.lower()
-        if "today" in lower:
-            events = list_calendar_events(date=datetime.now())
-        elif "tomorrow" in lower:
-            events = list_calendar_events(date=datetime.now() + timedelta(days=1))
-        else:
-            events = list_calendar_events()
-        response = format_calendar_for_speech(events)
-        return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
-
-    def _respond_with_cancel_calendar(self, intent, user_text, interaction_id, replay_mode, overrides) -> bool:
-        """Cancel a calendar event matching spoken text."""
-        self.logger.info(f"[CALENDAR] Cancel: {user_text}")
-        m = re.search(r"\b(?:cancel|delete|remove)\b.*?\b(?:event|appointment|meeting)\b\s*(?:about|for|called)?\s*(.+)", user_text.lower())
-        search = m.group(1).strip(" .,!?") if m else user_text
-        response = cancel_calendar_event(search)
         return self._deliver_canonical_response(response, interaction_id, replay_mode, overrides)
 
     # ── Computer Vision Handlers ──────────────────────────────────
