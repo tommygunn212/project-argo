@@ -49,6 +49,7 @@ from core.pipeline import ArgoPipeline
 from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
+from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
 from core.repair_service import RepairService, ActiveDiagnostics
@@ -898,68 +899,27 @@ def main_loop():
     # A single hot audio frame is often speaker echo or a click, not a person
     # trying to interrupt. Require a short, continuous voice signal instead.
     barge_in_started_at = None
+    vad_threshold = config_vad_threshold
 
     def calibrate_noise_floor(duration_sec: float = 2.0, multiplier: float = 2.5) -> float:
-        """Read ambient audio for `duration_sec`, compute noise floor, return adaptive VAD threshold."""
         nonlocal vad_threshold, barge_in_threshold
-        if not SERVER_ENABLED or not getattr(audio, "running", False):
-            logger.warning("[CALIBRATE] Audio is stopped; start listening before calibration")
-            broadcast_msg("log", "Calibration skipped — start listening first")
-            return vad_threshold
-        frames_needed = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * duration_sec)
-        rms_samples = []
-        broadcast_msg("log", f"Calibrating ambient noise ({duration_sec}s) — stay quiet...")
-        logger.info(f"[CALIBRATE] Recording {duration_sec}s of ambient noise ({frames_needed} frames)...")
-        for _ in range(frames_needed):
-            frame = audio.read_frame(timeout=0.05)
-            if frame is not None:
-                rms = np.linalg.norm(frame) * 10
-                rms_samples.append(rms)
-        if not rms_samples:
-            logger.warning("[CALIBRATE] No frames captured, keeping config threshold")
-            broadcast_msg("log", "Calibration failed — no audio frames")
-            return config_vad_threshold
-        noise_floor = np.mean(rms_samples)
-        noise_peak = np.percentile(rms_samples, 95)  # 95th percentile catches spikes
-        # Threshold = whichever is higher: multiplier * mean, or 1.5 * p95 peak
-        adaptive_threshold = max(noise_peak * 1.5, noise_floor * multiplier)
-        # Never go below config minimum
-        adaptive_threshold = max(adaptive_threshold, config_vad_threshold)
-        # ...and never above the ceiling. If something was PLAYING during the
-        # calibration window - music, ARGO's own TTS, a test run - the p95 is
-        # not ambient noise, and 1.5x it lands above anything a voice will
-        # ever reach. ARGO then stops responding to speech entirely until
-        # someone restarts it. Measured on this machine: quiet room -> 0.200,
-        # room with audio playing -> 1.272.
-        ceiling = config_vad_threshold * CALIBRATION_MAX_MULTIPLE
-        if adaptive_threshold > ceiling:
-            logger.warning(
-                "[CALIBRATE] Measured floor implies a threshold of %.3f, above the "
-                "ceiling of %.3f (%.1fx the configured %.3f). Something was probably "
-                "making noise. Clamping - recalibrate in a quiet room.",
-                adaptive_threshold, ceiling, CALIBRATION_MAX_MULTIPLE, config_vad_threshold,
-            )
-            broadcast_msg(
-                "log",
-                "Calibration heard too much noise - threshold clamped. "
-                "Recalibrate in a quiet room.",
-            )
-            adaptive_threshold = ceiling
-        vad_threshold = adaptive_threshold
-        barge_in_threshold = adaptive_threshold * 1.2
-        logger.info(
-            f"[CALIBRATE] Noise floor: mean={noise_floor:.3f} p95={noise_peak:.3f} "
-            f"-> VAD threshold: {vad_threshold:.3f}, barge-in: {barge_in_threshold:.3f}"
+        result = calibrate_ambient_noise(
+            audio,
+            server_enabled=SERVER_ENABLED,
+            current_vad_threshold=vad_threshold,
+            current_barge_in_threshold=barge_in_threshold,
+            config_vad_threshold=config_vad_threshold,
+            calibration_max_multiple=CALIBRATION_MAX_MULTIPLE,
+            input_sample_rate=INPUT_SAMPLE_RATE,
+            block_size=BLOCK_SIZE,
+            broadcast=broadcast_msg,
+            logger=logger,
+            duration_seconds=duration_sec,
+            multiplier=multiplier,
         )
-        broadcast_msg("log", f"Noise calibrated — floor: {noise_floor:.2f}, VAD threshold: {vad_threshold:.2f}")
-        broadcast_msg("noise_calibration", {
-            "noise_floor": round(float(noise_floor), 3),
-            "noise_peak_p95": round(float(noise_peak), 3),
-            "vad_threshold": round(float(vad_threshold), 3),
-            "barge_in_threshold": round(float(barge_in_threshold), 3),
-        })
+        vad_threshold = result.vad_threshold
+        barge_in_threshold = result.barge_in_threshold
         return vad_threshold
-
     vad_threshold = calibrate_noise_floor()
     _noise_calibrate_fn = calibrate_noise_floor
 
