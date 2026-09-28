@@ -85,6 +85,7 @@ from core.pipeline_request_classifier import (
 )
 from core.pipeline_settings import load_pipeline_settings
 from core.pipeline_transcription import TranscriptionDependencies, transcribe_audio
+from core.pipeline_warmup import WarmupDependencies, initialize_pipeline_runtime
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -624,106 +625,42 @@ class ArgoPipeline:
     def warmup(self):
         self.logger.info("Warming up models...")
         self.broadcast("status", "WARMING_UP")
-        if self._stt_prompt_profile:
-            self.logger.info(f"[STT] Prompt profile: {self._stt_prompt_profile}")
-        
         try:
-            cache_dir = Path(__file__).resolve().parent.parent / ".hf_cache"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            os.environ.setdefault("HF_HOME", str(cache_dir))
-            os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(cache_dir / "hub"))
-
-            # Get STT engine configuration
-            stt_engine = "openai"  # Default
-            stt_model_size = "base"  # Default
-            stt_device = "cpu"  # Default
-            
-            if self._config is not None:
-                stt_config = self._config.get("speech_to_text", {})
-                if isinstance(stt_config, dict):
-                    stt_engine = stt_config.get("engine", "openai")
-                    stt_model_size = stt_config.get("model", "base")
-                    stt_device = stt_config.get("device", "cpu")
-
-            # Validate engine selection
-            if stt_engine not in STTEngineManager.SUPPORTED_ENGINES:
-                self.logger.error(
-                    f"Invalid STT_ENGINE: {stt_engine}. "
-                    f"Supported: {', '.join(STTEngineManager.SUPPORTED_ENGINES)}"
+            result = initialize_pipeline_runtime(
+                WarmupDependencies(
+                    logger=self.logger,
+                    config=self._config,
+                    audio_output_device=getattr(
+                        self.audio, "_output_device_index", None
+                    ),
+                    runtime_overrides=self.runtime_overrides,
+                    llm_enabled=self.llm_enabled,
+                    llm_router=self._llm_router,
+                    stt_manager_factory=STTEngineManager,
+                    verify_stt_dependencies=verify_engine_dependencies,
+                    stt_prompt_profile=self._stt_prompt_profile,
+                    tts_instructions=self._TTS_INSTRUCTIONS,
+                    broadcast_audio_level=lambda level: self.broadcast(
+                        "tts_audio_level", {"rms": level}
+                    ),
                 )
-                raise ValueError(f"Invalid STT engine: {stt_engine}")
-
-            self.logger.info(
-                f"[STT] Engine configuration: engine={stt_engine}, "
-                f"model={stt_model_size}, device={stt_device}"
             )
-
-            # ✅ PREFLIGHT CHECK: Verify engine dependencies before audio init
-            verify_engine_dependencies(stt_engine)
-
-            # Initialize STT engine manager
-            self.stt_engine_manager = STTEngineManager(
-                engine=stt_engine,
-                model_size=stt_model_size,
-                device=stt_device
-            )
-            self.stt_model_name = f"{stt_model_size}"
-            self.stt_engine = stt_engine
-            
-            # Skip warmup to avoid native crash in threaded context
-            # self.stt_engine_manager.warmup(duration_s=1.0)
-            self.logger.info(
-                f"[STT] STT engine ready (engine={stt_engine}, "
-                f"model={stt_model_size}, device={stt_device})"
-            )
-        except Exception as e:
-            self.logger.error(f"[STT] Initialization Error: {e}")
+        except Exception as exc:
+            self.logger.error(f"[STT] Initialization Error: {exc}")
             raise
-
-        # TTS engine selection from config
-        try:
-            tts_engine = "edge"
-            tts_voice = None
-            tts_model = "tts-1"
-            if self._config is not None:
-                tts_config = self._config.get("text_to_speech", {})
-                if isinstance(tts_config, dict):
-                    tts_engine = tts_config.get("engine", "edge")
-                    tts_voice = tts_config.get("voice", None)
-                    tts_model = tts_config.get("model", "tts-1")
-            self._tts_engine = tts_engine
-            self._tts_model = tts_model
-            if tts_engine == "openai":
-                from core.openai_tts import OpenAIRealtimeTTS
-                voice = tts_voice or "nova"
-                self._openai_tts = OpenAIRealtimeTTS(
-                    voice=voice, model=tts_model,
-                    output_device=getattr(self.audio, "_output_device_index", None),
-                    on_audio_level=lambda level: self.broadcast("tts_audio_level", {"rms": level}),
-                )
-                self._openai_tts._instructions = self._TTS_INSTRUCTIONS
-                self.current_voice_key = voice
-                self.logger.info(f"[TTS] OpenAI Realtime Speech ready (voice={voice}, model={tts_model})")
-            else:
-                self.logger.info(f"[TTS] Edge TTS engine selected")
-        except Exception as e:
-            self.logger.warning(f"[TTS] OpenAI TTS init failed, falling back to Edge: {e}")
-            self._tts_engine = "edge"
-
-        # Personal mode: loosen gates and confidence thresholds
-        if self.runtime_overrides.get("personal_mode", False):
+        self.stt_engine_manager = result.stt_manager
+        self.stt_model_name = result.stt_model_name
+        self.stt_engine = result.stt_engine
+        self._tts_engine = result.tts_engine
+        self._tts_model = result.tts_model
+        self._openai_tts = result.openai_tts
+        if result.current_voice_key is not None:
+            self.current_voice_key = result.current_voice_key
+        if result.personal_mode:
             self._tts_min_confidence = 0.0
             self._personal_mode_min_confidence = 0.0
-            self.logger.info("[PERSONAL] Personal mode active — gates loosened, confidence floors removed")
-
-        if self.llm_enabled:
-            try:
-                self.llm_model_name = self._llm_router.primary_model_name
-                self._llm_router.warmup()
-                self.logger.info("[LLM] Provider router ready (primary=%s)", self.llm_model_name)
-            except Exception as e:
-                self.logger.warning(f"LLM Warmup Warning: {e}")
-        
+        if result.llm_model_name is not None:
+            self.llm_model_name = result.llm_model_name
         self.broadcast("status", "READY")
 
     def _record_timeline(self, event: str, stage: str, interaction_id: str = ""):
