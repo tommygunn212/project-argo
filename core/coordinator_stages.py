@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 from core.intent_parser import Intent, IntentType, is_system_keyword, normalize_system_text
 from core.config import get_config
+from core.state_machine import State
+from system_profile import get_gpu_profile, get_system_profile
 
 
 def capture_audio_stage(
@@ -291,3 +293,117 @@ def parse_intent_stage(
                 return IntentParseStageResult(False, True, intent)
 
     return IntentParseStageResult(True, False, intent)
+
+
+@dataclass(frozen=True)
+class DeterministicStageResult:
+    handled: bool
+    interaction_result: bool
+    output_produced: bool
+
+
+def _finish_deterministic_latency(coordinator: Any) -> None:
+    coordinator._last_utterance_time = time.time()
+    coordinator.current_probe.mark("llm_end")
+    coordinator.current_probe.mark("tts_start")
+    coordinator.current_probe.mark("tts_end")
+    coordinator.current_probe.log_summary()
+    coordinator.latency_stats.add_probe(coordinator.current_probe)
+
+
+def _system_info_response(intent: Any) -> str:
+    profile = get_system_profile()
+    gpus = get_gpu_profile()
+    subintent = getattr(intent, "subintent", None)
+    if subintent == "memory":
+        ram_gb = profile.get("ram_gb") if profile else None
+        return (
+            f"Your system has {ram_gb} gigabytes of memory."
+            if ram_gb is not None
+            else "Hardware information unavailable."
+        )
+    if subintent == "cpu":
+        cpu_name = profile.get("cpu") if profile else None
+        return (
+            f"Your CPU is a {cpu_name}."
+            if cpu_name
+            else "Hardware information unavailable."
+        )
+    if subintent == "gpu":
+        return f"Your GPU is {gpus[0].get('name')}." if gpus else "No GPU detected."
+    if subintent == "os":
+        os_name = profile.get("os") if profile else None
+        return (
+            f"You are running {os_name}."
+            if os_name
+            else "Hardware information unavailable."
+        )
+    if subintent == "motherboard":
+        board = profile.get("motherboard") if profile else None
+        return (
+            f"Your motherboard is {board}."
+            if board
+            else "Hardware information unavailable."
+        )
+    return "Hardware information unavailable."
+
+
+def dispatch_simple_deterministic_stage(
+    coordinator: Any,
+    intent: Any,
+    text: str,
+) -> DeterministicStageResult:
+    """Handle sleep, count, and simple system-profile requests."""
+    if intent.intent_type == IntentType.SLEEP:
+        coordinator.logger.info(
+            f"[Iteration {coordinator.interaction_count}] Sleep command detected"
+        )
+        output_produced = False
+        try:
+            coordinator._safe_speak("Going quiet.")
+            output_produced = True
+        except Exception:
+            pass
+        coordinator._safe_transition(
+            coordinator.state_machine.sleep,
+            State.SLEEP,
+            source="ui",
+            interaction_id=str(coordinator.interaction_id),
+        )
+        _finish_deterministic_latency(coordinator)
+        return DeterministicStageResult(True, True, output_produced)
+
+    if intent.intent_type == IntentType.COUNT:
+        coordinator.logger.info(
+            f"[Iteration {coordinator.interaction_count}] Count command detected"
+        )
+        response_text = coordinator._build_count_response(text)
+        output_produced = False
+        try:
+            coordinator._safe_speak(
+                response_text, interaction_id=coordinator.interaction_id
+            )
+            output_produced = True
+        except Exception:
+            pass
+        _finish_deterministic_latency(coordinator)
+        return DeterministicStageResult(True, True, output_produced)
+
+    if intent.intent_type == IntentType.SYSTEM_INFO:
+        coordinator.logger.info(
+            f"[Iteration {coordinator.interaction_count}] "
+            "System profile command detected"
+        )
+        response_text = _system_info_response(intent)
+        output_produced = False
+        try:
+            coordinator._safe_speak(
+                response_text, interaction_id=coordinator.interaction_id
+            )
+            output_produced = True
+        except Exception:
+            pass
+        _finish_deterministic_latency(coordinator)
+        return DeterministicStageResult(True, True, output_produced)
+
+    return DeterministicStageResult(False, False, False)

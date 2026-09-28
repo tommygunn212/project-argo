@@ -6,6 +6,7 @@ from scipy.io import wavfile
 
 from core.coordinator_stages import (
     capture_audio_stage,
+    dispatch_simple_deterministic_stage,
     parse_intent_stage,
     process_transcript_stage,
     transcribe_audio_stage,
@@ -299,3 +300,85 @@ def test_deterministic_intent_bypasses_low_stt_confidence(monkeypatch):
         for level, message in coordinator.logger.messages
         if level == "info"
     )
+
+
+def make_deterministic_coordinator():
+    coordinator = make_parse_coordinator(parsed_intent_type_for_fixture())
+    coordinator.state_machine = SimpleNamespace(sleep=lambda: None)
+    coordinator.transitions = []
+    coordinator._safe_transition = lambda *args, **kwargs: coordinator.transitions.append(
+        (args, kwargs)
+    )
+    coordinator._build_count_response = lambda _text: "One, two, three."
+    return coordinator
+
+
+def parsed_intent_type_for_fixture():
+    from core.intent_parser import IntentType
+
+    return parsed_intent(IntentType.QUESTION)
+
+
+def test_unrelated_intent_skips_simple_deterministic_stage():
+    coordinator = make_deterministic_coordinator()
+    intent = parsed_intent_type_for_fixture()
+
+    result = dispatch_simple_deterministic_stage(coordinator, intent, "question")
+
+    assert result.handled is False
+    assert result.output_produced is False
+    assert coordinator.spoken == []
+
+
+def test_count_stage_speaks_and_completes_latency_accounting():
+    from core.intent_parser import IntentType
+
+    coordinator = make_deterministic_coordinator()
+    intent = parsed_intent(IntentType.COUNT)
+
+    result = dispatch_simple_deterministic_stage(
+        coordinator, intent, "count to three"
+    )
+
+    assert result.handled is True
+    assert result.interaction_result is True
+    assert result.output_produced is True
+    assert coordinator.spoken[-1][0] == "One, two, three."
+    assert coordinator.current_probe.marks[-3:] == ["llm_end", "tts_start", "tts_end"]
+    assert coordinator.latency_stats.probes == [coordinator.current_probe]
+
+
+def test_sleep_stage_speaks_then_transitions_to_sleep():
+    from core.intent_parser import IntentType
+    from core.state_machine import State
+
+    coordinator = make_deterministic_coordinator()
+    intent = parsed_intent(IntentType.SLEEP)
+
+    result = dispatch_simple_deterministic_stage(coordinator, intent, "go to sleep")
+
+    assert result.handled is True
+    assert coordinator.spoken[-1][0] == "Going quiet."
+    assert coordinator.transitions[0][0][1] == State.SLEEP
+
+
+def test_system_info_stage_builds_requested_profile_response(monkeypatch):
+    from core.intent_parser import IntentType
+
+    coordinator = make_deterministic_coordinator()
+    intent = SimpleNamespace(
+        intent_type=IntentType.SYSTEM_INFO,
+        confidence=1.0,
+        subintent="cpu",
+    )
+    monkeypatch.setattr(
+        "core.coordinator_stages.get_system_profile", lambda: {"cpu": "Test CPU"}
+    )
+    monkeypatch.setattr("core.coordinator_stages.get_gpu_profile", lambda: [])
+
+    result = dispatch_simple_deterministic_stage(
+        coordinator, intent, "what cpu"
+    )
+
+    assert result.handled is True
+    assert coordinator.spoken[-1][0] == "Your CPU is a Test CPU."

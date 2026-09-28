@@ -77,6 +77,7 @@ from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 from core.coordinator_stages import (
     capture_audio_stage,
+    dispatch_simple_deterministic_stage,
     parse_intent_stage,
     process_transcript_stage,
     transcribe_audio_stage,
@@ -921,45 +922,13 @@ class Coordinator(CoordinatorResponseMixin):
                     self.stop_requested = False
                     self._is_speaking.clear()
 
-            if intent.intent_type == IntentType.SLEEP:
-                self.logger.info(f"[Iteration {self.interaction_count}] Sleep command detected")
-                try:
-                    self._safe_speak("Going quiet.")
-                    output_produced = True
-                except Exception:
-                    pass
-                self._safe_transition(
-                    self.state_machine.sleep,
-                    State.SLEEP,
-                    source="ui",
-                    interaction_id=str(self.interaction_id),
-                )
-                self._last_utterance_time = time.time()
-                self.current_probe.mark("llm_end")
-                self.current_probe.mark("tts_start")
-                self.current_probe.mark("tts_end")
-                self.current_probe.log_summary()
-                self.latency_stats.add_probe(self.current_probe)
+            deterministic_result = dispatch_simple_deterministic_stage(
+                self, intent, text
+            )
+            if deterministic_result.handled:
+                output_produced = deterministic_result.output_produced
                 _finalize_response_watchdog()
-                return True
-
-            if intent.intent_type == IntentType.COUNT:
-                self.logger.info(f"[Iteration {self.interaction_count}] Count command detected")
-                response_text = self._build_count_response(text)
-                try:
-                    self._safe_speak(response_text, interaction_id=self.interaction_id)
-                    output_produced = True
-                except Exception:
-                    pass
-                self._last_utterance_time = time.time()
-                self.current_probe.mark("llm_end")
-                self.current_probe.mark("tts_start")
-                self.current_probe.mark("tts_end")
-                self.current_probe.log_summary()
-                self.latency_stats.add_probe(self.current_probe)
-                _finalize_response_watchdog()
-                return True
-
+                return deterministic_result.interaction_result
             if intent.intent_type == IntentType.SYSTEM_HEALTH:
                 self.logger.info(f"[Iteration {self.interaction_count}] System health command detected")
                 subintent = getattr(intent, "subintent", None)
@@ -1172,60 +1141,6 @@ class Coordinator(CoordinatorResponseMixin):
                         health.get("disk_percent"),
                     )
                     response_text = self._format_system_health(health)
-                try:
-                    self._safe_speak(response_text, interaction_id=self.interaction_id)
-                    output_produced = True
-                except Exception:
-                    pass
-                self._last_utterance_time = time.time()
-                self.current_probe.mark("llm_end")
-                self.current_probe.mark("tts_start")
-                self.current_probe.mark("tts_end")
-                self.current_probe.log_summary()
-                self.latency_stats.add_probe(self.current_probe)
-                _finalize_response_watchdog()
-                return True
-
-            if intent.intent_type == IntentType.SYSTEM_INFO:
-                self.logger.info(f"[Iteration {self.interaction_count}] System profile command detected")
-                profile = get_system_profile()
-                gpus = get_gpu_profile()
-                subintent = getattr(intent, "subintent", None)
-                if subintent == "memory":
-                    ram_gb = profile.get("ram_gb") if profile else None
-                    response_text = (
-                        f"Your system has {ram_gb} gigabytes of memory."
-                        if ram_gb is not None
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "cpu":
-                    cpu_name = profile.get("cpu") if profile else None
-                    response_text = (
-                        f"Your CPU is a {cpu_name}."
-                        if cpu_name
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "gpu":
-                    if gpus:
-                        response_text = f"Your GPU is {gpus[0].get('name')}."
-                    else:
-                        response_text = "No GPU detected."
-                elif subintent == "os":
-                    os_name = profile.get("os") if profile else None
-                    response_text = (
-                        f"You are running {os_name}."
-                        if os_name
-                        else "Hardware information unavailable."
-                    )
-                elif subintent == "motherboard":
-                    board = profile.get("motherboard") if profile else None
-                    response_text = (
-                        f"Your motherboard is {board}."
-                        if board
-                        else "Hardware information unavailable."
-                    )
-                else:
-                    response_text = "Hardware information unavailable."
                 try:
                     self._safe_speak(response_text, interaction_id=self.interaction_id)
                     output_produced = True
