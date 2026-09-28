@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.intent_models import Intent, IntentType
+from core.intent_input import normalize_phrase
 
 
 PHYSICS_KEYWORDS = (
@@ -19,6 +20,18 @@ TIME_SYSTEM_KEYWORDS = (
     "status report", "how's my system", "system info", "uptime", "cpu usage",
     "memory usage", "disk usage",
 )
+MUST_PASS_PHRASES = {
+    normalize_phrase("why does coffee cool down?"): IntentType.KNOWLEDGE_PHYSICS,
+    normalize_phrase("is bitcoin actually money?"): IntentType.KNOWLEDGE_FINANCE,
+    normalize_phrase("what time is it and how's my system doing?"): IntentType.KNOWLEDGE_TIME_SYSTEM,
+}
+
+
+def parse_must_pass_knowledge(raw_text: str, serious_mode: bool) -> Intent | None:
+    intent_type = MUST_PASS_PHRASES.get(normalize_phrase(raw_text))
+    if intent_type is None:
+        return None
+    return Intent(intent_type, 1.0, raw_text, serious_mode=serious_mode)
 
 
 def parse_knowledge_intent(raw_text: str, normalized: str, serious_mode: bool) -> Intent | None:

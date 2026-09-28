@@ -18,10 +18,9 @@ Does NOT:
 # ============================================================================
 # 1) IMPORTS
 # ============================================================================
-import re
-
 from core.intent_models import Intent, IntentParser, IntentType
 from core.intent_music import IntentMusicMixin
+from core.intent_input import apply_phonetic_fixes, normalize_for_rules, strip_wake_prefix
 from core.intent_vocabulary import IntentVocabularyMixin
 from core.intent_rules.writing import parse_writing_intent
 from core.intent_rules.smart_home import parse_smart_home_intent
@@ -45,7 +44,7 @@ from core.intent_rules.core_system import (
     parse_identity_or_governance,
     parse_system_health,
 )
-from core.intent_rules.knowledge import parse_knowledge_intent
+from core.intent_rules.knowledge import parse_knowledge_intent, parse_must_pass_knowledge
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
@@ -53,10 +52,6 @@ from core.intent_system_rules import (
     detect_system_health,
     detect_temperature_query,
     is_system_keyword,
-    normalize_app_text,
-    normalize_audio_routing_text,
-    normalize_status_text,
-    normalize_system_text,
 )
 
 # System and identity keyword banks are re-exported above for compatibility.
@@ -118,56 +113,17 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
             raise ValueError("text is empty")
 
         text_original = text.strip()
-        text_lower = normalize_system_text(text_original.lower())
-        text_lower = normalize_status_text(text_lower)
-        text_lower = normalize_audio_routing_text(text_lower)
-        text_lower = normalize_app_text(text_lower)
-        text_lower = (
-            text_lower.replace("’", "'")
-            .replace("‘", "'")
-            .replace("“", '"')
-            .replace("”", '"')
-        )
-        text_lower = text_lower.replace("sound", "volume").replace("loudness", "volume")
+        text_lower = normalize_for_rules(text_original)
 
         # SERIOUS_MODE signal (keyword presence) - must be defined before any return
         self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
         serious_mode = self.serious_mode
 
-        # --- EXPLICIT PHRASE MAPPING FOR MUST_PASS CASES ---
-        def _normalize_phrase(phrase):
-            return (
-                phrase.strip().lower()
-                .replace("’", "'")
-                .replace("‘", "'")
-                .replace('“', '"')
-                .replace('”', '"')
-            )
+        must_pass = parse_must_pass_knowledge(text_original, serious_mode)
+        if must_pass is not None:
+            return must_pass
 
-        must_pass_phrases = {
-            _normalize_phrase("why does coffee cool down?"): IntentType("knowledge_physics"),
-            _normalize_phrase("is bitcoin actually money?"): IntentType("knowledge_finance"),
-            _normalize_phrase("what time is it and how's my system doing?"): IntentType("knowledge_time_system"),
-        }
-        norm_input = _normalize_phrase(text_original)
-        if norm_input in must_pass_phrases:
-            return Intent(
-                intent_type=must_pass_phrases[norm_input],
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Phonetic fixes for common mishears
-        phonetic_fixes = {
-            "porcupine": "argo",
-            "pocket point": "argo",
-            "pocketpoint": "argo",
-            "led like": "led light",
-            "ducts": "ducks",
-        }
-        for mistake, fix in phonetic_fixes.items():
-            text_lower = text_lower.replace(mistake, fix)
+        text_lower = apply_phonetic_fixes(text_lower)
 
         # SERIOUS_MODE signal (keyword presence)
         self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
@@ -178,12 +134,12 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if system_status is not None:
             return system_status
 
-        # Strip wake word prefix (e.g., "argo, ...") from parsing logic
-        text_lower = re.sub(r"^(argo[\s,]+)+", "", text_lower).strip()
-        text_original = re.sub(r"^(argo[\s,]+)+", "", text_original, flags=re.IGNORECASE).strip()
+        prepared = strip_wake_prefix(text_original, text_lower)
+        text_original = prepared.original
+        text_lower = prepared.normalized
         text = text_original
-        tokens = re.findall(r"[a-z0-9']+", text_lower)
-        first_word = tokens[0] if tokens else ""
+        tokens = prepared.tokens
+        first_word = prepared.first_word
 
         # SERIOUS_MODE signal already computed above
 
