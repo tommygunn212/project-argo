@@ -59,6 +59,10 @@ from core.coordinator_state_transition import (
     CoordinatorTransitionDependencies,
     run_safe_transition,
 )
+from core.coordinator_audio_ownership import (
+    CoordinatorAudioOwnershipDependencies,
+    CoordinatorAudioOwnershipService,
+)
 from core.coordinator_trigger_contract import assert_trigger_state
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
@@ -549,27 +553,32 @@ class Coordinator:
             self._audio_state = new_state
         self.logger.info(f"[AudioState] {old_state} -> {new_state}")
 
+    def _audio_ownership(self) -> CoordinatorAudioOwnershipService:
+        service = getattr(self, "_audio_ownership_service", None)
+        if service is None:
+            service = CoordinatorAudioOwnershipService(
+                CoordinatorAudioOwnershipDependencies(
+                    lock=self._audio_owner_lock,
+                    get_owner=lambda: self.audio_owner.get_owner(),
+                    acquire_owner=lambda owner: self.audio_owner.acquire(owner),
+                    release_owner=lambda owner: self.audio_owner.release(owner),
+                    force_release_owner=lambda reason: self.audio_owner.force_release(
+                        reason
+                    ),
+                    event_logger=lambda message: log_event(message),
+                )
+            )
+            self._audio_ownership_service = service
+        return service
+
     def acquire_audio(self, owner: str) -> None:
-        with self._audio_owner_lock:
-            current_owner = self.audio_owner.get_owner()
-            if current_owner and current_owner != owner:
-                log_event(f"AUDIO_CONTESTED owner={current_owner} requested={owner}")
-                raise RuntimeError("Audio already owned")
-            self.audio_owner.acquire(owner)
-            log_event(f"AUDIO_ACQUIRED owner={owner}")
+        self._audio_ownership().acquire(owner)
 
     def release_audio(self, owner: str) -> None:
-        with self._audio_owner_lock:
-            if self.audio_owner.get_owner() == owner:
-                self.audio_owner.release(owner)
-                log_event(f"AUDIO_RELEASED owner={owner}")
+        self._audio_ownership().release(owner)
 
     def force_release_audio(self, reason: str = "") -> None:
-        with self._audio_owner_lock:
-            prior = self.audio_owner.get_owner()
-            if prior:
-                self.audio_owner.force_release(reason)
-                log_event(f"AUDIO_FORCED_RELEASE prior={prior} reason={reason}")
+        self._audio_ownership().force_release(reason)
 
     def enqueue_wake_event(self) -> None:
         """Enqueue a wake event from the Porcupine callback (thread-safe)."""
