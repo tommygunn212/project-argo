@@ -51,6 +51,7 @@ from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture import finish_classic_capture
 from core.classic_barge_in import ClassicBargeInGate
+from core.classic_capture_tracker import CaptureFrameResult, ClassicCaptureTracker
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
@@ -933,13 +934,8 @@ def main_loop():
         pipeline.transition_state("IDLE")
         broadcast_msg("status", "IDLE")
     
-    speech_buffer = []
-    is_recording = False
-    silence_counter = 0
+    capture = ClassicCaptureTracker()
     silence_seconds = 0.4
-    silence_threshold = int((INPUT_SAMPLE_RATE / BLOCK_SIZE) * silence_seconds)
-    current_interaction_id = ""
-    voiced_ms_accumulator = 0
     POST_TTS_COOLDOWN = 0.75  # seconds to suppress VAD after TTS ends (echo guard)
 
     def runtime_float(key: str, default: float, minimum: float, maximum: float) -> float:
@@ -989,28 +985,22 @@ def main_loop():
             # it here would be ARGO listening to herself.
             and VOICE_MODE != VOICE_MODE_SMOOTH
             and not pipeline.is_speaking
-            and not is_recording
+            and not capture.is_recording
             and not in_echo_cooldown
             and volume >= active_vad_threshold
             and pipeline.current_state == "LISTENING"
         ):
-            current_interaction_id = str(uuid.uuid4())
+            interaction_id = str(uuid.uuid4())
             logger.info(f"[VAD] Speech detected (volume: {volume:.2f}, threshold: {active_vad_threshold})")
             log_event(
                 f"VAD_START rms={volume:.2f} threshold={active_vad_threshold}",
                 stage="vad",
-                interaction_id=current_interaction_id,
+                interaction_id=interaction_id,
             )
             sound_cues.set_capture_active(True)
-            is_recording = True
-            silence_counter = 0
-            voiced_ms_accumulator = 0
             preroll = audio.get_preroll()
-            if len(preroll) > 0:
-                speech_buffer = [preroll]
-            else:
-                speech_buffer = []
-            pipeline.transition_state("TRANSCRIBING", interaction_id=current_interaction_id)
+            capture.begin(interaction_id, preroll)
+            pipeline.transition_state("TRANSCRIBING", interaction_id=interaction_id)
         
         # --- BARGE-IN: If speech detected during TTS ---
         # Skip barge-in if temporarily suppressed (for short deterministic responses like time queries)
@@ -1045,40 +1035,34 @@ def main_loop():
             _interrupt_current_response("BARGE_IN", target_state="LISTENING")
             
             # Reset state to listen to new command
-            silence_counter = 0
-            if not is_recording:
+            if not capture.is_recording:
                 sound_cues.set_capture_active(True)
-                is_recording = True
                 preroll = audio.get_preroll()
-                speech_buffer = [preroll] if len(preroll) > 0 else []
-        
-        if is_recording and not passive_listen:
-            speech_buffer.append(frame)
-
-            # Only count voiced frames (rms >= threshold)
-            if volume >= active_vad_threshold:
-                voiced_ms_accumulator += (BLOCK_SIZE / INPUT_SAMPLE_RATE) * 1000
-                silence_counter = 0
             else:
-                silence_counter += 1
+                preroll = ()
+            capture.begin_barge_in(preroll)
 
-            # Stop Recording after silence
-            if silence_counter > active_silence_threshold:
-                # Only allow VAD_END if at least 180 ms of voiced frames have been accumulated
-                if voiced_ms_accumulator < 180:
-                    logger.debug(f"[VAD] Ignoring premature VAD_END (voiced_ms={voiced_ms_accumulator:.1f})")
-                    continue
-                is_recording = False
-                silence_counter = 0
-                log_event("VAD_END", stage="vad", interaction_id=current_interaction_id)
+        if capture.is_recording and not passive_listen:
+            capture_result = capture.observe(
+                frame,
+                volume=volume,
+                voice_threshold=active_vad_threshold,
+                silence_limit=active_silence_threshold,
+                frame_ms=(BLOCK_SIZE / INPUT_SAMPLE_RATE) * 1000,
+            )
+            if capture_result is CaptureFrameResult.PREMATURE_SILENCE:
+                logger.debug(f"[VAD] Ignoring premature VAD_END (voiced_ms={capture.voiced_ms:.1f})")
+                continue
+            if capture_result is CaptureFrameResult.COMPLETE:
+                log_event("VAD_END", stage="vad", interaction_id=capture.interaction_id)
                 sound_cues.set_capture_active(False)
-                sound_cues.play("listening_end", interaction_id=current_interaction_id, block=True)
+                sound_cues.play("listening_end", interaction_id=capture.interaction_id, block=True)
 
                 finish_classic_capture(
-                    speech_buffer,
+                    capture.speech_buffer,
                     audio=audio,
                     pipeline=pipeline,
-                    interaction_id=current_interaction_id,
+                    interaction_id=capture.interaction_id,
                     voice_mode=VOICE_MODE,
                     smooth_voice_mode=VOICE_MODE_SMOOTH,
                     next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
@@ -1086,7 +1070,7 @@ def main_loop():
                     logger=logger,
                     event_logger=log_event,
                 )
-                current_interaction_id = ""
+                capture.mark_dispatched()
 
 if __name__ == "__main__":
     # Engine selection/loading belongs to STTEngineManager. The former local
