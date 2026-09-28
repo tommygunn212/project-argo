@@ -124,6 +124,7 @@ from core.pipeline_memory import PipelineMemoryMixin
 from core.pipeline_domain_dispatch import dispatch_domain_intent
 from core.pipeline_platform_dispatch import dispatch_platform_intent
 from core.pipeline_music_volume import dispatch_music_volume
+from core.pipeline_music_dispatch import dispatch_music_intent
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -5264,190 +5265,18 @@ class ArgoPipeline(PipelineMemoryMixin):
             overrides,
         ):
             return
-        if intent and intent.intent_type in {
-            IntentType.MUSIC,
-            IntentType.MUSIC_STOP,
-            IntentType.MUSIC_NEXT,
-            IntentType.MUSIC_STATUS,
-        }:
-            self.logger.info(
-                "[MUSIC] intent=%s request_kind=%s entered handler",
-                intent.intent_type if intent else None,
-                request_kind,
-            )
-            if request_kind != "ACTION" and intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
-                self.logger.info(
-                    "[MUSIC GUARD] guard=non_action intent=%s request_kind=%s",
-                    intent.intent_type,
-                    request_kind,
-                )
-                response = "I can do that. Say it as a command to execute."
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            if (
-                low_confidence_audio
-                and request_kind == "ACTION"
-                and intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}
-                and not self._allow_low_conf_music_command(intent, user_text)
-            ):
-                self.logger.info(
-                    "[MUSIC GUARD] guard=low_confidence intent=%s request_kind=%s stt_conf=%.2f",
-                    intent.intent_type,
-                    request_kind,
-                    stt_conf,
-                )
-                response = "I heard a music control, but the audio was unclear. Please repeat the command."
-                self.broadcast("log", f"Argo: {response}")
-                if not self.stop_signal.is_set() and not replay_mode:
-                    tts_text = self._sanitize_tts_text(response)
-                    tts_override = (overrides or {}).get("suppress_tts", False)
-                    if tts_override:
-                        self.logger.info("[TTS] Suppressed for next interaction override")
-                    elif tts_text:
-                        self.speak(tts_text, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                self.logger.info("--- Interaction Complete ---")
-                self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                return
-            if intent.intent_type in {IntentType.MUSIC, IntentType.MUSIC_STOP, IntentType.MUSIC_NEXT}:
-                executable = self._is_executable_command(user_text)
-                if intent.intent_type == IntentType.MUSIC and user_text.lower().startswith("play"):
-                    executable = True
-                if not executable:
-                    self.logger.info(
-                        "[MUSIC GUARD] guard=non_executable intent=%s request_kind=%s text=\"%s\"",
-                        intent.intent_type,
-                        request_kind,
-                        user_text,
-                    )
-                    response = "I can do that. Say it as a direct command."
-                    self.broadcast("log", f"Argo: {response}")
-                    if not self.stop_signal.is_set() and not replay_mode:
-                        tts_text = self._sanitize_tts_text(response)
-                        tts_override = (overrides or {}).get("suppress_tts", False)
-                        if tts_override:
-                            self.logger.info("[TTS] Suppressed for next interaction override")
-                        elif tts_text:
-                            self.speak(tts_text, interaction_id=interaction_id)
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    self.logger.info("--- Interaction Complete ---")
-                    self._record_timeline("INTERACTION_END", stage="pipeline", interaction_id=interaction_id)
-                    return
-            allowed, reason = self._evaluate_gates("music_playback", "music_player", interaction_id)
-            if not allowed:
-                self.logger.info(
-                    "[MUSIC GUARD] guard=policy_block intent=%s request_kind=%s reason=%s",
-                    intent.intent_type,
-                    request_kind,
-                    reason,
-                )
-                response = f"Action blocked by policy ({reason})."
-                self.logger.info(f"[GATE] {response}")
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak(response, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-            if not self.runtime_overrides.get("music_enabled", True):
-                self.logger.info(
-                    "[MUSIC GUARD] guard=music_disabled intent=%s request_kind=%s",
-                    intent.intent_type,
-                    request_kind,
-                )
-                msg = "Music is disabled."
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak(msg, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-
-            music_player = get_music_player()
-            blocked = music_player.preflight()
-            if blocked:
-                self.logger.info(
-                    "[MUSIC GUARD] guard=preflight intent=%s request_kind=%s message=%s",
-                    intent.intent_type,
-                    request_kind,
-                    blocked,
-                )
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak("Music library not indexed yet.", interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-            playback_started = False
-            error_message = ""
-
-            if intent.intent_type == IntentType.MUSIC_STOP:
-                music_player.stop()
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak("Stopped.", interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-
-            if intent.intent_type == IntentType.MUSIC_NEXT:
-                playback_started = music_player.play_next(None)
-                if not playback_started:
-                    error_message = "No music playing."
-                title = None  # Not applicable for MUSIC_NEXT
-
-            elif intent.intent_type == IntentType.MUSIC_STATUS:
-                status = query_music_status()
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak(status, interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-
-            else:
-                artist = getattr(intent, "artist", None)
-                title: Optional[str] = getattr(intent, "title", None)
-                do_not_try_genre_lookup = bool(title)
-                explicit_genre = bool(getattr(intent, "explicit_genre", False))
-                if getattr(intent, "is_generic_play", False) and not artist and not title and not getattr(intent, "keyword", None):
-                    playback_started = music_player.play_random(None)
-                    if not playback_started:
-                        error_message = "Your music library is empty or unavailable."
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-                if title:
-                    playback_started = music_player.play_by_song(title, None)
-                    if not playback_started and not artist:
-                        playback_started = music_player.play_by_artist(title, None)
-                if not playback_started and artist:
-                    playback_started = music_player.play_by_artist(artist, None)
-                if not playback_started and getattr(intent, "keyword", None):
-                    keyword = intent.keyword
-                    if keyword and explicit_genre and not do_not_try_genre_lookup:
-                        playback_started = music_player.play_by_genre(keyword, None)
-                    if not playback_started and keyword:
-                        playback_started = music_player.play_by_keyword(keyword, None)
-                    if not playback_started:
-                        error_message = f"No music found for '{keyword}'."
-                if not playback_started and not artist and not title and not getattr(intent, "keyword", None):
-                    playback_started = music_player.play_random(None)
-                    if not playback_started:
-                        error_message = "No music available."
-
-            if intent.intent_type == IntentType.MUSIC and not playback_started and title:
-                setattr(intent, "unresolved", True)
-                if self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                    self.speak("I can’t find that track in your library.", interaction_id=interaction_id)
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-
-            if error_message and self.runtime_overrides.get("tts_enabled", True) and not (overrides or {}).get("suppress_tts", False):
-                self.speak(error_message, interaction_id=interaction_id)
-
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
+        if dispatch_music_intent(
+            self,
+            intent,
+            user_text,
+            request_kind,
+            low_confidence_audio,
+            stt_conf,
+            interaction_id,
+            replay_mode,
+            overrides,
+        ):
             return
-
         if dispatch_platform_intent(
             self,
             intent,
