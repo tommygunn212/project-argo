@@ -122,6 +122,13 @@ from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
+from wrapper.wake_controls import (
+    detector_status,
+    pause_detector,
+    resume_detector,
+    start_detector,
+    stop_detector,
+)
 
 # Module-level logger (consistent with rest of system)
 logger = logging.getLogger(__name__)
@@ -426,12 +433,7 @@ def start_wake_word_detector():
     Called when entering LISTENING state.
     Detector runs independently and pauses during PTT/SLEEP/THINKING/SPEAKING.
     """
-    if _wake_word_detector:
-        try:
-            _wake_word_detector.start()
-            logger.debug("Wake-word detector started")
-        except Exception as e:
-            logger.error(f"Error starting wake-word detector: {e}")
+    start_detector(_wake_word_detector, logger)
 
 def stop_wake_word_detector():
     """
@@ -439,12 +441,7 @@ def stop_wake_word_detector():
     
     Called when exiting LISTENING state (e.g., entering SLEEP).
     """
-    if _wake_word_detector:
-        try:
-            _wake_word_detector.stop()
-            logger.debug("Wake-word detector stopped")
-        except Exception as e:
-            logger.error(f"Error stopping wake-word detector: {e}")
+    stop_detector(_wake_word_detector, logger)
 
 def pause_wake_word_detector():
     """
@@ -453,12 +450,7 @@ def pause_wake_word_detector():
     Non-blocking pause; detector remains initialized but doesn't listen.
     Resumed after PTT completes.
     """
-    if _wake_word_detector:
-        try:
-            _wake_word_detector.pause()
-            logger.debug("Wake-word detector paused (PTT active)")
-        except Exception as e:
-            logger.error(f"Error pausing wake-word detector: {e}")
+    pause_detector(_wake_word_detector, logger)
 
 def resume_wake_word_detector():
     """
@@ -466,18 +458,11 @@ def resume_wake_word_detector():
     
     Called after PTT completes; detector resumes listening.
     """
-    if _wake_word_detector:
-        try:
-            _wake_word_detector.resume()
-            logger.debug("Wake-word detector resumed")
-        except Exception as e:
-            logger.error(f"Error resuming wake-word detector: {e}")
+    resume_detector(_wake_word_detector, logger)
 
 def get_wake_word_detector_status() -> dict:
     """Get wake-word detector status for diagnostics."""
-    if _wake_word_detector:
-        return _wake_word_detector.get_status()
-    return {"available": False}
+    return detector_status(_wake_word_detector)
 
 
 
