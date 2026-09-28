@@ -35,7 +35,7 @@ from core.config import (
 )
 from core.intent_parser import RuleBasedIntentParser, Intent, IntentType, normalize_system_text, is_system_keyword
 from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
-from core.music_player import get_music_player
+from core.music_player import KNOWN_ARTISTS, get_music_player
 from core.music_status import query_music_status
 from core.app_control import (
     WRITABLE_APPS,
@@ -108,6 +108,12 @@ from core.pipeline_conversation_policy import (
     get_response_style,
     is_executable_command,
     minimal_ack,
+)
+from core.pipeline_music_text import (
+    has_music_keywords,
+    music_noun_detected,
+    normalize_music_command_text,
+    strip_music_politeness,
 )
 
 # Persona module - text transformers gated by response type
@@ -917,69 +923,25 @@ class ArgoPipeline:
         return is_executable_command(user_text)
 
     def _has_music_keywords(self, text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        if self._is_executable_command(lowered):
-            return False
-        if re.search(r"\b(play|pray|music|song|album|artist|track|playlist|genre)\b", lowered):
-            return True
-        try:
-            from core.music_player import KNOWN_ARTISTS
-            return any(artist in lowered for artist in KNOWN_ARTISTS)
-        except Exception:
-            return False
+        return has_music_keywords(
+            text,
+            is_executable_command=self._is_executable_command,
+            known_artists=KNOWN_ARTISTS,
+        )
 
     def _strip_politeness_for_music(self, text: str) -> tuple[str, str | None]:
-        if not text:
-            return text, None
-        lowered = text.strip().lower()
-        politeness_phrases = [
-            "can you please",
-            "could you please",
-            "would you please",
-            "hey can you",
-            "hey could you",
-            "hey please",
-            "can you",
-            "could you",
-            "would you",
-            "please",
-        ]
-        for phrase in politeness_phrases:
-            if lowered == phrase:
-                return "", phrase
-            if lowered.startswith(phrase + " "):
-                stripped = text.strip()[len(phrase):].strip()
-                return stripped, phrase
-        return text, None
+        return strip_music_politeness(text)
 
     def _normalize_music_command_text(self, text: str) -> str:
-        if not text:
-            return text
-        if not self._has_music_keywords(text):
-            return text
-        cleaned, stripped_phrase = self._strip_politeness_for_music(text)
-        if stripped_phrase:
-            self.logger.info(f"[STT_NORMALIZE] stripped_politeness=\"{stripped_phrase}\"")
-        normalized = cleaned.strip()
-        if re.match(r"^pray\b", normalized, flags=re.IGNORECASE):
-            normalized = re.sub(r"^pray\b", "play", normalized, flags=re.IGNORECASE).strip()
-        return normalized
+        return normalize_music_command_text(
+            text,
+            has_keywords=self._has_music_keywords,
+            strip_politeness=self._strip_politeness_for_music,
+            logger=self.logger,
+        )
 
     def _music_noun_detected(self, text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        if re.search(r"\b(music|song|album|artist|track|playlist|genre)\b", lowered):
-            return True
-        if re.match(r"^play\b", lowered) and len(lowered.split()) > 1:
-            return True
-        try:
-            from core.music_player import KNOWN_ARTISTS
-            return any(artist in lowered for artist in KNOWN_ARTISTS)
-        except Exception:
-            return False
+        return music_noun_detected(text, KNOWN_ARTISTS)
 
     def _should_reject_audio(self, rms: float, silence_ratio: float, duration_s: float) -> tuple[bool, str]:
         """Return True if audio should be rejected as silence/noise."""
