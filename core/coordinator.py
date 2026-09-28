@@ -11,7 +11,6 @@ import logging
 import threading
 import queue
 import time
-import re
 from typing import Optional
 from datetime import datetime
 import sounddevice as sd
@@ -45,6 +44,13 @@ from core.audio_owner import get_audio_owner
 from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
 from core.coordinator_responses import CoordinatorResponseMixin
 from core.coordinator_recording import RecordingConfig, RecordingHooks, record_with_silence_detection
+from core.coordinator_text import (
+    extract_code_block,
+    infer_sandbox_filename,
+    levenshtein_distance,
+    similarity_ratio,
+    strip_code_blocks,
+)
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -1139,71 +1145,20 @@ class Coordinator(CoordinatorResponseMixin):
                 pass
 
     def _extract_code_block(self, text: str) -> Optional[str]:
-        """Extract the first fenced code block from text."""
-        if not text:
-            return None
-        match = re.search(r"```(?:python)?\n([\s\S]*?)```", text, flags=re.IGNORECASE)
-        if not match:
-            return None
-        code = match.group(1).strip("\n")
-        return code or None
+        return extract_code_block(text)
 
     def _strip_code_blocks(self, text: str) -> str:
-        """Remove fenced code blocks from text for speech output."""
-        if not text:
-            return text
-        stripped = re.sub(r"```[\s\S]*?```", "", text).strip()
-        return stripped
+        return strip_code_blocks(text)
 
     def _infer_sandbox_filename(self, user_text: str, response_text: str) -> str:
-        """Infer a sandbox filename from user request or response."""
-        match = re.search(r"([a-zA-Z0-9_\-]+\.py)", response_text)
-        if match:
-            return match.group(1)
-        match = re.search(r"([a-zA-Z0-9_\-]+\.py)", user_text)
-        if match:
-            return match.group(1)
-
-        lowered = user_text.lower()
-        if "storage" in lowered or "disk" in lowered or "space" in lowered:
-            return "storage_check.py"
-        if "cpu" in lowered or "monitor" in lowered:
-            return "cpu_monitor.py"
-        return "sandbox_tool.py"
+        return infer_sandbox_filename(user_text, response_text)
 
     def _similarity_ratio(self, a: str, b: str) -> float:
-        """Compute similarity ratio using Levenshtein distance."""
-        if not a or not b:
-            return 0.0
-        a_norm = a.strip().lower()
-        b_norm = b.strip().lower()
-        if a_norm == b_norm:
-            return 1.0
-        dist = self._levenshtein_distance(a_norm, b_norm)
-        max_len = max(len(a_norm), len(b_norm))
-        if max_len == 0:
-            return 0.0
-        return 1.0 - (dist / max_len)
+        return similarity_ratio(a, b)
 
     @staticmethod
     def _levenshtein_distance(a: str, b: str) -> int:
-        """Compute Levenshtein distance between two strings."""
-        if a == b:
-            return 0
-        if not a:
-            return len(b)
-        if not b:
-            return len(a)
-        prev_row = list(range(len(b) + 1))
-        for i, ca in enumerate(a, start=1):
-            curr_row = [i]
-            for j, cb in enumerate(b, start=1):
-                insert_cost = curr_row[j - 1] + 1
-                delete_cost = prev_row[j] + 1
-                replace_cost = prev_row[j - 1] + (0 if ca == cb else 1)
-                curr_row.append(min(insert_cost, delete_cost, replace_cost))
-            prev_row = curr_row
-        return prev_row[-1]
+        return levenshtein_distance(a, b)
 
     
     def _speak_with_interrupt_detection(self, response_text: str) -> None:
