@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
-from typing import Any, Protocol
+from typing import Any, Callable
 
 from core.app_control import (
     app_status_response,
@@ -17,20 +18,17 @@ from core.app_registry import APP_REGISTRY, get_supported_app_displays, resolve_
 from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
 
 
-class AppHost(Protocol):
+@dataclass(frozen=True)
+class AppDependencies:
     logger: Any
-    _personal_mode_min_confidence: float
-
-    def _deliver_canonical_response(self, *args, **kwargs) -> bool: ...
-
-    def _evaluate_gates(
-        self, capability_key: str, module_key: str, interaction_id: str
-    ) -> tuple[bool, str]: ...
+    minimum_confidence: Callable[[], float]
+    deliver_response: Callable[..., bool]
+    evaluate_gates: Callable[[str, str, str], tuple[bool, str]]
 
 
 class PipelineAppService:
-    def __init__(self, host: AppHost) -> None:
-        self._host = host
+    def __init__(self, dependencies: AppDependencies) -> None:
+        self._dependencies = dependencies
 
     @staticmethod
     def is_status_text(text: str) -> bool:
@@ -56,7 +54,7 @@ class PipelineAppService:
         ) is not None
 
     def _deliver(self, message, interaction_id, replay_mode, overrides) -> bool:
-        return self._host._deliver_canonical_response(
+        return self._dependencies.deliver_response(
             message, interaction_id, replay_mode, overrides,
             enforce_confidence=False, force_tts=True,
         )
@@ -64,16 +62,18 @@ class PipelineAppService:
     def respond_status(
         self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None
     ) -> bool:
-        host = self._host
+        dependencies = self._dependencies
         if self.is_control_text(user_text):
-            host.logger.error("[CONTROL/STATUS VIOLATION] App STATUS attempted control")
+            dependencies.logger.error(
+                "[CONTROL/STATUS VIOLATION] App STATUS attempted control"
+            )
             return self._deliver(
                 "App status cannot change applications. Say a control command explicitly.",
                 interaction_id,
                 replay_mode,
                 overrides,
             )
-        host.logger.info("[APP] mode=STATUS")
+        dependencies.logger.info("[APP] mode=STATUS")
         return self._deliver(
             app_status_response(user_text), interaction_id, replay_mode, overrides
         )
@@ -87,9 +87,11 @@ class PipelineAppService:
         replay_mode: bool,
         overrides: dict | None,
     ) -> bool:
-        host = self._host
+        dependencies = self._dependencies
         if self.is_status_text(user_text) and not self.is_control_text(user_text):
-            host.logger.error("[CONTROL/STATUS VIOLATION] App CONTROL attempted status-only response")
+            dependencies.logger.error(
+                "[CONTROL/STATUS VIOLATION] App CONTROL attempted status-only response"
+            )
             return self._log_and_deliver(
                 "App control requires an explicit command.", interaction_id, replay_mode, overrides
             )
@@ -98,7 +100,7 @@ class PipelineAppService:
                 "App control requires an explicit command.", interaction_id, replay_mode, overrides
             )
         action = getattr(intent, "action", None)
-        if action != "close" and stt_conf < host._personal_mode_min_confidence:
+        if action != "close" and stt_conf < dependencies.minimum_confidence():
             return self._log_and_deliver(
                 "App command unclear. Please repeat.", interaction_id, replay_mode, overrides
             )
@@ -112,9 +114,9 @@ class PipelineAppService:
             )
             return self._log_and_deliver(message, interaction_id, replay_mode, overrides)
         if action == "close":
-            host.logger.info("[INTENT] APP_CONTROL close")
+            dependencies.logger.info("[INTENT] APP_CONTROL close")
         if action != "close":
-            allowed, reason = host._evaluate_gates(
+            allowed, reason = dependencies.evaluate_gates(
                 "app_control", "app_control", interaction_id
             )
             if not allowed:
@@ -124,13 +126,13 @@ class PipelineAppService:
                     replay_mode,
                     overrides,
                 )
-        host.logger.info(f"[APP] mode=CONTROL action={action} target={app_key}")
+        dependencies.logger.info(f"[APP] mode=CONTROL action={action} target={app_key}")
         if action in {"open", "launch"}:
             _ok, message = open_app(app_key)
         elif action in {"close", "quit"}:
             _ok, message, pid, result = close_app_deterministic(app_key)
             pid_display = pid if pid is not None else "<none>"
-            host.logger.info(
+            dependencies.logger.info(
                 f"[APP_CONTROL] action=close app={app_key} pid={pid_display} result={result}"
             )
         elif action == "focus":
@@ -140,7 +142,7 @@ class PipelineAppService:
         return self._log_and_deliver(message, interaction_id, replay_mode, overrides)
 
     def _log_and_deliver(self, message, interaction_id, replay_mode, overrides) -> bool:
-        self._host.logger.info(f"Argo: {message}")
+        self._dependencies.logger.info(f"Argo: {message}")
         return self._deliver(message, interaction_id, replay_mode, overrides)
 
     def respond_focus_status(
@@ -170,7 +172,7 @@ class PipelineAppService:
         if not target:
             message = f"Which app should I focus? I can focus {', '.join(get_supported_app_displays())}."
             return self._deliver(message, interaction_id, replay_mode, overrides)
-        allowed, reason = self._host._evaluate_gates(
+        allowed, reason = self._dependencies.evaluate_gates(
             "app_focus_control", "app_focus", interaction_id
         )
         if not allowed:
@@ -210,8 +212,8 @@ class PipelineAppService:
         replay_mode: bool,
         overrides: dict | None,
     ) -> bool:
-        host = self._host
-        if stt_conf < host._personal_mode_min_confidence and not executable_command:
+        dependencies = self._dependencies
+        if stt_conf < dependencies.minimum_confidence() and not executable_command:
             return self._log_and_deliver(
                 "App launch command unclear. Please repeat.",
                 interaction_id,
@@ -219,7 +221,9 @@ class PipelineAppService:
                 overrides,
             )
         if self.has_disallowed_launch_tokens(user_text):
-            host.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
+            dependencies.logger.info(
+                "[APP_LAUNCH] app=<unknown> result=rejected source=voice"
+            )
             return self._log_and_deliver(
                 "App launch only supports core apps without files, URLs, or arguments.",
                 interaction_id,
@@ -228,16 +232,22 @@ class PipelineAppService:
             )
         app_key = getattr(intent, "target", None) or resolve_app_launch_target(user_text)
         if not app_key:
-            host.logger.info("[APP_LAUNCH] app=<unknown> result=rejected source=voice")
+            dependencies.logger.info(
+                "[APP_LAUNCH] app=<unknown> result=rejected source=voice"
+            )
             return self._log_and_deliver(
                 f"I can open {', '.join(get_supported_launch_displays())}.",
                 interaction_id,
                 replay_mode,
                 overrides,
             )
-        allowed, reason = host._evaluate_gates("app_launch", "app_launch", interaction_id)
+        allowed, reason = dependencies.evaluate_gates(
+            "app_launch", "app_launch", interaction_id
+        )
         if not allowed:
-            host.logger.info(f"[APP_LAUNCH] app={app_key} result=failed source=voice")
+            dependencies.logger.info(
+                f"[APP_LAUNCH] app={app_key} result=failed source=voice"
+            )
             return self._log_and_deliver(
                 f"App launch blocked by policy ({reason}).",
                 interaction_id,
@@ -253,6 +263,8 @@ class PipelineAppService:
             "powershell": "PowerShell",
         }.get(app_key, app_key.title())
         result = "success" if ok else "failed"
-        host.logger.info(f"[APP_LAUNCH] app={app_key} result={result} source=voice")
+        dependencies.logger.info(
+            f"[APP_LAUNCH] app={app_key} result={result} source=voice"
+        )
         message = f"Opening {display_name}." if ok else f"I couldn't open {display_name}."
         return self._log_and_deliver(message, interaction_id, replay_mode, overrides)

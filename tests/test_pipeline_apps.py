@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import core.pipeline_apps as apps_module
-from core.pipeline_apps import PipelineAppService
+from core.pipeline_apps import AppDependencies, PipelineAppService
 
 
 class Host:
@@ -19,9 +19,20 @@ class Host:
         return self.gate
 
 
+def service_for(host):
+    return PipelineAppService(
+        AppDependencies(
+            logger=host.logger,
+            minimum_confidence=lambda: host._personal_mode_min_confidence,
+            deliver_response=host._deliver_canonical_response,
+            evaluate_gates=host._evaluate_gates,
+        )
+    )
+
+
 def test_status_path_rejects_control_without_querying_apps(monkeypatch):
     host = Host()
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         apps_module,
         "app_status_response",
@@ -35,7 +46,7 @@ def test_status_path_rejects_control_without_querying_apps(monkeypatch):
 def test_blocked_open_does_not_launch_app(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(apps_module, "resolve_app_name", lambda *_: "notepad")
     monkeypatch.setattr(
         apps_module,
@@ -55,7 +66,7 @@ def test_close_preserves_existing_direct_deterministic_path(monkeypatch):
     host._evaluate_gates = lambda *_: (_ for _ in ()).throw(
         AssertionError("close path must not consult open gate")
     )
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(apps_module, "resolve_app_name", lambda *_: "notepad")
     monkeypatch.setattr(
         apps_module,
@@ -72,7 +83,7 @@ def test_close_preserves_existing_direct_deterministic_path(monkeypatch):
 def test_focus_gate_runs_before_focus_mutation(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         apps_module,
         "focus_app_deterministic",
@@ -97,7 +108,7 @@ def test_launch_rejects_files_urls_and_arguments():
 def test_blocked_launch_does_not_start_process(monkeypatch):
     host = Host()
     host.gate = (False, "disabled")
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(apps_module, "resolve_app_launch_target", lambda *_: "notepad")
     monkeypatch.setattr(
         apps_module,
@@ -119,7 +130,7 @@ def test_blocked_launch_does_not_start_process(monkeypatch):
 
 def test_low_confidence_launch_requires_executable_command(monkeypatch):
     host = Host()
-    service = PipelineAppService(host)
+    service = service_for(host)
     monkeypatch.setattr(
         apps_module,
         "resolve_app_launch_target",

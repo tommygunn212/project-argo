@@ -76,7 +76,7 @@ from core.pipeline_system_volume import (
     PipelineSystemVolumeService,
     SystemVolumeDependencies,
 )
-from core.pipeline_apps import PipelineAppService
+from core.pipeline_apps import AppDependencies, PipelineAppService
 from core.pipeline_time import (
     LOCATION_TO_TIMEZONE as TIMEZONE_MAP,
     PipelineTimeService,
@@ -213,7 +213,14 @@ class ArgoPipeline:
                 evaluate_gates=self._evaluate_gates,
             )
         )
-        self._apps = PipelineAppService(self)
+        self._apps = PipelineAppService(
+            AppDependencies(
+                logger=self.logger,
+                minimum_confidence=lambda: self._personal_mode_min_confidence,
+                deliver_response=self._deliver_canonical_response,
+                evaluate_gates=self._evaluate_gates,
+            )
+        )
         self._time_responses = PipelineTimeService(
             TimeDependencies(
                 logger=self.logger,
