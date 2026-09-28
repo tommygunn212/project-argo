@@ -92,7 +92,10 @@ from core.pipeline_interaction_runtime import (
 )
 from core.pipeline_speech import SpeechDependencies, speak_text
 from core import persona_briefs
-from core.pipeline_ambiguity import ambiguous_short_question_prompt
+from core.pipeline_ambiguity import (
+    ambiguous_short_question_prompt,
+    is_non_propositional_utterance,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -447,53 +450,12 @@ class ArgoPipeline:
         return any(phrase in lower for phrase in phrases)
 
     def _is_non_propositional_utterance(self, text: str, request_kind: str) -> bool:
-        if not text:
-            return True
-        lower = text.strip().lower()
-        explicit_fragments = [
-            r"^huh\??$",
-            r"^what\??$",
-            r"^uh+\??$",
-            r"^um+\??$",
-            r"^hmm+\??$",
-            r"^erm+\??$",
-            r"^i\s+don'?t\s+understand\b",
-            r"^i\s+do\s+not\s+understand\b",
-            r"^it\s+seems\s+like\s+human\b",
-        ]
-        if any(re.match(pattern, lower) for pattern in explicit_fragments):
-            return True
-        if request_kind == "ACTION":
-            return False
-        if self._is_executable_command(lower):
-            return False
-        if self._has_interrogative_structure(lower):
-            return False
-        # Imperative sentences starting with action verbs should pass through to LLM
-        imperative_verbs = {"give", "tell", "show", "list", "generate", "create", "make", "find", "get", "pick", "choose", "suggest", "recommend", "explain", "describe", "say", "read", "write", "name", "calculate", "compute"}
-        tokens = lower.split()
-        if tokens and tokens[0] in imperative_verbs:
-            return False
-        # Identity/personal statements should pass through (potential memory writes)
-        identity_patterns = [
-            r"\bmy name is\b",
-            r"\bi am called\b",
-            r"\bcall me\b",
-            r"\bi like\b",
-            r"\bi love\b",
-            r"\bi prefer\b",
-            r"\bi hate\b",
-            r"\bi live in\b",
-            r"\bi work at\b",
-            r"\bi'm from\b",
-            r"\bmy favorite\b",
-            r"\bmy birthday is\b",
-        ]
-        if any(re.search(pattern, lower) for pattern in identity_patterns):
-            return False
-        # Let the LLM handle ambiguous/short input — it's better at
-        # requesting clarification naturally than canned quips.
-        return False
+        return is_non_propositional_utterance(
+            text,
+            request_kind,
+            is_executable_command=self._is_executable_command,
+            has_interrogative=self._has_interrogative_structure,
+        )
 
     def _ambiguous_short_question_prompt(self, text: str, request_kind: str, topic: str | None = None) -> str | None:
         """Ask for grounding before answering terse shorthand like "what is mc2"."""
