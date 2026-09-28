@@ -54,6 +54,7 @@ from core.intent_rules.general import (
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
+    detect_self_diagnostics,
     detect_system_health,
     detect_temperature_query,
     is_system_keyword,

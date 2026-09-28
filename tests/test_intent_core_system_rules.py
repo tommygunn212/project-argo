@@ -1,5 +1,9 @@
 from core.intent_models import IntentType
-from core.intent_parser import HARDWARE_KEYWORDS, SYSTEM_CPU_QUERIES
+from core.intent_parser import (
+    HARDWARE_KEYWORDS,
+    SYSTEM_CPU_QUERIES,
+    detect_self_diagnostics,
+)
 from core.intent_parser import RuleBasedIntentParser
 from core.intent_rules.core_system import (
     parse_control_intent,
@@ -64,6 +68,7 @@ def test_hardware_shopping_and_3d_printing_queries_are_not_machine_status():
 def test_public_parser_facade_still_reexports_keyword_banks():
     assert "cpu" in HARDWARE_KEYWORDS
     assert "what cpu do i have" in SYSTEM_CPU_QUERIES
+    assert detect_self_diagnostics("argo is broken")
 
 
 def test_parser_never_leaks_internal_rule_tables_to_stdout(capsys):
