@@ -54,6 +54,50 @@ _ACTION_VERBS = {
     "raise",
 }
 
+_AFFIRMATIVE_RESPONSES = {
+    "yes",
+    "yeah",
+    "yep",
+    "correct",
+    "right",
+    "do it",
+    "confirm",
+    "ok",
+    "okay",
+}
+
+
+def extract_name_from_statement(text: str) -> str | None:
+    """Extract a bounded display name from an explicit identity statement."""
+    lower_text = text.lower().strip()
+    name_match = re.search(r"my name is (.+?)(?:\.|!|\?|$)", lower_text)
+    if name_match:
+        name = name_match.group(1).strip().title()
+        return name if 1 < len(name) < 50 else None
+
+    if re.match(r"^i am [a-z]", lower_text):
+        parts = lower_text.split(" ", 2)
+        if len(parts) >= 3:
+            name = parts[2].strip().title()
+            return name if 1 < len(name) < 50 else None
+
+    call_match = re.search(
+        r"(call me|you can call me)\s+(.+?)(?:\.|!|\?|$)", lower_text
+    )
+    if call_match:
+        name = call_match.group(2).strip().title()
+        return name if 1 < len(name) < 50 else None
+    return None
+
+
+def is_affirmative_response(text: str) -> bool:
+    """Recognize an affirmative token without matching prefixes such as yesterday."""
+    lower_text = text.lower().strip()
+    return any(
+        re.match(rf"^{re.escape(affirmative)}\b", lower_text)
+        for affirmative in _AFFIRMATIVE_RESPONSES
+    )
+
 
 def get_response_style(intent: IntentLike | None) -> str:
     """Return the stable response tone for an intent."""

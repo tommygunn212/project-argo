@@ -104,8 +104,10 @@ from core.pipeline_clarification import (
     get_clarification_prompt,
 )
 from core.pipeline_conversation_policy import (
+    extract_name_from_statement,
     get_action_risk,
     get_response_style,
+    is_affirmative_response,
     is_executable_command,
     minimal_ack,
 )
@@ -438,38 +440,10 @@ class ArgoPipeline:
         return self._voice_configuration().set_tts_model(model)
 
     def _extract_name_from_statement(self, text: str) -> str | None:
-        """Extract name from identity statement like 'my name is X' or 'i am X'."""
-        lower_text = text.lower().strip()
-        
-        # Pattern: "my name is X"
-        name_match = re.search(r"my name is (.+?)(?:\.|!|\?|$)", lower_text)
-        if name_match:
-            name = name_match.group(1).strip().title()
-            return name if len(name) > 1 and len(name) < 50 else None
-        
-        # Pattern: "i am X" (stricter: only if confident phrasing)
-        if re.match(r"^i am [a-z]", lower_text):
-            parts = lower_text.split(" ", 2)
-            if len(parts) >= 3:
-                name = parts[2].strip().title()
-                return name if len(name) > 1 and len(name) < 50 else None
-
-        # Pattern: "call me X" or "you can call me X"
-        call_match = re.search(r"(call me|you can call me)\s+(.+?)(?:\.|!|\?|$)", lower_text)
-        if call_match and len(call_match.groups()) >= 2:
-            name = call_match.group(2).strip().title()
-            return name if len(name) > 1 and len(name) < 50 else None
-        
-        return None
+        return extract_name_from_statement(text)
 
     def _is_affirmative_response(self, text: str) -> bool:
-        """Check if response is affirmative (yes, yeah, correct, do it, confirm)."""
-        lower_text = text.lower().strip()
-        affirmatives = {"yes", "yeah", "yep", "correct", "right", "do it", "confirm", "ok", "okay"}
-        return any(
-            re.match(rf"^{re.escape(affirmative)}\b", lower_text)
-            for affirmative in affirmatives
-        )
+        return is_affirmative_response(text)
 
     def _is_non_propositional_utterance(self, text: str, request_kind: str) -> bool:
         return is_non_propositional_utterance(
