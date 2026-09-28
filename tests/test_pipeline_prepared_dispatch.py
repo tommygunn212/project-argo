@@ -101,7 +101,7 @@ def test_llm_fallback_receives_audio_and_context(monkeypatch, prepared_request):
 
 
 def test_pipeline_facade_builds_prepared_context(monkeypatch):
-    from core import pipeline as pipeline_module
+    from core import pipeline_text_router as router_module
     from core.pipeline import ArgoPipeline
 
     pipeline = ArgoPipeline.__new__(ArgoPipeline)
@@ -109,22 +109,22 @@ def test_pipeline_facade_builds_prepared_context(monkeypatch):
     pipeline.strict_lab_mode = False
     pipeline._intent_parser = SimpleNamespace(parse=lambda text: None)
     pipeline._classify_request_kind = lambda text: "conversation"
-    monkeypatch.setattr(pipeline_module, "dispatch_early_status", lambda *args: False)
-    monkeypatch.setattr(pipeline_module, "dispatch_conversation_gate", lambda *args: False)
+    monkeypatch.setattr(router_module, "dispatch_early_status", lambda *args: False)
+    monkeypatch.setattr(router_module, "dispatch_conversation_gate", lambda *args: False)
     monkeypatch.setattr(
-        pipeline_module,
+        router_module,
         "apply_confidence_gate",
         lambda *args: SimpleNamespace(intent=None, handled=False),
     )
     monkeypatch.setattr(
-        pipeline_module,
+        router_module,
         "run_canonical_stage",
         lambda *args: SimpleNamespace(handled=False, topic="general", matched=False),
     )
-    monkeypatch.setattr(pipeline_module, "dispatch_pre_intent_gate", lambda *args: False)
+    monkeypatch.setattr(router_module, "dispatch_pre_intent_gate", lambda *args: False)
     intent = object()
     monkeypatch.setattr(
-        pipeline_module,
+        router_module,
         "prepare_intent_stage",
         lambda *args: SimpleNamespace(
             handled=False,
@@ -136,7 +136,7 @@ def test_pipeline_facade_builds_prepared_context(monkeypatch):
     )
     captured = []
     monkeypatch.setattr(
-        pipeline_module,
+        router_module,
         "dispatch_prepared_intent",
         lambda host, context: captured.append((host, context)),
     )

@@ -64,7 +64,6 @@ from tools.home_assistant import execute_smart_home_command
 from core.personality import format_response as personality_format_response, get_personality_state
 from core.pipeline_memory import PipelineMemoryService
 from core.memory_command_service import MemoryCommandService
-from core.pipeline_platform_dispatch import dispatch_early_status
 from core.pipeline_system_health import respond_with_system_health
 from core.pipeline_topic_classifier import classify_canonical_topic
 from core.pipeline_self_diagnostics import respond_with_self_diagnostics
@@ -73,13 +72,8 @@ from core.pipeline_scheduling_responses import PipelineSchedulingService
 from core.pipeline_inspection_responses import PipelineInspectionService
 from core.pipeline_task_planning import PipelineTaskPlanningService
 from core.pipeline_writing_responses import PipelineWritingResponseService
-from core.pipeline_conversation_gates import dispatch_conversation_gate
-from core.pipeline_confidence_gate import apply_confidence_gate
-from core.pipeline_canonical_stage import run_canonical_stage
-from core.pipeline_pre_intent_gates import dispatch_pre_intent_gate
-from core.pipeline_intent_stage import prepare_intent_stage
 from core import system_response_formatter as system_format
-from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
+from core.pipeline_text_router import route_user_text
 from core.pipeline_streaming_response import PipelineStreamingResponseService
 from core.pipeline_response_generation import PipelineResponseGenerationService
 from core.pipeline_bluetooth import PipelineBluetoothService
@@ -2666,100 +2660,14 @@ class ArgoPipeline:
         Confidence is treated as a hint (metadata). It may gate actions/memory writes
         but never suppresses conversational responses in personal mode.
         """
-        user_text = (user_text or "").strip()
-        repair_service = getattr(self, "repair_service", None)
-        if repair_service is not None and not replay_mode:
-            repair_result = repair_service.handle_text(user_text)
-            if repair_result is not None:
-                self._deliver_canonical_response(repair_result["message"], interaction_id,
-                    replay_mode, overrides, enforce_confidence=False, force_tts=True)
-                return
-        try:
-            stt_conf = max(0.0, min(1.0, float(confidence_hint)))
-        except Exception:
-            stt_conf = 0.0
-        self._current_stt_confidence = stt_conf
-
-        early_intent = None
-        try:
-            early_intent = self._intent_parser.parse(user_text)
-        except Exception:
-            early_intent = None
-        if dispatch_early_status(
-            self, early_intent, user_text, interaction_id, replay_mode, overrides
-        ):
-            return
-        self.logger.info(
-            "[STT] text_received conf_hint=%.2f strict_lab_mode=%s",
-            stt_conf,
-            self.strict_lab_mode,
-        )
-
-        if dispatch_conversation_gate(
-            self, user_text, interaction_id, replay_mode, overrides
-        ):
-            return
-
-        request_kind = self._classify_request_kind(user_text)
-        confidence_result = apply_confidence_gate(
-            self, user_text, stt_conf, early_intent, interaction_id
-        )
-        early_intent = confidence_result.intent
-        if confidence_result.handled:
-            return
-        canonical_result = run_canonical_stage(
+        route_user_text(
             self,
             user_text,
-            stt_conf,
+            confidence_hint,
             interaction_id,
             replay_mode,
             overrides,
-        )
-        if canonical_result.handled:
-            return
-        topic = canonical_result.topic
-        matched = canonical_result.matched
-        if dispatch_pre_intent_gate(
-            self,
-            user_text,
-            request_kind,
-            topic,
-            interaction_id,
-            replay_mode,
-            overrides,
-        ):
-            return
-        intent_result = prepare_intent_stage(
-            self,
-            early_intent,
-            user_text,
-            topic,
-            matched,
-            stt_conf,
-            interaction_id,
-            replay_mode,
-            overrides,
-        )
-        if intent_result.handled:
-            return
-        intent = intent_result.intent
-        request_kind = intent_result.request_kind
-        safe_utterance = intent_result.safe_utterance
-        low_confidence_audio = intent_result.low_confidence_audio
-        dispatch_prepared_intent(
-            self,
-            PreparedDispatch(
-                intent=intent,
-                user_text=user_text,
-                request_kind=request_kind,
-                safe_utterance=safe_utterance,
-                low_confidence_audio=low_confidence_audio,
-                stt_confidence=stt_conf,
-                interaction_id=interaction_id,
-                replay_mode=replay_mode,
-                overrides=overrides,
-                audio_data=audio_data,
-            ),
+            audio_data,
         )
 
     def _save_replay(self, interaction_id: str, audio_data, user_text: str, ai_text: str):
