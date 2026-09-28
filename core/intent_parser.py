@@ -52,6 +52,7 @@ from core.intent_system_rules import (
     detect_system_health,
     detect_temperature_query,
     is_system_keyword,
+    normalize_system_text,
 )
 
 # System and identity keyword banks are re-exported above for compatibility.

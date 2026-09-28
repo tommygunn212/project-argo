@@ -4,6 +4,7 @@ from core.intent_input import (
     normalize_phrase,
     strip_wake_prefix,
 )
+from core.intent_parser import is_system_keyword, normalize_system_text
 
 
 def test_rule_normalization_standardizes_quotes_and_volume_aliases():
@@ -36,3 +37,8 @@ def test_empty_post_wake_text_has_no_first_word():
     assert prepared.original == ""
     assert prepared.tokens == ()
     assert prepared.first_word == ""
+
+
+def test_intent_parser_preserves_legacy_system_rule_exports():
+    assert normalize_system_text("GPU HEALTH") == "system gpu health"
+    assert is_system_keyword("hardware")
