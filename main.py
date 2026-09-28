@@ -67,6 +67,13 @@ from core.frontend_interrupt import (
     FrontendInterruptDependencies,
     interrupt_current_response,
 )
+from core.voice_mode_ownership import (
+    VoiceModeDependencies,
+    load_voice_mode,
+    phase_claims_smooth_voice,
+    save_voice_mode,
+    set_voice_mode,
+)
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -127,46 +134,44 @@ SMOOTH_VOICE_LIVE_PHASES = {
 
 def _load_voice_mode() -> str:
     """Read the persisted mode. A missing or damaged file means classic."""
-    try:
-        raw = json.loads(VOICE_MODE_FILE.read_text(encoding="utf-8"))
-        mode = str(raw.get("mode", "")).strip().lower()
-        if mode in (VOICE_MODE_SMOOTH, VOICE_MODE_CLASSIC):
-            return mode
-    except FileNotFoundError:
-        pass
-    except Exception:
-        logger.warning("[VoiceMode] unreadable %s; defaulting to classic", VOICE_MODE_FILE)
-    return VOICE_MODE_CLASSIC
+    return load_voice_mode(
+        VOICE_MODE_FILE,
+        smooth_mode=VOICE_MODE_SMOOTH,
+        classic_mode=VOICE_MODE_CLASSIC,
+        logger=logger,
+    )
 
 
 def _save_voice_mode(mode: str) -> None:
-    try:
-        VOICE_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = VOICE_MODE_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"mode": mode}, indent=2), encoding="utf-8")
-        tmp.replace(VOICE_MODE_FILE)
-    except Exception:
-        logger.warning("[VoiceMode] could not persist mode", exc_info=True)
+    save_voice_mode(VOICE_MODE_FILE, mode, logger)
 
 
 def _set_voice_mode(mode: str, reason: str) -> None:
     """Change who owns the microphone, and stop the other path immediately."""
-    global VOICE_MODE, LISTENING_ENABLED
-    mode = mode if mode in (VOICE_MODE_SMOOTH, VOICE_MODE_CLASSIC) else VOICE_MODE_CLASSIC
-    changed = mode != VOICE_MODE
-    VOICE_MODE = mode
-    _save_voice_mode(mode)
-    if changed:
-        logger.info("[VoiceMode] %s owns the microphone (%s)", mode, reason)
-        broadcast_msg("voice_mode", {"mode": mode, "reason": reason})
-    if mode == VOICE_MODE_SMOOTH and LISTENING_ENABLED:
-        logger.warning("[VoiceMode] classic listener was running; stopping it")
-        LISTENING_ENABLED = False
-        if audio_ref:
-            try:
-                audio_ref.stop()
-            except Exception:
-                logger.debug("[VoiceMode] could not stop classic audio", exc_info=True)
+    def set_mode(value: str) -> None:
+        global VOICE_MODE
+        VOICE_MODE = value
+
+    def set_listening(enabled: bool) -> None:
+        global LISTENING_ENABLED
+        LISTENING_ENABLED = enabled
+
+    set_voice_mode(
+        VoiceModeDependencies(
+            get_mode=lambda: VOICE_MODE,
+            set_mode=set_mode,
+            get_listening_enabled=lambda: LISTENING_ENABLED,
+            set_listening_enabled=set_listening,
+            get_audio=lambda: audio_ref,
+            save_mode=_save_voice_mode,
+            broadcast=broadcast_msg,
+            logger=logger,
+        ),
+        mode,
+        reason,
+        smooth_mode=VOICE_MODE_SMOOTH,
+        classic_mode=VOICE_MODE_CLASSIC,
+    )
 
 
 def _note_smooth_voice_phase(phase: str) -> None:
@@ -176,7 +181,7 @@ def _note_smooth_voice_phase(phase: str) -> None:
     not "disconnected", not "error", not a closed tab. Releasing is an
     explicit user action, handled in the control path.
     """
-    if (phase or "").strip().lower() in SMOOTH_VOICE_LIVE_PHASES:
+    if phase_claims_smooth_voice(phase, SMOOTH_VOICE_LIVE_PHASES):
         _set_voice_mode(VOICE_MODE_SMOOTH, f"smooth voice phase: {phase}")
 
 # Self-diagnostics and assisted recovery (Phase 1 & 2)
