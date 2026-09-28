@@ -28,6 +28,7 @@ from core.intent_vocabulary import IntentVocabularyMixin
 from core.intent_rules.writing import parse_writing_intent
 from core.intent_rules.smart_home import parse_smart_home_intent
 from core.intent_rules.scheduling import parse_scheduling_intent
+from core.intent_rules.vision import parse_vision_intent
 from core.intent_system_rules import (
     AUDIO_ROUTING_KEYWORDS,
     detect_disk_query,
@@ -848,28 +849,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if scheduling_intent is not None:
             return scheduling_intent
 
-        # ── Computer Vision ────────────────────────────────────────
-
-        # VISION_READ_ERROR: "read the error on my screen", "what error is that"
-        if re.search(r"\b(read|what)\b.*\b(error|warning|exception|traceback|crash)\b.*\b(screen|see|display)?\b", text_lower) or \
-           re.search(r"\b(error|warning|exception)\b.*\b(screen|say|mean)\b", text_lower):
-            return Intent(
-                intent_type=IntentType.VISION_READ_ERROR,
-                confidence=0.96,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # VISION_DESCRIBE: "what's on my screen", "describe my screen", "take a screenshot"
-        if re.search(r"\b(describe|what(?:'s| is))\b.*\b(screen|see|looking|display|monitor|desktop)\b", text_lower) or \
-           re.search(r"\b(look(?:ing)?|see)\b.*\b(screen|monitor|display)\b", text_lower) or \
-           re.search(r"\b(take|grab|capture)\b.*\b(screenshot|screen\s?shot|snap|picture)\b", text_lower):
-            return Intent(
-                intent_type=IntentType.VISION_DESCRIBE,
-                confidence=0.96,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
+        vision_intent = parse_vision_intent(text_original, text_lower, serious_mode)
+        if vision_intent is not None:
+            return vision_intent
 
         # ── File System ────────────────────────────────────────────
 
