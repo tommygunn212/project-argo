@@ -6,6 +6,7 @@ from scipy.io import wavfile
 
 from core.coordinator_stages import (
     capture_audio_stage,
+    dispatch_procedural_stage,
     dispatch_simple_deterministic_stage,
     parse_intent_stage,
     process_transcript_stage,
@@ -382,3 +383,84 @@ def test_system_info_stage_builds_requested_profile_response(monkeypatch):
 
     assert result.handled is True
     assert coordinator.spoken[-1][0] == "Your CPU is a Test CPU."
+
+
+class ProceduralLogger(Logger):
+    def error(self, message):
+        self.messages.append(("error", message))
+
+
+def make_procedural_coordinator(can_execute=True, error=None):
+    coordinator = SimpleNamespace(
+        interaction_count=4,
+        interaction_id=9,
+        current_probe=Probe(),
+        logger=ProceduralLogger(),
+        _last_utterance_time=None,
+    )
+    calls = []
+
+    def execute(text):
+        calls.append(text)
+        if error:
+            raise error
+
+    coordinator.executor = SimpleNamespace(
+        can_execute=lambda text: can_execute,
+        execute=execute,
+    )
+    return coordinator, calls
+
+
+def test_procedural_stage_falls_through_when_executor_declines():
+    coordinator, calls = make_procedural_coordinator(can_execute=False)
+    callbacks = []
+
+    result = dispatch_procedural_stage(
+        coordinator,
+        "ordinary question",
+        lambda: callbacks.append("output"),
+        lambda: callbacks.append("finalized"),
+    )
+
+    assert result.handled is False
+    assert calls == []
+    assert callbacks == []
+
+
+def test_procedural_stage_executes_and_marks_output_before_finalize():
+    coordinator, calls = make_procedural_coordinator()
+    callbacks = []
+
+    result = dispatch_procedural_stage(
+        coordinator,
+        "open calculator",
+        lambda: callbacks.append("output"),
+        lambda: callbacks.append("finalized"),
+    )
+
+    assert result.handled is True
+    assert result.output_produced is True
+    assert calls == ["open calculator"]
+    assert callbacks == ["output", "finalized"]
+    assert coordinator.current_probe.marks == ["llm_start", "llm_end"]
+    assert coordinator._last_utterance_time is not None
+
+
+def test_procedural_stage_contains_executor_failure_and_finalizes():
+    coordinator, calls = make_procedural_coordinator(error=RuntimeError("boom"))
+    callbacks = []
+
+    result = dispatch_procedural_stage(
+        coordinator,
+        "open calculator",
+        lambda: callbacks.append("output"),
+        lambda: callbacks.append("finalized"),
+    )
+
+    assert result.handled is True
+    assert result.output_produced is False
+    assert calls == ["open calculator"]
+    assert callbacks == ["finalized"]
+    assert coordinator.current_probe.marks == ["llm_start", "llm_end"]
+    assert any(level == "error" and "boom" in message for level, message in coordinator.logger.messages)

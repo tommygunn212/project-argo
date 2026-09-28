@@ -7,7 +7,7 @@ import io
 from dataclasses import dataclass
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from core.intent_parser import Intent, IntentType, is_system_keyword, normalize_system_text
 from core.config import get_config
@@ -407,3 +407,49 @@ def dispatch_simple_deterministic_stage(
         return DeterministicStageResult(True, True, output_produced)
 
     return DeterministicStageResult(False, False, False)
+
+
+@dataclass(frozen=True)
+class ProceduralStageResult:
+    """Outcome of direct command-executor routing."""
+
+    handled: bool
+    interaction_result: bool
+    output_produced: bool
+
+
+def dispatch_procedural_stage(
+    coordinator: Any,
+    text: str,
+    mark_output: Callable[[], None],
+    finalize_watchdog: Callable[[], None],
+) -> ProceduralStageResult:
+    """Execute a supported procedural command without entering the LLM path."""
+    if not coordinator.executor.can_execute(text):
+        return ProceduralStageResult(False, False, False)
+
+    coordinator.logger.info(
+        f"[Iteration {coordinator.interaction_count}] "
+        f"Procedural command detected: '{text}'"
+    )
+    coordinator.current_probe.mark("llm_start")
+    output_produced = False
+    try:
+        coordinator.executor.execute(text)
+        output_produced = True
+        mark_output()
+        coordinator.current_probe.mark("llm_end")
+        coordinator.logger.info(
+            f"[Iteration {coordinator.interaction_count}] "
+            "Procedural command complete"
+        )
+    except Exception as exc:
+        coordinator.logger.error(
+            f"[Iteration {coordinator.interaction_count}] "
+            f"Procedural command failed: {exc}"
+        )
+        coordinator.current_probe.mark("llm_end")
+
+    finalize_watchdog()
+    coordinator._last_utterance_time = time.time()
+    return ProceduralStageResult(True, True, output_produced)

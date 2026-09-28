@@ -77,6 +77,7 @@ from core.session_memory import SessionMemory
 from core.latency_probe import LatencyProbe, LatencyStats
 from core.coordinator_stages import (
     capture_audio_stage,
+    dispatch_procedural_stage,
     dispatch_simple_deterministic_stage,
     parse_intent_stage,
     process_transcript_stage,
@@ -928,28 +929,12 @@ class Coordinator(CoordinatorResponseMixin):
                 self, intent, _mark_output_produced, _finalize_response_watchdog
             ):
                 return True
-            if self.executor.can_execute(text):
-                self.logger.info(f"[Iteration {self.interaction_count}] Procedural command detected: '{text}'")
-                # TASK 15: Mark LLM start (skip for procedural commands)
-                self.current_probe.mark("llm_start")
-                try:
-                    # Execute command directly (bypasses LLM)
-                    self.executor.execute(text)
-                    response_text = ""  # No LLM response for procedural commands
-                    output_produced = True
-                    self.current_probe.mark("llm_end")
-                    # Exit callback - procedural command complete, skip LLM
-                    self.logger.info(f"[Iteration {self.interaction_count}] Procedural command complete")
-                    _finalize_response_watchdog()
-                    self._last_utterance_time = time.time()
-                    return True
-                except Exception as e:
-                    self.logger.error(f"[Iteration {self.interaction_count}] Procedural command failed: {e}")
-                    response_text = "Command failed."
-                    self.current_probe.mark("llm_end")
-                    _finalize_response_watchdog()
-                    self._last_utterance_time = time.time()
-                    return True
+            procedural_result = dispatch_procedural_stage(
+                self, text, _mark_output_produced, _finalize_response_watchdog
+            )
+            if procedural_result.handled:
+                output_produced = procedural_result.output_produced
+                return procedural_result.interaction_result
 
             stop_terms = {"stop", "pause", "cancel", "shut up", "shutup", "shut-up"}
             if any(term in text.lower() for term in stop_terms):
