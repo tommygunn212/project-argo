@@ -5040,38 +5040,6 @@ class ArgoPipeline(PipelineMemoryMixin):
                 music_player.stop()
                 self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
                 return
-        filler_match = re.fullmatch(r"(okay\.?\s*)+|\.+", user_text.strip(), flags=re.IGNORECASE)
-        if self.strict_lab_mode:
-            if stt_conf < 0.30 or filler_match:
-                self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or filler; skipping")
-                if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
-                    self.speak("I didn’t catch that. Try a complete question.", interaction_id=interaction_id)
-                    self._low_conf_notice_given = True
-                self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                return
-            if stt_conf < 0.35 or not user_text.strip():
-                if is_system_keyword(user_text):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but whitelisted system intent: {user_text}")
-                elif re.search(r"\bcount\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but count detected; continuing")
-                elif re.search(r"\bvolume\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but volume intent detected; continuing")
-                elif re.search(r"\b(remember|save this|from now on|memory|forget)\b", user_text, flags=re.IGNORECASE):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but memory intent detected; continuing")
-                elif any(term in user_text_lower for term in stop_terms):
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) but stop intent detected; continuing")
-                elif stt_conf < 0.15 or not user_text.strip():
-                    self.logger.info(f"[STT] Low confidence ({stt_conf:.2f}) or empty text; skipping")
-                    if not self._low_conf_notice_given and self.runtime_overrides.get("tts_enabled", True):
-                        self.speak("I didn’t catch that clearly. Try saying it as a full sentence.", interaction_id=interaction_id)
-                        self._low_conf_notice_given = True
-                    self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-                    return
-        elif not user_text.strip():
-            self.logger.info("[STT] Empty text in personal mode; skipping")
-            self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
-            return
-
         if self._handle_memory_command(user_text, interaction_id, replay_mode, overrides):
             self.transition_state("LISTENING", interaction_id=interaction_id, source="audio")
             self.logger.info("--- Interaction Complete ---")
