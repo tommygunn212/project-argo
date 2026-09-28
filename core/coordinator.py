@@ -100,6 +100,7 @@ from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
 from core.config import get_config, get_runtime_overrides, set_runtime_override, clear_runtime_overrides
 from core.coordinator_responses import CoordinatorResponseMixin
+from core.recording_silence_tracker import RecordingSilenceTracker
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -1222,11 +1223,11 @@ class Coordinator(CoordinatorResponseMixin):
         max_samples = int(self.AUDIO_SAMPLE_RATE * self.MAX_RECORDING_DURATION)
         
         audio_buffer = []
-        consecutive_silence_samples = 0
         total_samples = 0
-        speech_detected = False
-        speech_detected_at = None
-        silence_started_at = None
+        silence_tracker = RecordingSilenceTracker(
+            silence_samples=silence_samples_threshold,
+            minimum_samples=min_samples,
+        )
         stop_reason = None
         rms_samples = []  # For calculating average RMS (debug metric)
         
@@ -1324,36 +1325,26 @@ class Coordinator(CoordinatorResponseMixin):
                     self.logger.warning("[Record] No voice detected (avg RMS < 0.002 after 2.5s), aborting early")
                     break
                 
-                # Detect speech (RMS > threshold) — only start silence timer after speech detected
-                if not speech_detected and chunk_is_speech:
-                    speech_detected = True
-                    speech_detected_at = elapsed_time
+                silence = silence_tracker.observe(
+                    elapsed_seconds=elapsed_time,
+                    total_samples=total_samples,
+                    chunk_samples=chunk.shape[0],
+                    is_speech=chunk_is_speech,
+                    is_silence=chunk_is_silence,
+                )
+                if silence.speech_started and self.record_debug:
+                    self.logger.info(
+                        f"[Record] Speech detected at {elapsed_time:.3f}s (RMS={rms:.4f})"
+                    )
+                if silence.stop_for_silence:
+                    stop_reason = "silence"
                     if self.record_debug:
-                        rms_str = f"{rms:.4f}" if rms is not None else "N/A"
-                        self.logger.info(f"[Record] Speech detected at {elapsed_time:.3f}s (RMS={rms_str})")
-                
-                # Track silence only after speech has been detected
-                if speech_detected:
-                    if chunk_is_silence:
-                        if silence_started_at is None:
-                            silence_started_at = elapsed_time
-                        consecutive_silence_samples += chunk.shape[0]
-                    else:
-                        # Audio detected, reset silence counter
-                        consecutive_silence_samples = 0
-                        silence_started_at = None
-                    
-                    # Stop if enough silence detected AND minimum duration reached
-                    if (consecutive_silence_samples >= silence_samples_threshold and
-                        total_samples >= min_samples):
-                        stop_reason = "silence"
-                        if self.record_debug:
-                            silence_duration = elapsed_time - silence_started_at if silence_started_at else 0
-                            self.logger.info(
-                                f"[Record] Silence detected ({silence_duration:.2f}s >= {self.SILENCE_TIMEOUT_SECONDS}s), "
-                                f"stopping recording ({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s recorded)"
-                            )
-                        break
+                        self.logger.info(
+                            f"[Record] Silence detected ({silence.silence_duration:.2f}s >= "
+                            f"{self.SILENCE_TIMEOUT_SECONDS}s), stopping recording "
+                            f"({total_samples/self.AUDIO_SAMPLE_RATE:.2f}s recorded)"
+                        )
+                    break
                 
                 # Also stop if max duration reached
                 if total_samples >= max_samples:
@@ -1397,7 +1388,11 @@ class Coordinator(CoordinatorResponseMixin):
             self.logger.info(f"[Record] Recording Summary:")
             self.logger.info(f"  Duration: {total_samples/self.AUDIO_SAMPLE_RATE:.2f}s (minimum: {self.MINIMUM_RECORD_DURATION}s)")
             self.logger.info(f"  RMS average: {avg_rms_str} (normalized 0-1, threshold: {self.RMS_SPEECH_THRESHOLD})")
-            self.logger.info(f"  Speech detected at: {speech_detected_at:.3f}s" if speech_detected_at else "  Speech: NOT detected")
+            self.logger.info(
+                f"  Speech detected at: {silence_tracker.speech_detected_at:.3f}s"
+                if silence_tracker.speech_detected_at
+                else "  Speech: NOT detected"
+            )
             self.logger.info(f"  Stop reason: {stop_reason}")
             self.logger.info(f"  Silence threshold: {self.SILENCE_THRESHOLD} (absolute RMS)")
             self.logger.info(f"  Silence timeout: {self.SILENCE_TIMEOUT_SECONDS}s")
