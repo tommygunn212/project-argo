@@ -42,6 +42,20 @@ def test_unknown_world_time_location_is_deterministic():
     )
 
 
+def test_short_timezone_alias_does_not_match_inside_unknown_location():
+    service = PipelineTimeService(Host(), now=fixed_now)
+
+    assert service.format_world_time("Atlantis") == (
+        "I don't have timezone data for Atlantis. Try a major city name."
+    )
+
+
+def test_known_location_can_still_match_inside_a_phrase():
+    service = PipelineTimeService(Host(), now=fixed_now)
+
+    assert service.format_world_time("time in Tokyo") == "It's 9:34 PM in Time In Tokyo."
+
+
 def test_time_response_preserves_barge_in_suppression():
     host = Host()
     service = PipelineTimeService(host, now=fixed_now)

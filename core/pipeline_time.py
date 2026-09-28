@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
@@ -68,7 +69,8 @@ class PipelineTimeService:
                 (
                     timezone
                     for known_location, timezone in LOCATION_TO_TIMEZONE.items()
-                    if known_location in normalized or normalized in known_location
+                    if _contains_phrase(normalized, known_location)
+                    or _contains_phrase(known_location, normalized)
                 ),
                 None,
             )
@@ -119,3 +121,7 @@ class PipelineTimeService:
             force_tts=True,
             suppress_barge_in_seconds=2.0,
         )
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
