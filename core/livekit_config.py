@@ -30,83 +30,26 @@ logger = logging.getLogger("ARGO.LiveKitConfig")
 
 DEFAULT_LOCAL_LIVEKIT_SECRET = "devsecretdevsecretdevsecretdevsecretdevsecret"
 
-# The realtime worker runs in its own process, so a UI personality change cannot
-# reach it through core.config's in-memory runtime overrides. This file is the
-# cross-process handoff: main.py writes it, and each new realtime session reads
-# it at start. No restart needed — the value is resolved per session.
-VOICE_PERSONALITY_FILE = Path(__file__).resolve().parents[1] / "runtime" / "voice_personality.json"
-# Same cross-process handoff as the personality, for the same reason: the
-# worker is a separate process and in-memory runtime overrides never reach it.
-REALTIME_VOICE_FILE = Path(__file__).resolve().parents[1] / "runtime" / "realtime_voice.json"
-
-# What gpt-realtime will actually accept. Anything else is refused at the
-# session level, which is a bad way to find out - so it is checked here.
-REALTIME_VOICES = [
-    ("marin", "Marin - warm, natural (default)"),
-    ("cedar", "Cedar - warm, lower"),
-    ("alloy", "Alloy - balanced, neutral"),
-    ("ash", "Ash - clear, even"),
-    ("ballad", "Ballad - soft, expressive"),
-    ("coral", "Coral - bright, friendly"),
-    ("echo", "Echo - crisp, measured"),
-    ("sage", "Sage - calm, steady"),
-    ("shimmer", "Shimmer - light, quick"),
-    ("verse", "Verse - rich, narrative"),
-]
-REALTIME_VOICE_NAMES = [v for v, _ in REALTIME_VOICES]
-
-
-def read_realtime_voice(config: Any | None = None) -> str:
-    """Which voice the next realtime session speaks in.
-
-    Precedence matches the personality: env override, then the UI selection
-    persisted by main.py, then config.json, then marin.
-    """
-    env_value = (os.getenv("ARGO_REALTIME_VOICE") or "").strip()
-    if env_value:
-        return env_value
-    try:
-        import json
-
-        raw = json.loads(REALTIME_VOICE_FILE.read_text(encoding="utf-8"))
-        chosen = str(raw.get("voice", "")).strip().lower()
-        if chosen in REALTIME_VOICE_NAMES:
-            return chosen
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-    cfg = config or get_config()
-    return str(_env_or_config(cfg, "ARGO_REALTIME_VOICE", "livekit.voice", "marin") or "marin")
-
-
-def write_realtime_voice(voice: str) -> None:
-    """Persist the UI's voice selection for the next realtime session."""
-    import json
-    from datetime import datetime, timezone
-
-    name = str(voice or "").strip().lower()
-    if name not in REALTIME_VOICE_NAMES:
-        raise ValueError(f"{voice!r} is not a gpt-realtime voice. "
-                         f"Choose from: {', '.join(REALTIME_VOICE_NAMES)}")
-    REALTIME_VOICE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"voice": name, "updated_at": datetime.now(timezone.utc).isoformat()}
-    tmp = REALTIME_VOICE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp.replace(REALTIME_VOICE_FILE)
-HEDRA_REALTIME_RETIRED = True
-HEDRA_REALTIME_NOTICE = (
-    "Hedra retired its realtime avatar service. Voice uses direct LiveKit audio; "
-    "the Cortana portrait remains available locally."
+from core.livekit_preferences import (
+    REALTIME_VOICE_FILE,
+    REALTIME_VOICE_NAMES,
+    REALTIME_VOICES,
+    VOICE_MODE_FILE,
+    VOICE_PERSONALITY_FILE,
+    read_realtime_voice,
+    read_voice_mode,
+    read_voice_personality,
+    write_realtime_voice,
+    write_voice_personality,
 )
-LOCAL_AVATAR_MEDIA_TYPES = {
-    ".gif": "image/gif",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-}
+from core.livekit_avatar import (
+    HEDRA_REALTIME_NOTICE,
+    HEDRA_REALTIME_RETIRED,
+    LOCAL_AVATAR_MEDIA_TYPES,
+    hedra_avatar_status,
+    local_avatar_media_status,
+    resolve_local_avatar_media,
+)
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from core.persona_briefs import (  # noqa: E402
@@ -123,48 +66,6 @@ from core.persona_briefs import (  # noqa: E402
 DEFAULT_REALTIME_INSTRUCTIONS = CONVERSATION_CONTRACT
 TOOL_BRIEF = TOOL_POLICY
 DEEP_THINK_BRIEF = DEEP_THINK_POLICY
-
-
-def read_voice_personality(config: Any | None = None) -> str:
-    """Resolve the personality for the next realtime session.
-
-    Precedence: env override > UI selection persisted by main.py > config.json
-    default > "neutral". Never raises; a damaged file falls through to config.
-    """
-    env_value = (os.getenv("ARGO_REALTIME_PERSONALITY") or "").strip()
-    if env_value:
-        return env_value
-
-    try:
-        import json
-
-        raw = json.loads(VOICE_PERSONALITY_FILE.read_text(encoding="utf-8"))
-        selected = str(raw.get("personality", "")).strip()
-        if selected:
-            return selected
-    except FileNotFoundError:
-        pass
-    except Exception:
-        # A corrupt handoff file must never break voice; fall through to config.
-        pass
-
-    cfg = config or get_config()
-    return str(_env_or_config(cfg, "ARGO_PERSONALITY", "personality.default", "argo") or "argo")
-
-
-def write_voice_personality(personality: str) -> None:
-    """Persist the UI's personality selection for the next realtime session."""
-    import json
-    from datetime import datetime, timezone
-
-    name = str(personality or "").strip()
-    if not name:
-        return
-    VOICE_PERSONALITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"personality": name, "updated_at": datetime.now(timezone.utc).isoformat()}
-    tmp = VOICE_PERSONALITY_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp.replace(VOICE_PERSONALITY_FILE)
 
 
 def compose_realtime_instructions(
@@ -690,30 +591,6 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
     }
 
 
-VOICE_MODE_FILE = Path(__file__).resolve().parents[1] / "runtime" / "voice_mode.json"
-
-
-def read_voice_mode() -> str:
-    """Which path owns the microphone: "smooth" or "classic".
-
-    main.py persists this so a restart cannot quietly hand the microphone
-    back; the dashboard reads the same file so it cannot disagree with the
-    server about what is live.
-    """
-    try:
-        import json
-
-        raw = json.loads(VOICE_MODE_FILE.read_text(encoding="utf-8"))
-        mode = str(raw.get("mode", "")).strip().lower()
-        if mode in ("smooth", "classic"):
-            return mode
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-    return "classic"
-
-
 def mobile_access_status(request_host: str | None = None) -> dict[str, Any]:
     host = _clean_request_host(request_host) or _best_lan_ip() or "127.0.0.1"
     http_port = _int(os.getenv("ARGO_HTTP_PORT", "8000"), 8000)
@@ -751,85 +628,6 @@ def speaker_identity_status(cfg: LiveKitRealtimeConfig | None = None) -> dict[st
         "ready": bool(cfg.speaker_id_enabled and api_key_ready and plugin_ready),
         "mode": "experimental_sidecar",
         "error": plugin_error,
-    }
-
-
-def resolve_local_avatar_media(config: Any | None = None) -> tuple[Path | None, str, str, str]:
-    """Resolve an explicitly configured local avatar media file."""
-
-    cfg = config or get_config()
-    enabled = _bool(_env_or_config(cfg, "ARGO_LOCAL_AVATAR_MEDIA_ENABLED", "avatar.local_media_enabled", True))
-    raw_path = str(_env_or_config(cfg, "ARGO_LOCAL_AVATAR_MEDIA", "avatar.local_media_path", "") or "").strip()
-    if not enabled or not raw_path:
-        return None, "", raw_path, "not_configured"
-
-    media_path = Path(raw_path).expanduser()
-    if not media_path.is_absolute():
-        media_path = Path(__file__).resolve().parents[1] / media_path
-    content_type = LOCAL_AVATAR_MEDIA_TYPES.get(media_path.suffix.lower(), "")
-    if not content_type:
-        return media_path, "", raw_path, "unsupported_type"
-    if not media_path.exists() or not media_path.is_file():
-        return media_path, content_type, raw_path, "missing"
-    return media_path, content_type, raw_path, ""
-
-
-def local_avatar_media_status(config: Any | None = None) -> dict[str, Any]:
-    cfg = config or get_config()
-    media_path, content_type, raw_path, error = resolve_local_avatar_media(config)
-    ready = bool(media_path and content_type and not error)
-    motion_enabled = cfg.get("avatar.motion_enabled", None)
-    return {
-        "enabled": error != "not_configured",
-        "ready": ready,
-        "path": raw_path,
-        "url": "/v2-assets/local-avatar-media" if ready else "",
-        "content_type": content_type,
-        "media_type": "video" if content_type.startswith("video/") else "image",
-        "expression_profile": str(cfg.get("avatar.local_media_profile", "") or ""),
-        "motion_enabled": None if motion_enabled is None else _bool(motion_enabled),
-        "error": error,
-    }
-
-
-def hedra_avatar_status(config: Any | None = None) -> dict[str, Any]:
-    """Return safe-to-display Hedra avatar readiness without exposing secrets."""
-
-    image_path_raw = os.getenv("HEDRA_AVATAR_IMAGE", "").strip()
-    image_path = Path(image_path_raw).expanduser() if image_path_raw else None
-    if image_path and not image_path.is_absolute():
-        image_path = Path(__file__).resolve().parents[1] / image_path
-
-    plugin_ready = False
-    plugin_version = ""
-    plugin_error = ""
-    try:
-        plugin_version = metadata.version("livekit-plugins-hedra")
-        plugin_ready = True
-    except Exception as exc:  # pragma: no cover - depends on optional package install
-        plugin_error = str(exc)
-
-    avatar_id_ready = bool(os.getenv("HEDRA_AVATAR_ID", "").strip())
-    image_ready = bool(image_path and image_path.exists())
-    api_key_ready = bool(os.getenv("HEDRA_API_KEY", "").strip())
-    enabled = _bool(os.getenv("ARGO_HEDRA_AVATAR_ENABLED", False))
-
-    return {
-        "enabled": enabled,
-        "provider": "hedra_live_avatar",
-        "api_key_ready": api_key_ready,
-        "avatar_id_ready": avatar_id_ready,
-        "image_ready": image_ready,
-        "image": image_path_raw,
-        "plugin_ready": plugin_ready,
-        "plugin_version": plugin_version,
-        "ready": False,
-        "service_retired": HEDRA_REALTIME_RETIRED,
-        "api_url": os.getenv("HEDRA_API_URL", "https://api.hedra.com/public/livekit/v1/session"),
-        "mode": "livekit_video_track",
-        "fallback": "local_cortana_portrait",
-        "local_media": local_avatar_media_status(config),
-        "error": HEDRA_REALTIME_NOTICE,
     }
 
 

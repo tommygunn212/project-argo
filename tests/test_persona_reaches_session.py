@@ -10,13 +10,13 @@ import json
 
 import pytest
 
-from core import livekit_config, persona_briefs as P
+from core import livekit_config, livekit_preferences, persona_briefs as P
 
 
 @pytest.fixture
 def selection(tmp_path, monkeypatch):
     """Point the cross-process handoff files at a temp dir."""
-    monkeypatch.setattr(livekit_config, "VOICE_PERSONALITY_FILE", tmp_path / "voice_personality.json")
+    monkeypatch.setattr(livekit_preferences, "VOICE_PERSONALITY_FILE", tmp_path / "voice_personality.json")
     monkeypatch.delenv("ARGO_REALTIME_PERSONALITY", raising=False)
 
     def choose(name):

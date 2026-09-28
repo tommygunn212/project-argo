@@ -12,6 +12,7 @@ import pytest
 
 import personas
 from core import livekit_config
+from core import livekit_preferences
 
 
 SELECTABLE = ["argo", "tommy_gunn", "jarvis", "tommy_mix", "rick", "claptrap", "plain"]
@@ -72,7 +73,7 @@ def test_each_persona_produces_distinct_instructions():
 @pytest.fixture
 def temp_personality_file(tmp_path, monkeypatch):
     path = tmp_path / "voice_personality.json"
-    monkeypatch.setattr(livekit_config, "VOICE_PERSONALITY_FILE", path)
+    monkeypatch.setattr(livekit_preferences, "VOICE_PERSONALITY_FILE", path)
     monkeypatch.delenv("ARGO_REALTIME_PERSONALITY", raising=False)
     return path
 
