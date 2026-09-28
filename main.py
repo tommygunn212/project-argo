@@ -49,6 +49,7 @@ from core.pipeline import ArgoPipeline
 from core.database import get_db_status
 from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
+from core.classic_capture import finish_classic_capture
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
 from core.code_repair import CodeRepairManager
@@ -1080,71 +1081,19 @@ def main_loop():
                 sound_cues.set_capture_active(False)
                 sound_cues.play("listening_end", interaction_id=current_interaction_id, block=True)
 
-                # Process Audio
-                if len(speech_buffer) > 0:
-                    full_audio = np.concatenate(speech_buffer)
-
-                    # --- AUDIO NORMALIZATION ---
-                    peak = np.max(np.abs(full_audio))
-                    if peak > 0.01:
-                        # Skip normalization if already loud enough (micro-latency win)
-                        if peak < 0.85:
-                            normalization_factor = 0.9 / peak
-                            full_audio = full_audio * normalization_factor
-                            logger.info(f"[Audio] Normalized input (original peak: {peak:.4f} -> 0.9)")
-                        else:
-                            logger.info(f"[Audio] Skipping normalization (peak: {peak:.4f} >= 0.85)")
-
-                        # CRITICAL FIX: Squeeze 2D array (N, 1) -> 1D array (N,)
-                        full_audio = np.squeeze(full_audio)
-
-                        audio.clear_buffers()
-
-                        # Last gate before the classic path can answer OR
-                        # speak. LISTENING_ENABLED already stops capture when
-                        # Smooth Voice owns the microphone, but "already
-                        # stopped" is not a guarantee: a race on the mode
-                        # switch, a buffer captured a moment earlier, or a
-                        # future caller that forgets the flag all end the same
-                        # way - two voices answering one question. This is the
-                        # check that makes double-speaking impossible rather
-                        # than unlikely.
-                        if VOICE_MODE == VOICE_MODE_SMOOTH:
-                            logger.warning(
-                                "[VoiceMode] dropped a classic turn: Smooth Voice owns "
-                                "the microphone (%.1fs of audio discarded)",
-                                len(full_audio) / 16000.0,
-                            )
-                            log_event(
-                                "CLASSIC_TURN_DROPPED reason=smooth_voice_owns_mic",
-                                stage="voice_mode",
-                                interaction_id=current_interaction_id,
-                            )
-                            audio.clear_buffers()
-                            pipeline.transition_state("LISTENING", source="smooth_owns_mic")
-                            current_interaction_id = ""
-                        else:
-                            # Offload to pipeline
-                            overrides = dict(NEXT_INTERACTION_OVERRIDES)
-                            NEXT_INTERACTION_OVERRIDES.clear()
-                            t = threading.Thread(
-                                target=pipeline.run_interaction,
-                                args=(full_audio, current_interaction_id, False, overrides),
-                            )
-                            t.start()
-                            current_interaction_id = ""
-                    else:
-                        logger.warning(f"[Audio] Input too quiet/silent (peak: {peak:.4f}), ignoring")
-                        audio.clear_buffers()
-                        sound_cues.play("error", interaction_id=current_interaction_id)
-                        pipeline.transition_state("LISTENING", source="quiet_reject")
-                        current_interaction_id = ""
-                else:
-                    audio.clear_buffers()
-                    sound_cues.set_capture_active(False)
-                    sound_cues.play("error", interaction_id=current_interaction_id)
-                    pipeline.transition_state("LISTENING", source="empty_reject")
-                    current_interaction_id = ""
+                finish_classic_capture(
+                    speech_buffer,
+                    audio=audio,
+                    pipeline=pipeline,
+                    interaction_id=current_interaction_id,
+                    voice_mode=VOICE_MODE,
+                    smooth_voice_mode=VOICE_MODE_SMOOTH,
+                    next_interaction_overrides=NEXT_INTERACTION_OVERRIDES,
+                    sound_cues=sound_cues,
+                    logger=logger,
+                    event_logger=log_event,
+                )
+                current_interaction_id = ""
 
 if __name__ == "__main__":
     # Engine selection/loading belongs to STTEngineManager. The former local
