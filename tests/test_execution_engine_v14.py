@@ -179,7 +179,7 @@ class TestExecutionMode:
         assert result.user_approved is True
         assert result.intent_id == "intent_002"
     
-    def test_execution_chain_traceability(self, execution_mode, approved_dry_run, simple_write_plan):
+    def test_execution_chain_traceability(self, execution_mode, approved_dry_run, simple_write_plan, temp_dir):
         """Execution result maintains full chain traceability"""
         approved_dry_run.execution_plan_id = simple_write_plan.plan_id
         
@@ -254,7 +254,7 @@ class TestExecutionMode:
         assert "captured_at" in result.before_state_snapshot
         assert "captured_at" in result.after_state_snapshot
     
-    def test_execution_result_serialization(self, execution_mode, approved_dry_run, simple_write_plan):
+    def test_execution_result_serialization(self, execution_mode, approved_dry_run, simple_write_plan, temp_dir):
         """Execution result can be serialized"""
         approved_dry_run.execution_plan_id = simple_write_plan.plan_id
         
