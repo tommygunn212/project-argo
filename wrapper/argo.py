@@ -81,21 +81,10 @@ from wrapper.conversation_history import (
     _append_daily_log,
     _get_log_dir,
 )
-from wrapper.behavior_policy import (
-    FAMILIARITY_STATE,
-    classify_query_type,
-    build_casual_humor_instruction,
-    detect_plausible_hallucination,
-    should_inject_observational_humor,
-    update_familiarity,
-    validate_human_first_sentence,
-    validate_personality_discipline,
-    validate_scope,
-)
+from wrapper.behavior_policy import classify_query_type
 from wrapper.cli_policy import (
     classify_input,
     classify_verbosity,
-    validate_cli_format,
 )
 from wrapper.preflight import (
     dispatch_governance,
@@ -115,7 +104,7 @@ from wrapper.transcription_workflow import (
     transcribe_with_confirmation,
 )
 from wrapper.execution_workflow import ExecutionWorkflow, execute_approved_plan
-from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
+from wrapper.audio_output import AudioOutputBridge
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
     detector_status,
@@ -182,12 +171,8 @@ except ImportError:
 # Import State Machine (Phase 7B: Wake/sleep/stop control)
 try:
     from core.state_machine import (
-        State,
         StateMachine,
         get_state_machine,
-        set_state_machine,
-        WAKE_WORD_ENABLED,
-        SLEEP_WORD_ENABLED
     )
     STATE_MACHINE_AVAILABLE = True
 except ImportError:
@@ -200,7 +185,6 @@ try:
         WakeWordDetector,
         WakeWordRequest,
         initialize_detector,
-        get_detector
     )
     WAKE_WORD_DETECTOR_AVAILABLE = True
 except ImportError:
@@ -209,21 +193,12 @@ except ImportError:
     WakeWordDetector = object  # type: ignore
     WakeWordRequest = object  # type: ignore
 
-# If wake-word module is removed, hard-disable wake-word handling
-try:
-    if not WAKE_WORD_DETECTOR_AVAILABLE:
-        WAKE_WORD_ENABLED = False
-except Exception:
-    pass
-
 # Import Command Parser (Phase 7B-3: Deterministic command classification)
 try:
     from core.command_parser import (
         CommandClassifier,
         CommandType,
-        ParsedCommand,
         get_classifier as get_command_classifier,
-        set_classifier as set_command_classifier
     )
     COMMAND_PARSER_AVAILABLE = True
 except ImportError:
