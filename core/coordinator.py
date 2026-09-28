@@ -51,6 +51,7 @@ from core.coordinator_text import (
     similarity_ratio,
     strip_code_blocks,
 )
+from core.coordinator_loop import run_coordinator_loop
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -912,125 +913,7 @@ class Coordinator(CoordinatorResponseMixin):
             self._is_processing.clear()
     
     def run(self) -> None:
-        """Run bounded interactions until stop, sleep, or the configured limit."""
-        self.logger.info("[run] Starting Coordinator v4 (interaction loop + session memory)...")
-        self.logger.info(f"[run] Max interactions: {self.MAX_INTERACTIONS}")
-        self.logger.info(f"[run] Stop keywords: {self.STOP_KEYWORDS}")
-        self.logger.info(f"[run] SessionMemory capacity: {self.memory.capacity}")
-
-        # Start Porcupine wake listener thread (runs continuously)
-        self._start_wake_listener()
-        
-        try:
-            # Loop until stop condition
-            while not self.stop_requested:
-                # Handle queued wake events on main thread
-                try:
-                    self._wake_event_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                else:
-                    self._handle_wake_event()
-                    if self.stop_requested:
-                        break
-                    continue
-
-                if self.state_machine.is_asleep:
-                    self.logger.info("[Loop] Sleeping - waiting for wake event...")
-                    time.sleep(0.05)
-                    continue
-
-                # Awake state: continuous listening
-                if self._last_utterance_time is not None:
-                    idle_elapsed = time.time() - self._last_utterance_time
-                    if idle_elapsed >= self.idle_sleep_seconds:
-                        self.logger.info(
-                            f"[Idle] No activity for {idle_elapsed:.1f}s; entering sleep"
-                        )
-                        self._safe_transition(
-                            self.state_machine.sleep,
-                            State.SLEEP,
-                            source="ui",
-                            interaction_id=str(self.interaction_id),
-                        )
-                        continue
-
-                # Don't listen while speaking
-                if self._is_speaking.is_set():
-                    time.sleep(0.05)
-                    continue
-
-                # Don't listen while processing a turn
-                if self._is_processing.is_set():
-                    time.sleep(0.05)
-                    continue
-
-                preroll_frames = self._wait_for_speech_start(self.SPEECH_START_POLL_SECONDS)
-                if preroll_frames is None:
-                    continue
-
-                processed = self._handle_interaction(initial_frames=preroll_frames)
-                if not processed:
-                    continue
-
-                if self.stop_requested:
-                    self.logger.info(f"[Loop] Stop requested by user")
-                    break
-
-                # Check if max interactions reached
-                if self.interaction_count >= self.MAX_INTERACTIONS:
-                    # CRITICAL: Don't exit while music is playing
-                    # Music lifecycle must outlive coordinator loop
-                    try:
-                        from core.music_player import get_music_player
-                        music_player = get_music_player()
-                        if music_player.is_playing:
-                            self.logger.info(
-                                f"[Loop] Max interactions reached, but music is playing - continuing loop"
-                            )
-                            self.logger.info(
-                                f"[Loop] Waiting for next command or music to finish..."
-                            )
-                        else:
-                            self.logger.info(
-                                f"[Loop] Max interactions ({self.MAX_INTERACTIONS}) reached"
-                            )
-                            break
-                    except Exception as e:
-                        self.logger.warning(f"[Loop] Could not check music status: {e} - exiting")
-                        break
-                else:
-                    self.logger.info(
-                        f"[Loop] Continuing... "
-                        f"({self.MAX_INTERACTIONS - self.interaction_count} "
-                        f"interactions remaining)"
-                    )
-            
-            # Loop exited (either stop keyword or max interactions)
-            self.logger.info(f"\n{'='*60}")
-            self.logger.info(f"[Loop] Exiting after {self.interaction_count} interaction(s)")
-            if self.stop_requested:
-                self.logger.info(f"[Loop] Reason: User requested stop")
-            else:
-                self.logger.info(f"[Loop] Reason: Max interactions reached")
-            
-            # Clear memory on exit (v4)
-            self.logger.info(f"[Loop] Clearing SessionMemory...")
-            self.memory.clear()
-            self.logger.info(f"[Loop] SessionMemory cleared: {self.memory}")
-            
-            # TASK 15: Log aggregated latency report
-            self.logger.info(f"{'='*60}")
-            self.latency_stats.log_report()
-            self.logger.info(f"{'='*60}\n")
-            
-            self.logger.info("[run] Coordinator v4 complete")
-        
-        except Exception as e:
-            self.logger.error(f"[run] Failed: {e}")
-            # Clear memory even on error
-            self.memory.clear()
-            raise
+        run_coordinator_loop(self)
     
     def stop(self) -> None:
         """Stop the coordinator loop gracefully."""
