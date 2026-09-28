@@ -24,6 +24,7 @@ porcupine_key/
 runtime/
 orchestrator/
 memory/
+wrapper/user_preferences.json
 .hf_cache/
 gem_test/
 data/*.db
