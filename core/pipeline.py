@@ -2211,20 +2211,20 @@ class ArgoPipeline:
         if token_count < 2:
             return ""
         try:
-            from tools.argo_rag import query_index
-            results = query_index(safe_query, limit=5)
+            from core.knowledge_service import format_prompt_context, query_knowledge
+            result = query_knowledge(safe_query, config=self.config)
         except Exception as e:
             self.logger.warning(f"[RAG] Query failed: {e}")
             self._record_timeline("RAG_QUERY_ERROR", stage="rag", interaction_id=interaction_id)
             return ""
-        if not results:
+        context = format_prompt_context(result)
+        if not context:
+            error = result.get("error", "empty") if isinstance(result, dict) else "invalid_result"
+            self.logger.info("[RAG] Knowledge service returned no context: %s", error)
             self._record_timeline("RAG_QUERY_EMPTY", stage="rag", interaction_id=interaction_id)
             return ""
-        parts = []
-        for idx, chunk in enumerate(results, 1):
-            parts.append(f"Source {idx}: {chunk.path}:{chunk.start_line}-{chunk.end_line}\n{chunk.text}")
-        self._record_timeline(f"RAG_QUERY_HITS {len(parts)}", stage="rag", interaction_id=interaction_id)
-        return "\n\n".join(parts)
+        self._record_timeline("RAG_QUERY_HIT anythingllm", stage="rag", interaction_id=interaction_id)
+        return context
 
     @staticmethod
     def _should_use_rag_context(user_text: str) -> bool:

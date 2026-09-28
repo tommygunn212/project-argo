@@ -151,13 +151,13 @@ def test_failures_are_reported_not_raised(monkeypatch):
 # --- knowledge base (AnythingLLM) ------------------------------------------
 
 def test_rag_search_returns_the_client_answer(monkeypatch):
-    from core import anythingllm_client as ALLM
+    from core import knowledge_service
 
     def fake_query(message, **kwargs):
         assert message == "what's my maker background"
         return {"ok": True, "answer": "You build things.", "sources": []}
 
-    monkeypatch.setattr(ALLM, "query_workspace", fake_query)
+    monkeypatch.setattr(knowledge_service, "query_knowledge", fake_query)
     d = T.rag_search("what's my maker background")
     assert d["ok"] and d["answer"] == "You build things."
 
@@ -169,17 +169,17 @@ def test_rag_search_reports_when_turned_off(monkeypatch):
                 return False
             return default
 
-    monkeypatch.setattr("core.config.get_config", lambda: FakeConfig())
+    monkeypatch.setattr("core.knowledge_service.get_config", lambda: FakeConfig())
     d = T.rag_search("anything")
     assert d["ok"] is False and d["error"] == "not_configured"
 
 
 def test_rag_search_failure_is_reported_not_raised(monkeypatch):
-    from core import anythingllm_client as ALLM
+    from core import knowledge_service
 
     def boom(*a, **k):
         raise RuntimeError("AnythingLLM is down")
 
-    monkeypatch.setattr(ALLM, "query_workspace", boom)
+    monkeypatch.setattr(knowledge_service, "query_knowledge", boom)
     d = T.rag_search("anything")
     assert d["ok"] is False and "AnythingLLM is down" in d["error"]

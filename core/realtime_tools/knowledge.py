@@ -21,19 +21,6 @@ def rag_search(query: str) -> dict:
     about Tommy that his standing instructions and memory don't already
     answer - not for small talk or facts about the here and now.
     """
-    from core.config import get_config
-    from core import anythingllm_client
+    from core.knowledge_service import query_knowledge
 
-    config = get_config()
-    if not config.get("rag.enabled", True):
-        return {
-            "ok": False,
-            "error": "not_configured",
-            "message": "The knowledge base is turned off in config.json under rag.enabled.",
-        }
-    return anythingllm_client.query_workspace(
-        query,
-        base_url=config.get("rag.base_url", anythingllm_client.DEFAULT_BASE_URL),
-        workspace=config.get("rag.workspace", anythingllm_client.DEFAULT_WORKSPACE),
-        timeout=float(config.get("rag.timeout_seconds", anythingllm_client.DEFAULT_TIMEOUT)),
-    )
+    return query_knowledge(query)
