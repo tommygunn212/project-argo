@@ -120,6 +120,7 @@ from wrapper.prompt_composition import compose_prompt
 from wrapper.post_generation import audit_and_record_response
 from wrapper.runtime_composition import prepare_conversation, update_preferences
 from wrapper.interaction_runtime import InteractionRuntime, run_classified_interaction
+from wrapper.public_runtime import PublicRuntime, run_public_interaction
 from wrapper.audio_output import AudioOutputBridge, MAX_VOICE_CHARS
 from wrapper.session_ids import resolve_session_id as _resolve_session_id
 from wrapper.wake_controls import (
@@ -1110,82 +1111,33 @@ def run_argo(
         replay_reason: Why replay was requested
         voice_mode: If True, force stateless, memory-free execution for voice input
     """
-    global _send_to_output_sink
-    # CRITICAL: Voice mode forces stateless execution
-    if voice_mode:
-        # Force stateless mode for voice input
-        replay_n = None
-        replay_session = False
-        # Memory will be skipped below
-    
-    # Step 1: Load, update, and save user preferences
-    prefs = update_preferences(user_input)
-    
-    # [Phase 7B-3] Step 1b: Parse and classify command
-    # --- ARGO LAW & 5 GATES INTERCEPT ---
-    if dispatch_music_volume(user_input, _send_to_output_sink):
-        return
+    def set_send_output(callback) -> None:
+        global _send_to_output_sink
+        _send_to_output_sink = callback
 
-    repository_root = Path(__file__).resolve().parent.parent
-    if dispatch_self_knowledge(user_input, _send_to_output_sink, repository_root):
-        return
-
-    _send_to_output_sink = neural_terminology_sink(_send_to_output_sink)
-    if dispatch_governance(user_input, _send_to_output_sink):
-        return
-    if COMMAND_PARSER_AVAILABLE and _command_parser:
-        parsed = _command_parser.parse(user_input)
-        # Handle control commands (never reach LLM)
-        if parsed.command_type == CommandType.STOP:
-            # Hard stop: call OutputSink.stop() immediately
-            if OUTPUT_SINK_AVAILABLE:
-                try:
-                    sink = get_output_sink()
-                    sink.stop()
-                    print("[AUDIO] Stopped playback (hard stop, <50ms latency)", file=sys.stderr)
-                except Exception as e:
-                    print(f"⚠ OutputSink.stop() error: {e}", file=sys.stderr)
-            # Transition state
-            if STATE_MACHINE_AVAILABLE and _state_machine:
-                if _state_machine.stop_audio():
-                    print("[STATE] Stopped audio (SPEAKING -> LISTENING)", file=sys.stderr)
-            return
-        elif parsed.command_type == CommandType.SLEEP:
-            # Sleep command
-            if STATE_MACHINE_AVAILABLE and _state_machine:
-                if _state_machine.sleep():
-                    print("[STATE] Going to sleep (-> SLEEP)", file=sys.stderr)
-            return
-        elif parsed.command_type == CommandType.WAKE:
-            # Wake command
-            if STATE_MACHINE_AVAILABLE and _state_machine:
-                if _state_machine.wake():
-                    print("[STATE] Woke up (SLEEP -> LISTENING)", file=sys.stderr)
-            return
-        # For ACTION and QUESTION, continue with cleaned text
-        if parsed.command_type in (CommandType.ACTION, CommandType.QUESTION):
-            user_input = parsed.cleaned_text
-    
-    # [Phase 7B] Step 1c: Transition to THINKING if we have a valid command in LISTENING state
-    if STATE_MACHINE_AVAILABLE and _state_machine:
-        if _state_machine.is_listening:
-            _transition_to_thinking()
-    
-    preparation = prepare_conversation(
-        user_input, prefs=prefs, voice_mode=voice_mode
-    )
-    if preparation.is_recall:
-        print(preparation.recall_output)
-        _send_to_output_sink(preparation.recall_output)
-        return
-    composed_input = preparation.composed_input
-
-    # [Phase 7B] Step 6b: Transition to SPEAKING before generating response
-    _transition_to_speaking()
-    
-    # Step 7: Execute core logic with composed input
-    _run_argo_internal(
-        composed_input,
+    run_public_interaction(
+        PublicRuntime(
+            update_preferences=update_preferences,
+            dispatch_music_volume=dispatch_music_volume,
+            dispatch_self_knowledge=dispatch_self_knowledge,
+            neural_terminology_sink=neural_terminology_sink,
+            dispatch_governance=dispatch_governance,
+            prepare_conversation=prepare_conversation,
+            run_internal=_run_argo_internal,
+            get_output_sink=get_output_sink if OUTPUT_SINK_AVAILABLE else None,
+            get_send_output=lambda: _send_to_output_sink,
+            set_send_output=set_send_output,
+            repository_root=Path(__file__).resolve().parent.parent,
+            command_parser_available=COMMAND_PARSER_AVAILABLE,
+            command_parser=_command_parser,
+            command_type=CommandType if COMMAND_PARSER_AVAILABLE else None,
+            output_sink_available=OUTPUT_SINK_AVAILABLE,
+            state_machine_available=STATE_MACHINE_AVAILABLE,
+            state_machine=_state_machine,
+            transition_to_thinking=_transition_to_thinking,
+            transition_to_speaking=_transition_to_speaking,
+        ),
+        user_input,
         active_mode=active_mode,
         replay_n=replay_n,
         replay_session=replay_session,
@@ -1193,7 +1145,7 @@ def run_argo(
         persona=persona,
         verbosity=verbosity,
         replay_reason=replay_reason,
-        voice_mode=voice_mode
+        voice_mode=voice_mode,
     )
     
     # Note: Memory storage happens inside _run_argo_internal after model response is available
