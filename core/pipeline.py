@@ -47,17 +47,12 @@ from core.music_player import get_music_player
 from core.music_status import query_music_status
 from core.app_control import (
     WRITABLE_APPS,
-    app_status_response,
-    open_app,
-    close_app_deterministic,
-    focus_app_deterministic,
     get_active_app,
-    is_app_running,
     write_text_to_app,
 )
 from core.app_registry import APP_REGISTRY
 from core.app_launch import get_supported_launch_displays, launch_app, resolve_app_launch_target
-from core.app_registry import get_supported_app_displays, resolve_app_name
+from core.app_registry import resolve_app_name
 
 # TTS bypass reason for deterministic commands (for logging/debugging)
 TTS_ALLOWED_REASON_DETERMINISTIC = "DETERMINISTIC_CONFIDENCE_BYPASS"
@@ -93,6 +88,7 @@ from core.streamed_text_collector import StreamedTextCollector
 from core.pipeline_bluetooth import PipelineBluetoothService
 from core.pipeline_audio_routing import PipelineAudioRoutingService
 from core.pipeline_system_volume import PipelineSystemVolumeService
+from core.pipeline_apps import PipelineAppService
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -139,6 +135,7 @@ class ArgoPipeline:
         self._bluetooth = PipelineBluetoothService(self)
         self._audio_routing = PipelineAudioRoutingService(self)
         self._system_volume = PipelineSystemVolumeService(self)
+        self._apps = PipelineAppService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -2261,105 +2258,24 @@ class ArgoPipeline:
         )
 
     def _is_app_status_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(phrase in lowered for phrase in {
-            "what apps are running",
-            "what applications are running",
-            "list running applications",
-            "list running apps",
-        }) or re.search(r"\b(is|are|do i have)\b", lowered) is not None and any(term in lowered for term in {"open", "running"})
+        return self._apps.is_status_text(text)
 
     def _is_app_control_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        return re.search(r"\b(open|launch|start|close|quit|exit|shut down|shutdown)\b", lowered) is not None
+        return self._apps.is_control_text(text)
 
     def _respond_with_app_status(self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_app_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] App STATUS attempted control")
-            message = "App status cannot change applications. Say a control command explicitly."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        self.logger.info("[APP] mode=STATUS")
-        message = app_status_response(user_text)
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._apps.respond_status(user_text, interaction_id, replay_mode, overrides)
 
     def _respond_with_app_control(self, intent, user_text: str, stt_conf: float, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_app_status_text(user_text) and not self._is_app_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] App CONTROL attempted status-only response")
-            message = "App control requires an explicit command."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if not self._is_app_control_text(user_text):
-            message = "App control requires an explicit command."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        action = getattr(intent, "action", None)
-        if action != "close" and stt_conf < self._personal_mode_min_confidence:
-            message = "App command unclear. Please repeat."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        app_key = resolve_app_name(user_text)
-        if not app_key:
-            supported = ", ".join(get_supported_app_displays())
-            if action == "close":
-                message = f"Which app should I close? I can close {supported}."
-            else:
-                message = "I don't have a known application called that."
-            self.logger.info(f"Argo: {message}")
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if action == "close":
-            self.logger.info("[INTENT] APP_CONTROL close")
-        if action not in {"close"}:
-            allowed, reason = self._evaluate_gates("app_control", "app_control", interaction_id)
-            if not allowed:
-                message = f"App control blocked by policy ({reason})."
-                self.logger.info(f"Argo: {message}")
-                return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        self.logger.info(f"[APP] mode=CONTROL action={action} target={app_key}")
-        if action in {"open", "launch"}:
-            ok, msg = open_app(app_key)
-        elif action in {"close", "quit"}:
-            ok, msg, pid, result = close_app_deterministic(app_key)
-            pid_display = pid if pid is not None else "<none>"
-            self.logger.info(f"[APP_CONTROL] action=close app={app_key} pid={pid_display} result={result}")
-        elif action == "focus":
-            ok, msg, _ = focus_app_deterministic(app_key)
-        else:
-            ok, msg = False, "App control requires an explicit command."
-        self.logger.info(f"Argo: {msg}")
-        return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._apps.respond_control(
+            intent, user_text, stt_conf, interaction_id, replay_mode, overrides
+        )
 
     def _respond_with_focus_status(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        target = getattr(intent, "target", None) if intent else None
-        if target:
-            display = APP_REGISTRY.get(target, {}).get("display", target.capitalize())
-            if not is_app_running(target):
-                message = f"{display} isn't running."
-                return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-            active_key, active_display = get_active_app()
-            if active_key == target:
-                message = f"Yes, {active_display or display} is focused."
-            else:
-                message = f"{display} is running but not focused."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-
-        active_key, active_display = get_active_app()
-        if active_display:
-            message = f"Active app is {active_display}."
-        else:
-            message = "Active app unavailable."
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._apps.respond_focus_status(intent, interaction_id, replay_mode, overrides)
 
     def _respond_with_focus_control(self, intent, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        target = getattr(intent, "target", None) if intent else None
-        if not target:
-            message = f"Which app should I focus? I can focus {', '.join(get_supported_app_displays())}."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        allowed, reason = self._evaluate_gates("app_focus_control", "app_focus", interaction_id)
-        if not allowed:
-            message = f"App focus blocked by policy ({reason})."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        ok, msg, _ = focus_app_deterministic(target)
-        return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._apps.respond_focus_control(intent, interaction_id, replay_mode, overrides)
 
     def _is_system_volume_text(self, text: str) -> bool:
         return self._system_volume.is_system_volume_text(text)
