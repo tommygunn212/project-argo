@@ -86,15 +86,10 @@ from core.coordinator_stages import (
 from core.coordinator_system_health_stage import dispatch_system_health_stage
 from core.coordinator_response_stage import deliver_and_record_response
 from core.coordinator_response_guard import CoordinatorResponseGuard
+from core.coordinator_generation_stage import generate_interaction_response
 from core.coordinator_music_stage import (
-    dispatch_music_stage,
     stop_active_music_for_phrase,
 )
-from core.policy import (
-    LLM_WATCHDOG_SECONDS,
-    WATCHDOG_FALLBACK_RESPONSE,
-)
-from core.watchdog import Watchdog
 from core.state_machine import StateMachine, State
 from core.actuators.python_builder import PythonBuilder
 from core.audio_owner import get_audio_owner
@@ -917,33 +912,17 @@ class Coordinator(CoordinatorResponseMixin):
                 self, text, response_guard.finalize
             ):
                 return True
-            # Generate response (LLM, with SessionMemory available)
-            self.logger.info(
-                f"[Iteration {self.interaction_count}] Generating response..."
+            generation = generate_interaction_response(
+                self,
+                intent,
+                response_guard.mark_output,
+                response_guard.finalize,
             )
-
-            # TASK 15: Mark LLM start
-            self.current_probe.mark("llm_start")
-
-            music_result = dispatch_music_stage(
-                self, intent, response_guard.mark_output, response_guard.finalize
-            )
-            if music_result.routed:
-                response_guard.set_output(music_result.output_produced)
-                is_music_iteration = music_result.is_music_iteration
-                if music_result.return_interaction:
-                    return music_result.interaction_result
-                response_text = music_result.response_text
-            else:
-                # Normal LLM response (watchdog-protected)
-                with Watchdog("LLM", LLM_WATCHDOG_SECONDS) as llm_wd:
-                    response_text = self.generator.generate(intent, self.memory)
-                if llm_wd.triggered:
-                    self.logger.warning(
-                        "[WATCHDOG] LLM exceeded watchdog; using fallback response"
-                    )
-                    response_text = WATCHDOG_FALLBACK_RESPONSE
-                self.current_probe.mark("llm_end")
+            response_guard.set_output(generation.output_produced)
+            is_music_iteration = generation.is_music_iteration
+            if generation.return_interaction:
+                return generation.interaction_result
+            response_text = generation.response_text
             response_guard.set_output(deliver_and_record_response(
                 self,
                 intent=intent,
