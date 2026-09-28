@@ -724,12 +724,6 @@ class Coordinator:
             # Best-effort; fail silently to avoid blocking wake flow
             pass
 
-    def _barge_in(self) -> None:
-        """
-        DEPRECATED: Use _handle_wake_event() on the main coordinator thread.
-        """
-        self._handle_wake_event()
-
     def _wait_for_speech_start(self, max_wait_seconds: float) -> Optional[list]:
         """
         Wait for speech onset using RMS threshold and return pre-roll frames.

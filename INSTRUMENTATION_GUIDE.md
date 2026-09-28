@@ -47,7 +47,7 @@ INSTRUMENTATION POINTS (EXACT LOCATIONS)
 
 3. BARGE-IN ENTRY
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Location: core/coordinator.py, _barge_in() method entry
+   Location: core/coordinator_wake.py, handle_wake_event() speaking branch
    Log: [HH:MM:SS.mmm] BARGE_IN start
    
    Purpose:
@@ -62,7 +62,7 @@ INSTRUMENTATION POINTS (EXACT LOCATIONS)
 
 4. AUDIO HARD KILL
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Location: core/coordinator.py, _barge_in() method, after audio_authority.hard_kill_output()
+   Location: core/coordinator_wake.py, handle_wake_event(), after force_release_audio()
    Log: [HH:MM:SS.mmm] AUDIO KILLED
    
    Purpose:
