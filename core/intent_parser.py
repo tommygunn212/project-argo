@@ -45,6 +45,7 @@ from core.intent_rules.core_system import (
     parse_identity_or_governance,
     parse_system_health,
 )
+from core.intent_rules.knowledge import parse_knowledge_intent
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
@@ -297,45 +298,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
                 serious_mode=serious_mode,
             )
 
-        # --- PRIORITY: Specific knowledge domains over generic question ---
-        # Physics (robust pattern)
-        physics_keywords = [
-            "cool down", "heat", "thermodynamics", "physics", "temperature", "energy", "conduction", "convection", "radiation", "molecule", "evaporation", "why does.*cool", "how does.*cool"
-        ]
-        for kw in physics_keywords:
-            if (kw in text_lower) or ("cool" in text_lower and "why" in text_lower):
-                return Intent(
-                    intent_type=IntentType("knowledge_physics"),
-                    confidence=1.0,
-                    raw_text=text_original,
-                    serious_mode=serious_mode,
-                )
-
-        # Finance (robust pattern)
-        finance_keywords = [
-            "bitcoin", "money", "currency", "finance", "dollar", "crypto", "blockchain", "stock", "bond", "investment", "is bitcoin.*money", "what is.*bitcoin"
-        ]
-        for kw in finance_keywords:
-            if kw in text_lower:
-                return Intent(
-                    intent_type=IntentType("knowledge_finance"),
-                    confidence=1.0,
-                    raw_text=text_original,
-                    serious_mode=serious_mode,
-                )
-
-        # Time/system (robust pattern)
-        time_keywords = [
-            "what time", "current time", "system status", "system doing", "system health", "status report", "how's my system", "system info", "uptime", "cpu usage", "memory usage", "disk usage"
-        ]
-        for kw in time_keywords:
-            if kw in text_lower:
-                return Intent(
-                    intent_type=IntentType("knowledge_time_system"),
-                    confidence=1.0,
-                    raw_text=text_original,
-                    serious_mode=serious_mode,
-                )
+        knowledge_intent = parse_knowledge_intent(text_original, text_lower, serious_mode)
+        if knowledge_intent is not None:
+            return knowledge_intent
 
         # Rule 3: Question mark present (high confidence)
         if "?" in text:
