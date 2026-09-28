@@ -45,13 +45,6 @@ from core.intent_parser import RuleBasedIntentParser, Intent, IntentType, normal
 from core.stt_engine_manager import STTEngineManager, verify_engine_dependencies
 from core.music_player import get_music_player
 from core.music_status import query_music_status
-from core.bluetooth import (
-    get_bluetooth_status,
-    set_bluetooth_enabled,
-    connect_device,
-    disconnect_device,
-    pair_device,
-)
 from core.audio_routing import get_audio_routing_status, set_audio_routing
 from core.app_control import (
     WRITABLE_APPS,
@@ -99,6 +92,7 @@ from core.knowledge_answer_guard import enforce_knowledge_answer
 from core.pipeline_prepared_dispatch import PreparedDispatch, dispatch_prepared_intent
 from core.streaming_tts_worker import StreamingTTSWorker
 from core.streamed_text_collector import StreamedTextCollector
+from core.pipeline_bluetooth import PipelineBluetoothService
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -142,6 +136,7 @@ class ArgoPipeline:
         self._task_planning = PipelineTaskPlanningService(self)
         self._draft_responses = PipelineDraftResponseService(self)
         self._writing_responses = PipelineWritingResponseService(self)
+        self._bluetooth = PipelineBluetoothService(self)
         self._last_stt_metrics = None
         self._low_conf_notice_given = False
         self._serious_mode_keywords = {
@@ -2230,79 +2225,21 @@ class ArgoPipeline:
         return "Governance: " + " ".join(bits) if bits else "Governance: unavailable."
 
     def _format_bluetooth_status(self, status: dict) -> str:
-        if not status.get("adapter_present"):
-            return "Bluetooth adapter not detected."
-        enabled = status.get("adapter_enabled")
-        paired = status.get("paired_devices") or []
-        connected = status.get("connected_devices") or []
-        audio_active = status.get("audio_device_active")
-        parts = ["Bluetooth is on." if enabled else "Bluetooth is off."]
-        parts.append(f"Paired devices: {len(paired)}.")
-        if connected:
-            parts.append("Connected devices: " + ", ".join(connected) + ".")
-        else:
-            parts.append("No devices are connected.")
-        if audio_active is True:
-            parts.append("Audio device active: yes.")
-        elif audio_active is False:
-            parts.append("Audio device active: no.")
-        return " ".join(parts)
+        return self._bluetooth.format_status(status)
 
     def _is_bluetooth_status_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        if "bluetooth" in lowered or "bt" in lowered:
-            return any(term in lowered for term in {"status", "on", "off", "connected", "paired", "devices", "adapter"})
-        return "connected" in lowered and any(term in lowered for term in {"headset", "headphones", "earbuds", "speaker", "keyboard", "mouse"})
+        return self._bluetooth.is_status_text(text)
 
     def _is_bluetooth_control_text(self, text: str) -> bool:
-        lowered = (text or "").lower()
-        if any(term in lowered for term in {"turn", "enable", "disable", "connect", "disconnect", "pair"}):
-            return "bluetooth" in lowered or "bt" in lowered or any(term in lowered for term in {"headset", "headphones", "earbuds", "speaker", "keyboard", "mouse"})
-        return False
+        return self._bluetooth.is_control_text(text)
 
     def _respond_with_bluetooth_status(self, user_text: str, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_bluetooth_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth status attempted control")
-            message = "Bluetooth status cannot change device state. Say a control command explicitly."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        self.logger.info("[BLUETOOTH] mode=STATUS")
-        status = get_bluetooth_status()
-        message = self._format_bluetooth_status(status)
-        return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, deterministic=True, force_tts=True)
+        return self._bluetooth.respond_status(user_text, interaction_id, replay_mode, overrides)
 
     def _respond_with_bluetooth_control(self, intent, user_text: str, stt_conf: float, interaction_id: str, replay_mode: bool, overrides: dict | None) -> bool:
-        if self._is_bluetooth_status_text(user_text) and not self._is_bluetooth_control_text(user_text):
-            self.logger.error("[CONTROL/STATUS VIOLATION] Bluetooth control attempted status-only response")
-            message = "Bluetooth control requires an explicit command."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if not self._is_bluetooth_control_text(user_text):
-            message = "Bluetooth control requires an explicit command."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if stt_conf < self._personal_mode_min_confidence:
-            message = "Bluetooth command unclear. Please repeat."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        action = getattr(intent, "action", None)
-        target = getattr(intent, "target", None)
-        self.logger.info(f"[BLUETOOTH] mode=CONTROL action={action} target={target}")
-        allowed, reason = self._evaluate_gates("bluetooth_control", "bluetooth", interaction_id)
-        if not allowed:
-            message = f"Bluetooth control blocked by policy ({reason})."
-            return self._deliver_canonical_response(message, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        if action == "on":
-            ok, msg = set_bluetooth_enabled(True)
-        elif action == "off":
-            ok, msg = set_bluetooth_enabled(False)
-        elif action == "connect":
-            ok, msg = connect_device(target or "")
-        elif action == "disconnect":
-            ok, msg = disconnect_device(target or "")
-        elif action == "pair":
-            ok, msg = pair_device(target)
-        else:
-            ok, msg = False, "Bluetooth control requires an explicit command."
-        if not ok and msg.startswith("Multiple matches"):
-            return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
-        return self._deliver_canonical_response(msg, interaction_id, replay_mode, overrides, enforce_confidence=False, force_tts=True)
+        return self._bluetooth.respond_control(
+            intent, user_text, stt_conf, interaction_id, replay_mode, overrides
+        )
 
     def _format_audio_routing_status(self, status: dict) -> str:
         output = status.get("default_output") or "Unknown"
