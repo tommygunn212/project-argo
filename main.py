@@ -50,6 +50,7 @@ from core.config import MUSIC_DB_PATH
 from core.classic_runtime_startup import start_classic_runtime
 from core.classic_capture_loop import run_classic_capture_loop
 from core.classic_main_runtime import ClassicMainRuntime, run_classic_main_runtime
+from core.frontend_text_input import FrontendTextDependencies, dispatch_frontend_text
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
 from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
@@ -513,82 +514,34 @@ def _handle_clear_overrides():
 
 
 def _handle_text_input(payload: dict | str):
-    """Handle text input from frontend, bypassing STT entirely.
-    
-    Payload can be:
-      - str: Just the text
-      - dict: {"text": "...", "source": "frontend", "mode": "conversation"}
-    """
-    global pipeline_ref
-    
+    """Route frontend text through the classic conversation pipeline."""
     if not pipeline_ref:
         logger.warning("[TEXT_INPUT] No pipeline available")
         return
-    
-    # Extract text from payload
-    if isinstance(payload, str):
-        text = payload.strip()
-        source = "frontend"
-        mode = "conversation"
-    else:
-        text = (payload.get("text") or "").strip()
-        source = payload.get("source", "frontend")
-        mode = payload.get("mode", "conversation")
-    
-    if not text:
-        logger.info("[TEXT_INPUT] Empty text, ignoring")
-        return
-    
-    log_event(f'INPUT[source={source}][mode={mode}]: "{text}"', stage="ui")
-    
-    # Check if we should barge-in (text input while speaking)
-    current_state = getattr(pipeline_ref, "current_state", "IDLE")
-    if current_state == "SPEAKING":
-        logger.info("[TEXT_INPUT] Barge-in triggered via text input")
-        try:
-            _interrupt_current_response("TEXT_BARGE_IN", target_state="LISTENING")
-        except Exception as e:
-            logger.warning(f"[TEXT_INPUT] Barge-in error: {e}")
-    
-    # Generate interaction ID
-    interaction_id = str(uuid.uuid4())
-    
-    # Transition to THINKING (skip TRANSCRIBING since we already have text)
-    try:
-        pipeline_ref.transition_state("THINKING", interaction_id=interaction_id, source="text_input")
-    except Exception:
-        pass
-    
-    # Route through pipeline with confidence=1.0 (text input is perfect)
-    def process_text():
-        try:
-            # Normalize text same as voice path
-            from core.intent_parser import normalize_system_text
-            normalized_text = normalize_system_text(text)
-            normalized_text = pipeline_ref._normalize_music_command_text(normalized_text)
-            
-            pipeline_ref.broadcast("log", f"User: {normalized_text}")
-            pipeline_ref._conversation_buffer.add("User", normalized_text)
-            pipeline_ref._broadcast_turn_info()
-            pipeline_ref._append_convo_ledger("user", normalized_text)
-            
-            pipeline_ref.handle_user_text(
-                user_text=normalized_text,
-                confidence_hint=1.0,  # Text input is always 100% confident
-                interaction_id=interaction_id,
-                replay_mode=False,
-                overrides=dict(NEXT_INTERACTION_OVERRIDES) if NEXT_INTERACTION_OVERRIDES else None,
-                audio_data=None,
-            )
-        except Exception as e:
-            logger.error(f"[TEXT_INPUT] Pipeline error: {e}", exc_info=True)
-            pipeline_ref.broadcast("status", "ERROR")
-        finally:
-            NEXT_INTERACTION_OVERRIDES.clear()
-    
-    # Run in separate thread (same as voice input)
-    t = threading.Thread(target=process_text, daemon=True, name="ARGO.TextInput")
-    t.start()
+    dispatch_frontend_text(
+        FrontendTextDependencies(
+            logger=logger,
+            get_current_state=lambda: getattr(pipeline_ref, "current_state", "IDLE"),
+            interrupt_current_response=_interrupt_current_response,
+            transition_state=pipeline_ref.transition_state,
+            normalize_music_text=pipeline_ref._normalize_music_command_text,
+            broadcast=pipeline_ref.broadcast,
+            add_conversation_turn=pipeline_ref._conversation_buffer.add,
+            broadcast_turn_info=pipeline_ref._broadcast_turn_info,
+            append_conversation_ledger=pipeline_ref._append_convo_ledger,
+            handle_user_text=pipeline_ref.handle_user_text,
+            read_next_overrides=lambda: (
+                dict(NEXT_INTERACTION_OVERRIDES)
+                if NEXT_INTERACTION_OVERRIDES
+                else None
+            ),
+            clear_next_overrides=NEXT_INTERACTION_OVERRIDES.clear,
+            log_event=log_event,
+            new_interaction_id=lambda: str(uuid.uuid4()),
+            thread_factory=threading.Thread,
+        ),
+        payload,
+    )
 
 
 # ============================================================================
