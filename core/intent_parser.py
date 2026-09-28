@@ -61,6 +61,7 @@ from core.intent_system_rules import (
     is_system_keyword,
     normalize_system_text,
 )
+from core.intent_rule_pipeline import parse_intent_rules
 
 # System and identity keyword banks are re-exported above for compatibility.
 # ============================================================================
@@ -117,76 +118,4 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         Raises:
             ValueError: If text is empty
         """
-        if not text or not text.strip():
-            raise ValueError("text is empty")
-
-        text_original = text.strip()
-        text_lower = normalize_for_rules(text_original)
-
-        # SERIOUS_MODE signal (keyword presence) - must be defined before any return
-        self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
-        serious_mode = self.serious_mode
-
-        must_pass = parse_must_pass_knowledge(text_original, serious_mode)
-        if must_pass is not None:
-            return must_pass
-
-        text_lower = apply_phonetic_fixes(text_lower)
-
-        # SERIOUS_MODE signal (keyword presence)
-        self.serious_mode = any(kw in text_lower for kw in self.serious_mode_keywords)
-        serious_mode = self.serious_mode
-
-        # Rule 0.09: SYSTEM_STATUS (full telemetry) - detect before wake-word stripping
-        system_status = parse_full_system_status(text_original, text_lower, serious_mode)
-        if system_status is not None:
-            return system_status
-
-        prepared = strip_wake_prefix(text_original, text_lower)
-        text_original = prepared.original
-        text_lower = prepared.normalized
-        tokens = prepared.tokens
-        first_word = prepared.first_word
-
-        # SERIOUS_MODE signal already computed above
-
-        control_intent = parse_control_intent(
-            text_original, text_lower, serious_mode, self.sleep_phrases
-        )
-        if control_intent is not None:
-            return control_intent
-
-        domain_intent = parse_domain_intent(text_original, text_lower, serious_mode)
-        if domain_intent is not None:
-            return domain_intent
-
-        contextual_intent = parse_development_or_tech(
-            text_original,
-            text_lower,
-            serious_mode,
-            self.develop_phrases,
-            self.tech_keywords,
-        )
-        if contextual_intent is not None:
-            return contextual_intent
-
-        music_intent = self._parse_music_intent(text_original, text_lower, serious_mode)
-        if music_intent is not None:
-            return music_intent
-
-        performance_intent = parse_performance_intent(text_original, tokens, serious_mode)
-        if performance_intent is not None:
-            return performance_intent
-
-        knowledge_intent = parse_knowledge_intent(text_original, text_lower, serious_mode)
-        if knowledge_intent is not None:
-            return knowledge_intent
-
-        return parse_generic_utterance(
-            text_original,
-            first_word,
-            serious_mode,
-            self.question_words,
-            self.greeting_keywords,
-            self.command_words,
-        )
+        return parse_intent_rules(self, text)
