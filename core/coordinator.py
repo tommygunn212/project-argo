@@ -50,6 +50,11 @@ from core.coordinator_music_interrupt import (
     MusicInterruptDependencies,
     monitor_music_interrupt,
 )
+from core.coordinator_speech_start import (
+    SpeechStartConfig,
+    SpeechStartDependencies,
+    wait_for_speech_start,
+)
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -739,56 +744,28 @@ class Coordinator:
         Returns:
             List of pre-roll frames if speech detected, or None on timeout.
         """
-        import numpy as np
-
-        chunk_samples = int(self.AUDIO_SAMPLE_RATE * 0.1)
-        preroll_capacity = max(1, int(self.PRE_ROLL_BUFFER_MS_MAX / 100))
-        preroll_frames = []
-
-        start_time = time.time()
-        stream = None
-        try:
-            if self._audio_state == self.AUDIO_STATE_SPEAKING:
-                return None
-            stream = sd.InputStream(
-                channels=1,
-                samplerate=self.AUDIO_SAMPLE_RATE,
-                dtype=np.int16,
-                device=self.input_device_index,
-            )
+        def set_stream_state(stream, active: bool) -> None:
             self._input_stream = stream
-            self._input_stream_active = True
-            stream.start()
+            self._input_stream_active = active
 
-            while True:
-                if self._input_stop_event.is_set() or self._audio_state == self.AUDIO_STATE_SPEAKING:
-                    return None
-                if max_wait_seconds is not None and (time.time() - start_time) >= max_wait_seconds:
-                    return None
-
-                frame, _ = stream.read(chunk_samples)
-                if frame.size == 0:
-                    continue
-
-                preroll_frames.append(frame.copy())
-                if len(preroll_frames) > preroll_capacity:
-                    preroll_frames.pop(0)
-
-                rms = np.sqrt(np.mean(frame.astype(float) ** 2)) / 32768.0
-                if rms > self.RMS_SPEECH_THRESHOLD:
-                    return preroll_frames
-        except Exception as e:
-            self.logger.debug(f"[Listen] Speech-start detection failed: {e}")
-            return None
-        finally:
-            if stream:
-                try:
-                    stream.stop()
-                    stream.close()
-                except Exception as e:
-                    self.logger.debug(f"[Listen] Error closing stream: {e}")
-            self._input_stream = None
-            self._input_stream_active = False
+        return wait_for_speech_start(
+            SpeechStartConfig(
+                sample_rate=self.AUDIO_SAMPLE_RATE,
+                preroll_buffer_ms_max=self.PRE_ROLL_BUFFER_MS_MAX,
+                rms_speech_threshold=self.RMS_SPEECH_THRESHOLD,
+                input_device_index=self.input_device_index,
+            ),
+            SpeechStartDependencies(
+                get_audio_state=lambda: self._audio_state,
+                speaking_state=self.AUDIO_STATE_SPEAKING,
+                should_stop=self._input_stop_event.is_set,
+                stream_factory=sd.InputStream,
+                set_stream_state=set_stream_state,
+                time_now=time.time,
+                logger=self.logger,
+            ),
+            max_wait_seconds,
+        )
 
     def _handle_interaction(self, initial_frames: Optional[list] = None, mark_wake: bool = False) -> bool:
         return run_coordinator_interaction(
