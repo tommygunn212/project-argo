@@ -913,12 +913,6 @@ class ArgoPipeline:
         """
         return get_clarification_prompt(intent, candidates)
 
-    def _get_clarification_prompt_legacy(self) -> str:
-        """Return a clarification prompt string.
-        TODO: Implement varied prompts if needed.
-        """
-        return "Could you please rephrase that?"
-
     def _is_executable_command(self, user_text: str) -> bool:
         return is_executable_command(user_text)
 
