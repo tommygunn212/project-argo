@@ -76,20 +76,18 @@ from core.voice_mode_ownership import (
 )
 from core.backend_control import BackendControlRuntime, dispatch_backend_control
 from core.noise_calibration import calibrate_ambient_noise
-from core.self_diagnostics import SystemDiagnostics, AssistedRecovery, explain_error
+from core.self_diagnostics import SystemDiagnostics, AssistedRecovery
 from core.code_repair import CodeRepairManager
 from core.repair_service import RepairService, ActiveDiagnostics
 from core.frontend_http import build_frontend_handler
 from core.instrumentation import log_event
 from core.sound_cues import get_sound_cue_player
-from system_profile import get_system_profile, get_gpu_profile
 from core.version import CURRENT_VERSION, CURRENT_MILESTONE
 from core.config import (
     get_config,
     get_config_hash,
     get_runtime_overrides,
     set_runtime_override,
-    set_runtime_overrides,
     clear_runtime_overrides,
 )
 
@@ -229,14 +227,9 @@ WS_HOST = os.getenv("ARGO_WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("ARGO_WS_PORT", "8001"))
 
 # ============================================================================
-# 6) VERSION / PROFILE INIT
+# 6) VERSION
 # ============================================================================
 logger.info("[SYSTEM] ARGO version %s (%s)", CURRENT_VERSION, CURRENT_MILESTONE)
-
-# Load static system profile once
-SYSTEM_PROFILE = get_system_profile()
-GPU_PROFILE = get_gpu_profile()
-logger.info("[SYSTEM] Hardware profile loaded")
 
 # ============================================================================
 # 7) CONFIG LOAD
