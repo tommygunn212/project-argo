@@ -130,6 +130,10 @@ from core.pipeline_runtime_tuning import (
     clamped_runtime_float,
     resolve_runtime_tuning,
 )
+from core.pipeline_voice_configuration import (
+    PipelineVoiceConfigurationDependencies,
+    PipelineVoiceConfigurationService,
+)
 
 # Persona module - text transformers gated by response type
 from personas import ResponseType, apply_persona, PERSONA_REGISTRY
@@ -396,45 +400,42 @@ class ArgoPipeline:
     def _handle_memory_command(self, *args, **kwargs):
         return self._memory_service._handle_memory_command(*args, **kwargs)
 
+    def _voice_configuration(self) -> PipelineVoiceConfigurationService:
+        service = self.__dict__.get("_pipeline_voice_configuration")
+        if service is None:
+            service = PipelineVoiceConfigurationService(
+                PipelineVoiceConfigurationDependencies(
+                    openai_voices=lambda: self.openai_voices,
+                    edge_voices=lambda: self.voices,
+                    get_openai_tts=lambda: self._openai_tts,
+                    get_edge_tts=lambda: self._edge_tts,
+                    get_tts_model=lambda: self._tts_model,
+                    set_voice_key=lambda value: setattr(
+                        self, "current_voice_key", value
+                    ),
+                    set_tts_engine=lambda value: setattr(
+                        self, "_tts_engine", value
+                    ),
+                    set_tts_model=lambda value: setattr(
+                        self, "_tts_model", value
+                    ),
+                    clear_openai_tts=lambda: setattr(
+                        self, "_openai_tts", None
+                    ),
+                    broadcast=lambda event, payload: self.broadcast(event, payload),
+                    logger=self.logger,
+                )
+            )
+            self._pipeline_voice_configuration = service
+        return service
+
     def set_voice(self, voice_key):
         """Switch the TTS voice model."""
-        # Check OpenAI voices first (personal mode)
-        if voice_key in self.openai_voices:
-            self.current_voice_key = voice_key
-            self._tts_engine = "openai"
-            if self._openai_tts is not None:
-                self._openai_tts.set_voice(voice_key)
-            self.logger.info(f"Voice switched to OpenAI: {voice_key}")
-            self.broadcast("log", f"System: Voice switched to OpenAI {voice_key.upper()}")
-            return True
-        # Fall back to Edge TTS voices
-        if voice_key in self.voices:
-            self.current_voice_key = voice_key
-            self._tts_engine = "edge"
-            if self._edge_tts is not None:
-                try:
-                    self._edge_tts.voice = self.voices[voice_key]
-                except Exception:
-                    pass
-            self.logger.info(f"Voice switched to {voice_key}: {self.voices[voice_key]}")
-            self.broadcast("log", f"System: Voice profile switched to {voice_key.upper()}")
-            return True
-        return False
+        return self._voice_configuration().set_voice(voice_key)
 
     def set_tts_model(self, model: str):
         """Switch the OpenAI TTS model at runtime (e.g. tts-1 → gpt-4o-mini-tts)."""
-        valid_models = {"tts-1", "tts-1-hd", "gpt-4o-mini-tts"}
-        if model not in valid_models:
-            self.logger.warning(f"[TTS] Unknown model: {model}")
-            return False
-        if model == self._tts_model:
-            return True
-        self._tts_model = model
-        # Force re-creation so next speak() uses the new model
-        self._openai_tts = None
-        self.logger.info(f"[TTS] Model switched to {model} (will reinit on next speak)")
-        self.broadcast("log", f"System: TTS model switched to {model}")
-        return True
+        return self._voice_configuration().set_tts_model(model)
 
     def _extract_name_from_statement(self, text: str) -> str | None:
         """Extract name from identity statement like 'my name is X' or 'i am X'."""
