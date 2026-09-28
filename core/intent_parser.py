@@ -30,6 +30,21 @@ from core.intent_rules.vision import parse_vision_intent
 from core.intent_rules.filesystem import parse_filesystem_intent
 from core.intent_rules.task_plan import parse_task_plan_intent
 from core.intent_rules.platform import parse_platform_intent
+from core.intent_rules.core_system import (
+    ARGO_GOVERNANCE_GATE_PHRASES,
+    ARGO_GOVERNANCE_LAW_PHRASES,
+    ARGO_IDENTITY_PHRASES,
+    FULL_SYSTEM_PHRASES,
+    HARDWARE_KEYWORDS,
+    SYSTEM_CPU_QUERIES,
+    SYSTEM_GPU_QUERIES,
+    SYSTEM_MEMORY_QUERIES,
+    SYSTEM_MOTHERBOARD_QUERIES,
+    SYSTEM_OS_QUERIES,
+    parse_full_system_status,
+    parse_identity_or_governance,
+    parse_system_health,
+)
 from core.intent_system_rules import (
     detect_disk_query,
     detect_hardware_info,
@@ -43,159 +58,7 @@ from core.intent_system_rules import (
     normalize_system_text,
 )
 
-# ============================================================================
-# 3) KEYWORD BANKS (SYSTEM)
-# ============================================================================
-FULL_SYSTEM_PHRASES = [
-    "computer health",
-    "system health",
-    "system status",
-    "computer status",
-    "argo status",
-    "argo health",
-    "how is my computer",
-    "how is my computer doing",
-    "how's my computer doing",
-    "hows my computer doing",
-    "how is the system",
-    "give me a status report",
-    "status report",
-    "full system",
-    "full status",
-    "full report",
-    "full system status",
-    "complete status",
-    "everything",
-    "all system info",
-    "all system information",
-    "all computer info",
-    "all computer information",
-    "everything about my computer",
-    "anything wrong with my system",
-    "anything wrong with my computer",
-    "is anything wrong with my system",
-    "is anything wrong with my computer",
-]
-
-# ARGO self-check / diagnostics phrases (Phase 1)
-
-HARDWARE_KEYWORDS = [
-    "memory", "ram", "cpu", "processor",
-    "gpu", "graphics", "video card",
-    "system specs", "hardware",
-    "motherboard", "mainboard",
-]
-
-SYSTEM_MEMORY_QUERIES = [
-    "how much memory do i have",
-    "total memory",
-    "installed memory",
-    "ram size",
-    "memory usage",
-]
-
-SYSTEM_CPU_QUERIES = [
-    "what cpu do i have",
-    "what kind of cpu",
-    "what type of cpu",
-    "what's my cpu",
-    "whats my cpu",
-    "cpu model",
-    "cpu name",
-    "what processor do i have",
-    "what kind of processor",
-    "what type of processor",
-    "what's my processor",
-    "whats my processor",
-    "processor model",
-    "processor name",
-    "which cpu",
-    "which processor",
-    "my cpu",
-    "tell me about my cpu",
-    "tell me about my processor",
-]
-
-SYSTEM_GPU_QUERIES = [
-    "what gpu do i have",
-    "gpu model",
-    "gpu name",
-    "graphics card",
-    "video card",
-    "graphics",
-]
-
-SYSTEM_OS_QUERIES = [
-    "operating system",
-    "os version",
-    "windows version",
-    "what os",
-    "what operating system",
-    "what system am i running",
-    "what system am i on",
-    "what os am i running",
-    "which os",
-    "which operating system",
-]
-
-SYSTEM_MOTHERBOARD_QUERIES = [
-    "what motherboard",
-    "what kind of motherboard",
-    "what type of motherboard",
-    "what's my motherboard",
-    "whats my motherboard",
-    "which motherboard",
-    "motherboard model",
-    "motherboard name",
-    "my motherboard",
-    "tell me about my motherboard",
-    "mainboard",
-    "what mainboard",
-]
-
-
-# ============================================================================
-# 4B) CANONICAL IDENTITY & GOVERNANCE PHRASES
-# ============================================================================
-ARGO_IDENTITY_PHRASES = {
-    "who are you",
-    "what are you",
-    "who is argo",
-    "what is argo",
-    "what's your name",
-    "what is your name",
-    "tell me about yourself",
-    "tell me about you",
-    "identify yourself",
-    "who am i talking to",
-    "who am i speaking to",
-}
-
-ARGO_GOVERNANCE_LAW_PHRASES = {
-    "argo laws",
-    "what are your laws",
-    "what laws govern you",
-    "what rules do you follow",
-    "what policies do you follow",
-    "what are your policies",
-    "what are your rules",
-}
-
-ARGO_GOVERNANCE_GATE_PHRASES = {
-    "five gates",
-    "hard gates",
-    "argo gates",
-    "safety gates",
-    "permission gates",
-    "execution gates",
-}
-
-# ============================================================================
-# 4) KEYWORD BANKS (TEMPERATURE)
-# ============================================================================
-
-
-
+# System and identity keyword banks are re-exported above for compatibility.
 # ============================================================================
 # 5) DETECTORS / NORMALIZERS
 # ============================================================================
@@ -314,14 +177,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         serious_mode = self.serious_mode
 
         # Rule 0.09: SYSTEM_STATUS (full telemetry) - detect before wake-word stripping
-        if any(phrase in text_lower for phrase in FULL_SYSTEM_PHRASES):
-            return Intent(
-                intent_type=IntentType.SYSTEM_STATUS,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-                subintent="full",
-            )
+        system_status = parse_full_system_status(text_original, text_lower, serious_mode)
+        if system_status is not None:
+            return system_status
 
         # Strip wake word prefix (e.g., "argo, ...") from parsing logic
         text_lower = re.sub(r"^(argo[\s,]+)+", "", text_lower).strip()
@@ -369,36 +227,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if platform_intent is not None:
             return platform_intent
 
-        # Rule 0.07: ARGO identity (hard deterministic)
-        identity_phrase_hit = any(phrase in text_lower for phrase in ARGO_IDENTITY_PHRASES)
-        if identity_phrase_hit:
-            return Intent(
-                intent_type=IntentType.ARGO_IDENTITY,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-            )
-
-        # Rule 0.08: ARGO governance (laws + gates)
-        governance_law_hit = any(phrase in text_lower for phrase in ARGO_GOVERNANCE_LAW_PHRASES) or (
-            "law" in text_lower and "argo" in text_lower
-        )
-        governance_gate_hit = any(phrase in text_lower for phrase in ARGO_GOVERNANCE_GATE_PHRASES) or (
-            "gate" in text_lower and "argo" in text_lower
-        )
-        if governance_law_hit or governance_gate_hit:
-            subintent = "laws"
-            if governance_gate_hit and not governance_law_hit:
-                subintent = "gates"
-            elif governance_gate_hit and governance_law_hit:
-                subintent = "overview"
-            return Intent(
-                intent_type=IntentType.ARGO_GOVERNANCE,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-                subintent=subintent,
-            )
+        identity = parse_identity_or_governance(text_original, text_lower, serious_mode)
+        if identity is not None:
+            return identity
 
         writing_intent = parse_writing_intent(text_original, text_lower, serious_mode)
         if writing_intent is not None:
@@ -424,57 +255,9 @@ class RuleBasedIntentParser(IntentVocabularyMixin, IntentMusicMixin, IntentParse
         if filesystem_intent is not None:
             return filesystem_intent
 
-        # Rule 0.09: SYSTEM_STATUS (full telemetry)
-        if any(phrase in text_lower for phrase in FULL_SYSTEM_PHRASES):
-            return Intent(
-                intent_type=IntentType.SYSTEM_STATUS,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-                subintent="full",
-            )
-
-        # Rule 0.1: SYSTEM_HEALTH hardware queries (hard deterministic)
-        # Guard: skip if question is general knowledge about hardware (shopping, building, recommendations)
-        _hw_general_guard = re.search(
-            r"\b(latest|best|newest|buy|buying|recommend|build|building|upgrade|upgrading"
-            r"|compare|comparing|vs|versus|review|benchmark|shop|shopping|market|available"
-            r"|released|announcement|generation|lineup|should\s+i\s+get|worth|price|cost"
-            r"|hotend|printer|3d|filament|nozzle|extruder)\b",
-            text_lower,
-        )
-        if not _hw_general_guard and (any(k in text_lower for k in HARDWARE_KEYWORDS) or any(q in text_lower for q in SYSTEM_OS_QUERIES)):
-            subintent = None
-            if any(q in text_lower for q in SYSTEM_MEMORY_QUERIES):
-                subintent = "memory"
-            elif any(q in text_lower for q in SYSTEM_CPU_QUERIES):
-                subintent = "cpu"
-            elif any(q in text_lower for q in SYSTEM_GPU_QUERIES):
-                subintent = "gpu"
-            elif any(q in text_lower for q in SYSTEM_OS_QUERIES):
-                subintent = "os"
-            elif any(q in text_lower for q in SYSTEM_MOTHERBOARD_QUERIES):
-                subintent = "motherboard"
-            else:
-                subintent = "hardware"
-            return Intent(
-                intent_type=IntentType.SYSTEM_HEALTH,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-                subintent=subintent,
-            )
-
-        # Rule 0.25: SYSTEM_HEALTH keywords (hard deterministic, no LLM)
-        if not _hw_general_guard and detect_system_health(text_lower):
-            subintent = None
-            return Intent(
-                intent_type=IntentType.SYSTEM_HEALTH,
-                confidence=1.0,
-                raw_text=text_original,
-                serious_mode=serious_mode,
-                subintent=subintent,
-            )
+        system_health = parse_system_health(text_original, text_lower, serious_mode)
+        if system_health is not None:
+            return system_health
 
         # Rule 0.5: DEVELOP keywords (high priority - developer context)
         if any(phrase in text_lower for phrase in self.develop_phrases):
