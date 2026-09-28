@@ -55,6 +55,7 @@ from core.coordinator_speech_start import (
     SpeechStartDependencies,
     wait_for_speech_start,
 )
+from core.coordinator_trigger_contract import assert_trigger_state
 # === INSTRUMENTATION: Defensive import wrapper ===
 try:
     from core.instrumentation import log_event as log_event_impl, log_latency
@@ -534,25 +535,7 @@ class Coordinator:
         Raises:
             AssertionError: If trigger state doesn't match expected state
         """
-        try:
-            # Check if trigger has state methods
-            if not hasattr(self.trigger, 'is_active') or not hasattr(self.trigger, 'is_paused'):
-                self.logger.debug("[Assert] Trigger doesn't support state checks, skipping")
-                return
-            
-            if state == State.LISTENING:
-                # In LISTENING state: trigger should be ACTIVE
-                assert self.trigger.is_active(), \
-                    f"LISTENING but trigger.is_active()={self.trigger.is_active()} (expected True)"
-                self.logger.debug("[Assert] LISTENING: trigger is ACTIVE ✓")
-            else:
-                # In other states: trigger should be PAUSED
-                assert self.trigger.is_paused(), \
-                    f"{state.value} but trigger.is_paused()={self.trigger.is_paused()} (expected True)"
-                self.logger.debug(f"[Assert] {state.value}: trigger is PAUSED ✓")
-        except AssertionError as e:
-            self.logger.error(f"[Assert] FATAL: Trigger state contract violated: {e}")
-            raise
+        assert_trigger_state(self.trigger, state, self.logger)
 
     def _pause_trigger_for_tts(self) -> None:
         """
