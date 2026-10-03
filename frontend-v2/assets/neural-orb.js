@@ -87,7 +87,7 @@
     constructor(canvas, opts = {}) {
       this.canvas = canvas;
       this.ctx = canvas.getContext('2d');
-      this.field = createField(opts.count || 360, opts.seed || 7, opts.links || 3);
+      this.field = createField(opts.count || 480, opts.seed || 7, opts.links || 3);
       const n = this.field.pts.length;
       this.px = new Float32Array(n); this.py = new Float32Array(n); this.pd = new Float32Array(n);
       this.voice = new VoiceLevel();
@@ -128,8 +128,8 @@
 
       this.angle += dt * (cur.spin + cur.swirl * 0.25 + v * 0.25) * motion;
       const ay = this.angle, ax = 0.35 + Math.sin(t * 0.11) * 0.22 * motion;
-      const w = canvas.width, h = canvas.height, R = Math.min(w, h) * 0.40, cx = w / 2, cy = h / 2;
-      const scale = 1 + cur.breath * Math.sin(t * 1.3) * motion + 0.20 * v;
+      const w = canvas.width, h = canvas.height, R = Math.min(w, h) * 0.34, cx = w / 2, cy = h / 2;
+      const scale = 1 + cur.breath * Math.sin(t * 1.3) * motion + 0.14 * v;
       const { pts, edges } = this.field, px = this.px, py = this.py, pd = this.pd;
       const wob = 0.035 * motion;
 
@@ -142,7 +142,7 @@
           const tw = cur.swirl * 0.6 * y * Math.sin(t * 0.7) * motion, c = Math.cos(tw), s = Math.sin(tw);
           const nx = x * c + z * s; z = -x * s + z * c; x = nx;
         }
-        const k = scale * (1 + v * 0.14 * Math.sin(p.r * 10 - t * 9)); // ripples travel out from the core
+        const k = scale * (1 + v * 0.09 * Math.sin(p.r * 10 - t * 9)); // ripples travel out from the core
         const pr = project(x * k, y * k, z * k, ay, ax);
         px[i] = cx + pr.x * R; py[i] = cy + pr.y * R; pd[i] = pr.depth;
       }
