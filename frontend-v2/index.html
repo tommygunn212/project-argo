@@ -700,6 +700,32 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
   align-items: center;
   margin-bottom: 14px;
 }
+/* ═══════ NEURAL ORB (voice-reactive 3-D particle network) ═══════ */
+.orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.avatar-stage.orb-mode {
+  border-color: rgba(139,92,246,0.45);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(91,33,182,0.38), transparent 62%),
+    linear-gradient(180deg, rgba(10,6,28,0.96), rgba(6,4,20,0.98));
+  box-shadow: inset 0 0 46px rgba(139,92,246,0.14), 0 0 26px rgba(139,92,246,0.22);
+}
+.avatar-stage.orb-mode .orb-canvas { opacity: 1; }
+.avatar-stage.orb-mode .avatar-fallback,
+.avatar-stage.orb-mode .avatar-canvas,
+.avatar-stage.orb-mode .avatar-local-media,
+.avatar-stage.orb-mode .avatar-generated,
+.avatar-stage.orb-mode .avatar-video { visibility: hidden; }
+.avatar-stage.orb-mode::before { display: none; }
+.avatar-stage.orb-mode[data-state="ERROR"] { border-color: rgba(239,68,68,0.7); }
 .avatar-picker {
   display: flex;
   flex-wrap: wrap;
@@ -1320,7 +1346,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="dash-hero">
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
           <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
-          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="Cortana voice-driven portrait"></canvas>
+          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasDash" role="img" aria-label="ARGO voice orb"></canvas>
           <div class="avatar-hud">
             <span>CORTANA PORTRAIT</span>
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -1333,7 +1359,7 @@ input[type="range"]::-moz-range-thumb {
             <legend>Avatar</legend>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label>
           </fieldset>
         </div>
       </div>
@@ -1498,7 +1524,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="voice-avatar-row">
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
               <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
-              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="Cortana voice-driven portrait"></canvas>
+              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasVoice" role="img" aria-label="ARGO voice orb"></canvas>
               <div class="avatar-hud">
                 <span>CORTANA PORTRAIT</span>
                 <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -1533,7 +1559,7 @@ input[type="range"]::-moz-range-thumb {
                 <legend>Avatar</legend>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label>
               </fieldset>
             </div>
           </div>
@@ -2256,6 +2282,7 @@ input[type="range"]::-moz-range-thumb {
      browsers to fetch the LiveKit bundle without exposing its UMD global. -->
 <script src="/v2-assets/livekit-client.umd.js"></script>
 <script src="/v2-assets/cortana-avatar.js"></script>
+<script src="/v2-assets/neural-orb.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic
@@ -2282,10 +2309,10 @@ let avatarAudioContext = null;
 let realtimeAvatarVideoEls = [];
 let localAvatarMediaEls = [];
 let localAvatarMediaUrl = '';
-let avatarMode = 'auto';
+let avatarMode = 'orb';
 try {
   const savedAvatar = localStorage.getItem('argo_avatar');
-  if (['auto', 'cortana', 'cyber_male'].includes(savedAvatar)) avatarMode = savedAvatar;
+  if (['auto', 'cortana', 'cyber_male', 'orb'].includes(savedAvatar)) avatarMode = savedAvatar;
 } catch (_) {}
 let selectedAvatar = avatarMode === 'cyber_male' ? 'cyber_male' : 'cortana';
 let avatarMotionPreference = null;
@@ -3385,12 +3412,13 @@ function attachLocalAvatarRenderer(stage, el) {
 }
 
 function selectAvatar(value, persist = true) {
-  avatarMode = ['cortana', 'cyber_male'].includes(value) ? value : 'auto';
+  avatarMode = ['cortana', 'cyber_male', 'orb'].includes(value) ? value : 'auto';
   if (persist) {
     try { localStorage.setItem('argo_avatar', avatarMode); } catch (_) {}
   }
   configureLocalAvatarMedia(livekitMeta.avatar);
   updateAvatarProviderDisplay(livekitMeta.avatar);
+  syncOrbMode();
 }
 
 window.addEventListener('storage', event => {
@@ -3401,7 +3429,7 @@ function configureLocalAvatarMedia(status) {
   const voice = livekitConnected ? `openai:${livekitMeta.voice}` : $('ttsSelect').value;
   selectedAvatar = avatarMode === 'auto'
     ? (window.CortanaAvatar?.avatarForVoice(voice, selectedAvatar) || selectedAvatar)
-    : avatarMode;
+    : (avatarMode === 'orb' ? 'cortana' : avatarMode);
   const male = selectedAvatar === 'cyber_male';
   const name = male ? 'Cyber Male' : 'Cortana';
   document.querySelectorAll('.avatar-picker input').forEach(input => {
@@ -3467,6 +3495,13 @@ function configureLocalAvatarMedia(status) {
 function updateAvatarProviderDisplay(status) {
   const el = $('infoAvatar');
   if (!el) return;
+  if (avatarMode === 'orb') {
+    const live = livekitConnected && realtimeAvatarMeter?.audioContext.state === 'running';
+    el.textContent = `NEURAL ORB · ${live ? 'VOICE SYNC' : 'LOCAL'}`;
+    el.style.color = 'var(--accent3)';
+    el.title = 'The particle orb pulses with ARGO voice audio.';
+    return;
+  }
   if (realtimeAvatarVideoEls.length) return;
   const avatarName = selectedAvatar === 'cyber_male' ? 'CYBER MALE' : 'CORTANA';
   const hasLocalMedia = avatarStages.some(stage => stage.classList.contains('has-local-media'));
@@ -4011,6 +4046,7 @@ function drawAvatarLoop(now) {
   const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : desktopLevel,dt) : 0;
   setAvatarState(avatarVisualState());
   portraitRenderers.forEach(renderer => {
+    if (avatarMode === 'orb') return;
     const stage = renderer.canvas.closest('.avatar-stage');
     const localMedia = stage?.querySelector('.avatar-local-media');
     if (!stage?.classList.contains('has-video') && (!localMedia || renderer.image === localMedia)) {
@@ -4039,6 +4075,38 @@ function initAvatar() {
     }
   });
   drawAvatarLoop(performance.now());
+}
+
+// ═══════ NEURAL ORB ═══════
+const orbRenderers = [];
+function syncOrbMode() {
+  const on = avatarMode === 'orb';
+  avatarStages.forEach(stage => stage.classList.toggle('orb-mode', on));
+  document.querySelectorAll('.avatar-picker input').forEach(input => { input.checked = input.value === avatarMode; });
+}
+function orbLoop(now) {
+  requestAnimationFrame(orbLoop);
+  if (avatarMode !== 'orb' || document.hidden) return;
+  const level = livekitConnected
+    ? avatarAudioLevel
+    : (currentState === 'SPEAKING' && now - desktopAvatarAudioTime < 250 ? desktopAvatarAudioLevel : 0);
+  const reduced = avatarMotionPreference === null ? reducedAvatarMotion.matches : !avatarMotionPreference;
+  const state = avatarVisualState();
+  orbRenderers.forEach(orb => orb.draw(now, level, state, reduced));
+}
+function initOrb() {
+  if (!window.NeuralOrb) {
+    addSystemLog('Neural orb renderer unavailable; using the portrait instead.');
+    if (avatarMode === 'orb') avatarMode = 'auto';
+    syncOrbMode();
+    return;
+  }
+  document.querySelectorAll('.orb-canvas').forEach(canvas => {
+    try { orbRenderers.push(new window.NeuralOrb.Orb(canvas)); }
+    catch (error) { console.warn('Neural orb unavailable on one stage', error); }
+  });
+  syncOrbMode();
+  requestAnimationFrame(orbLoop);
 }
 
 function stopRealtimeAvatarMeter() {
@@ -4582,6 +4650,7 @@ window.addEventListener('beforeunload', () => {
 
 function init() {
   initAvatar();
+  initOrb();
   initWaveform();
   initGateSliders();
   connect();

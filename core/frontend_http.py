@@ -274,6 +274,7 @@ def build_frontend_handler(services):
                     'argo_cyber_male.png': ('assets', 'image/png'),
                     'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
                     'avatar-motion.js': ('assets', 'application/javascript; charset=utf-8'),
+                    'neural-orb.js': ('assets', 'application/javascript; charset=utf-8'),
                     'cortana_hedra_avatar_test.mp4': ('assets', 'video/mp4'),
                 }
                 if asset_name not in allowed_assets:

@@ -53,3 +53,32 @@ def test_status_and_control_routes_use_injected_runtime(tmp_path):
     assert status["ws_endpoint"] == "ws://127.0.0.1:8001/ws"
     assert control == {"ok": True, "status": "READY"}
     assert commands == [{"command": "start", "data": {"source": "test"}}]
+
+
+def test_neural_orb_asset_is_served_and_dashboard_loads_it(tmp_path):
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    services = _services(tmp_path, [])
+    services["repo_root"] = repo
+    handler = build_frontend_handler(services)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urlopen(f"{base}/v2-assets/neural-orb.js", timeout=2) as response:
+            content_type = response.headers["Content-type"]
+            body = response.read()
+        with urlopen(f"{base}/v2", timeout=2) as response:
+            page = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert content_type.startswith("application/javascript")
+    assert body == (repo / "frontend-v2" / "assets" / "neural-orb.js").read_bytes()
+    assert '<script src="/v2-assets/neural-orb.js"></script>' in page
+    assert page.count('class="orb-canvas"') == 2
+    assert page.count('value="orb"') == 2
