@@ -124,6 +124,15 @@ async def _dispatch_message(
             payload.get("approved"),
         )
         dependencies.broadcast("code_repair_result", result)
+    if (
+        message_type == "code_repair_restart"
+        and isinstance(payload, dict)
+        and code_repair
+    ):
+        result = await dependencies.run_in_thread(
+            code_repair.restart_if_applied, payload.get("action_id")
+        )
+        dependencies.broadcast("code_repair_result", result)
     if message_type == "control" and payload:
         dependencies.handle_control(payload)
     if message_type == "override" and payload:

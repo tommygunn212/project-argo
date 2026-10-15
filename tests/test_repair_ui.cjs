@@ -54,3 +54,12 @@ test('failed job has no apply button and proposals show real scope', () => {
   context.handleCodeRepairProposal({action_id: 'job', request: 'Fix voice', message: 'Isolated checkout', task_path: 'request.md'});
   assert.ok(nodes.get('codeRepairContent').textContent.includes('Fix voice'));
 });
+
+test('applied change offers the full-stack restart', () => {
+  const {context, nodes, sent} = harness();
+  context.renderCodeRepairJobs([{action_id: 'job-2', status: 'applied', request: 'Add timer', message: 'Applied'}]);
+  const section = nodes.get('codeRepairJobs').children[0];
+  section.children.at(-1).onclick();
+  assert.equal(sent[0][0], 'code_repair_restart');
+  assert.equal(sent[0][1].action_id, 'job-2');
+});

@@ -159,9 +159,28 @@ def test_isolated_repair_end_to_end_review_then_apply(monkeypatch, repo):
     assert restored.snapshot()[0]["status"] == "review_ready"
     result = restored.apply_if_approved(job["action_id"], job["patch_sha256"], True)
     assert result["status"] == "applied", result
+    assert result["commit"] == subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                              capture_output=True, text=True, check=True).stdout.strip()
     assert (repo / "answer.py").read_text() == "VALUE = 2\n"
     assert (repo / "new_file.py").exists()
     assert restored.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "error"
+
+
+def test_restart_requires_applied_change_and_uses_stack_script(monkeypatch, repo):
+    script = repo / "scripts" / "start_argo_stack.ps1"
+    script.parent.mkdir()
+    script.write_text("# test script\n", encoding="utf-8")
+    manager = CodeRepairManager(repo)
+    proposal = manager.propose("Add a feature")
+    launch = Mock(return_value=SimpleNamespace(pid=1234))
+    monkeypatch.setattr("core.code_repair.subprocess.Popen", launch)
+    assert manager.restart_if_applied(proposal["action_id"])["status"] == "error"
+    launch.assert_not_called()
+    manager.jobs[proposal["action_id"]]["status"] = "applied"
+    result = manager.restart_if_applied(proposal["action_id"])
+    assert result["status"] == "restart_requested"
+    assert launch.call_args.args[0][-1] == str(script)
+    assert manager.restart_if_applied(proposal["action_id"])["status"] == "error"
 
 
 def test_unrelated_untracked_work_survives_repair(monkeypatch, repo):

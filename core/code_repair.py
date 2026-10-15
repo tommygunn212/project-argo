@@ -106,7 +106,7 @@ class CodeRepairManager:
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
                 prompt = ("Implement this requested ARGO feature or repair in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
-                    "Do not commit, push, access external systems, or edit outside this checkout. "
+                    "Commit each cohesive change inside this isolated checkout. Do not push, access external systems, or edit outside this checkout. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
                 with Path(job["log_path"]).open("w", encoding="utf-8") as log:
                     process = subprocess.Popen([codex, "exec", "--ignore-user-config", "-m", "gpt-6-astra",
@@ -193,8 +193,38 @@ class CodeRepairManager:
                     raise RuntimeError("Working checkout changed. Rebase and review the repair before applying.")
                 self._git(self.root, "apply", "--check", job["patch_path"])
                 self._git(self.root, "apply", job["patch_path"])
-                job.update(status="applied", message="Reviewed patch applied. Restart ARGO when ready; no automatic deployment or commit.")
+                self._git(self.root, "add", "-A", "--", *job["changed_files"])
+                self._git(self.root, "commit", "-m", f"Apply reviewed ARGO change {action_id[:12]}")
+                commit = self._git(self.root, "rev-parse", "HEAD").strip()
+                job.update(status="applied", commit=commit,
+                           message="Reviewed patch applied and committed. Use Restart ARGO stack to load it in the voice worker.")
                 self._save(job)
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
+            return dict(job)
+
+    def restart_if_applied(self, action_id):
+        """Launch the existing drain-and-restart script after a reviewed apply."""
+        with self.lock:
+            job = self.jobs.get(action_id)
+            if not job or job["status"] != "applied":
+                return {"status": "error", "message": "Apply a reviewed code change before restarting ARGO."}
+            script = self.root / "scripts" / "start_argo_stack.ps1"
+            if not script.is_file():
+                return {"status": "error", "message": "ARGO's full-stack restart script is missing."}
+            log_path = self._folder(job) / "restart.log"
+            try:
+                with log_path.open("w", encoding="utf-8") as log:
+                    process = subprocess.Popen(
+                        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                        cwd=self.root, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
+                        if os.name == "nt" else 0,
+                    )
+                job.update(status="restart_requested", restart_pid=process.pid,
+                           restart_log=str(log_path),
+                           message="Full-stack restart launched. Check its log for port checks and a real dispatch PASS.")
+                self._save(job)
+            except OSError as exc:
+                return {"status": "error", "message": f"Could not launch ARGO restart: {exc}"}
             return dict(job)
