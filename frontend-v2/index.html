@@ -3029,6 +3029,17 @@ function renderCodeRepairJobs(jobs) {
       note.textContent = `Preview truncated. Full patch: ${job.patch_path}`;
       item.append(note);
     }
+    if (job.status === 'proposed') {
+      const approve = document.createElement('button');
+      approve.className = 'btn btn-primary';
+      approve.textContent = 'Prepare this code change';
+      approve.onclick = () => { approve.disabled = true; send('code_repair_response', {action_id: job.action_id, approved: true}); };
+      const deny = document.createElement('button');
+      deny.className = 'btn btn-danger';
+      deny.textContent = 'Decline';
+      deny.onclick = () => { deny.disabled = true; send('code_repair_response', {action_id: job.action_id, approved: false}); };
+      item.append(approve, deny);
+    }
     if (job.status === 'review_ready') {
       const apply = document.createElement('button');
       apply.className = 'btn btn-primary';

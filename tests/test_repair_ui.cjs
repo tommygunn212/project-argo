@@ -63,3 +63,13 @@ test('applied change offers the full-stack restart', () => {
   assert.equal(sent[0][0], 'code_repair_restart');
   assert.equal(sent[0][1].action_id, 'job-2');
 });
+
+test('saved proposal can be approved after reopening System', () => {
+  const {context, nodes, sent} = harness();
+  context.renderCodeRepairJobs([{action_id: 'job-3', status: 'proposed', request: 'Add a timer', message: 'Review this request'}]);
+  const section = nodes.get('codeRepairJobs').children[0];
+  section.children.at(-2).onclick();
+  assert.equal(sent[0][0], 'code_repair_response');
+  assert.equal(sent[0][1].action_id, 'job-3');
+  assert.equal(sent[0][1].approved, true);
+});
