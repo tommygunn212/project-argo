@@ -89,8 +89,8 @@ class CodeRepairManager:
                 self._save(job)
                 return dict(job)
             try:
-                if self._git(self.root, "status", "--porcelain").strip():
-                    raise RuntimeError("Commit or set aside current changes before starting an isolated repair.")
+                if self._git(self.root, "status", "--porcelain", "--untracked-files=no").strip():
+                    raise RuntimeError("Commit or set aside tracked changes before starting an isolated code change.")
                 if self._git(self.root, "rev-parse", "HEAD").strip() != job["base"]:
                     raise RuntimeError("ARGO changed since this proposal. Create a new request.")
                 codex = shutil.which("codex")
@@ -104,7 +104,7 @@ class CodeRepairManager:
                 self._git(workspace, "checkout", "--detach", job["base"])
                 self._git(workspace, "remote", "remove", "origin")
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
-                prompt = ("Repair this reported ARGO problem in the current isolated checkout:\n" + job["request"] +
+                prompt = ("Implement this requested ARGO feature or repair in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
                     "Do not commit, push, access external systems, or edit outside this checkout. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
@@ -189,7 +189,7 @@ class CodeRepairManager:
                 patch = Path(job["patch_path"]).read_bytes()
                 if patch_sha256 != job["patch_sha256"] or hashlib.sha256(patch).hexdigest() != patch_sha256:
                     raise RuntimeError("Patch changed since review.")
-                if self._git(self.root, "rev-parse", "HEAD").strip() != job["base"] or self._git(self.root, "status", "--porcelain").strip():
+                if self._git(self.root, "rev-parse", "HEAD").strip() != job["base"] or self._git(self.root, "status", "--porcelain", "--untracked-files=no").strip():
                     raise RuntimeError("Working checkout changed. Rebase and review the repair before applying.")
                 self._git(self.root, "apply", "--check", job["patch_path"])
                 self._git(self.root, "apply", job["patch_path"])

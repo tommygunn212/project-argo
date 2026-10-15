@@ -164,6 +164,25 @@ def test_isolated_repair_end_to_end_review_then_apply(monkeypatch, repo):
     assert restored.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "error"
 
 
+def test_unrelated_untracked_work_survives_repair(monkeypatch, repo):
+    unrelated = repo / "simli" / "notes.txt"
+    unrelated.parent.mkdir()
+    unrelated.write_text("Tommy's work\n", encoding="utf-8")
+    manager, job = launch_fixture_agent(monkeypatch, repo)
+    assert job["status"] == "review_ready"
+    assert manager.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "applied"
+    assert unrelated.read_text(encoding="utf-8") == "Tommy's work\n"
+
+
+def test_untracked_patch_collision_blocks_apply(monkeypatch, repo):
+    manager, job = launch_fixture_agent(monkeypatch, repo)
+    collision = repo / "new_file.py"
+    collision.write_text("KEEP = True\n", encoding="utf-8")
+    assert manager.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "error"
+    assert collision.read_text(encoding="utf-8") == "KEEP = True\n"
+    assert (repo / "answer.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
 @pytest.mark.parametrize("agent_fail,test_fail", [(True, False), (False, True)])
 def test_failed_agent_or_test_cannot_apply(monkeypatch, repo, agent_fail, test_fail):
     manager, job = launch_fixture_agent(monkeypatch, repo, fail=agent_fail, test_fail=test_fail)
