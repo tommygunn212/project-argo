@@ -272,7 +272,7 @@ def test_launch_error_becomes_persisted_failure(monkeypatch, repo):
     assert CodeRepairManager(repo).snapshot()[0]["status"] == "failed"
 
 
-def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path):
+def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path, repo):
     import logging
     from http.server import ThreadingHTTPServer
     from urllib.request import Request, urlopen
@@ -286,7 +286,8 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path):
         import livekit_realtime_agent as realtime
     recovery = AssistedRecovery()
     recovery._execute_action = AsyncMock(return_value={"status": "error", "message": "Disconnected device"})
-    service = RepairService(recovery, Mock(), Mock())
+    code_repairs = CodeRepairManager(repo)
+    service = RepairService(recovery, code_repairs, Mock())
     recovery.propose("reinit_audio", "Input failed")
     handler = build_frontend_handler({
         "repo_root": Path(__file__).resolve().parents[1],
@@ -324,6 +325,10 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path):
         assert result["status"] == "error"
         assert "Disconnected" in result["message"]
         assert recovery._execute_action.await_count == 1
+        feature = json.loads(asyncio.run(realtime.ArgoRealtimeAgent.improve_argo(None, "Add a timer to ARGO")))
+        assert feature["status"] == "proposed"
+        assert feature["job"]["request"] == "Add a timer to ARGO"
+        assert code_repairs.snapshot()[0]["status"] == "proposed"
     finally:
         server.shutdown()
         server.server_close()

@@ -127,6 +127,14 @@ class RepairService:
             self.broadcast("recovery_result", result)
             return result
 
+    def propose_code_request(self, request):
+        """Record Tommy's feature or repair request without running diagnostics."""
+        try:
+            job = self.code_repairs.propose(request)
+        except (ValueError, RuntimeError) as exc:
+            return {"status": "error", "message": str(exc)}
+        return {"status": "proposed", "message": "Code change recorded. Review the exact request in System and approve the coding job there.", "job": job}
+
     def _handle_text(self, text):
         normalized = re.sub(r"[.!?,]+$", "", text.lower().strip())
         normalized = re.sub(r"^argo[, ]+", "", normalized)

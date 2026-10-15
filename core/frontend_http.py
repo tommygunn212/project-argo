@@ -133,7 +133,14 @@ def build_frontend_handler(services):
                 try:
                     body = self._read_json_body(max_bytes=16000)
                     text = str(body.get("text", "")) if isinstance(body, dict) else ""
-                    result = services["get_repair_service"]().handle_text(text) if services["get_repair_service"]() else None
+                    kind = body.get("kind", "repair") if isinstance(body, dict) else "repair"
+                    service = services["get_repair_service"]()
+                    if kind == "code_request" and service:
+                        result = service.propose_code_request(text)
+                    elif kind == "repair" and service:
+                        result = service.handle_text(text)
+                    else:
+                        result = None
                     self._send_json(result or {"status": "error", "message": "Use an ARGO repair request or repair status."})
                 except Exception as exc:
                     self._send_json({"status": "error", "message": str(exc)}, status=500)
