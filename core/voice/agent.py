@@ -29,13 +29,13 @@ REPAIR_TIMEOUT_S = 90
 DEEP_THINK_HISTORY_TURNS = 24
 
 
-def _post_repair_request(text: str, *, kind: str = "repair") -> str:
+def _post_repair_request(text: str, *, kind: str = "repair", project_path: str = "") -> str:
     """Hand a repair request to the backend's /api/repair-voice bridge."""
     token = REPAIR_TOKEN_FILE.read_text(encoding="utf-8")
     port = int(os.getenv("ARGO_HTTP_PORT", "8000"))
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/repair-voice",
-        data=json.dumps({"text": text, "kind": kind}).encode(),
+        data=json.dumps({"text": text, "kind": kind, "project_path": project_path}).encode(),
         headers={"Content-Type": "application/json", "X-Argo-Repair": token},
     )
     with urllib.request.urlopen(request, timeout=REPAIR_TIMEOUT_S) as response:
@@ -133,6 +133,22 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
                 "message": f"ARGO code-change service could not be reached: {type(exc).__name__}. "
                            "Open System in the dashboard.",
             })
+
+    @function_tool()
+    async def work_on_project(self, request: str, project_path: str) -> str:
+        """Prepare a coding task in one of Tommy's local Git projects.
+
+        Use an absolute project root Tommy named or that search_drives found.
+        Pass his requested change without inventing details. This only records
+        a proposal; System shows the target path and requires approval before
+        Codex starts. The reviewed result requires a separate apply approval.
+        """
+        try:
+            return await asyncio.to_thread(_post_repair_request, request,
+                                           kind="code_request", project_path=project_path)
+        except Exception as exc:
+            return json.dumps({"status": "unavailable",
+                               "message": f"Project coding service could not be reached: {type(exc).__name__}."})
 
     @function_tool()
     async def think_deeply(self, question: str) -> str:

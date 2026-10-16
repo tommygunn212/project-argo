@@ -127,10 +127,10 @@ class RepairService:
             self.broadcast("recovery_result", result)
             return result
 
-    def propose_code_request(self, request):
+    def propose_code_request(self, request, project_path=None):
         """Record Tommy's feature or repair request without running diagnostics."""
         try:
-            job = self.code_repairs.propose(request)
+            job = self.code_repairs.propose(request, project_path=project_path)
         except (ValueError, RuntimeError) as exc:
             return {"status": "error", "message": str(exc)}
         return {"status": "proposed", "message": "Code change recorded. Review the exact request in System and approve the coding job there.", "job": job}

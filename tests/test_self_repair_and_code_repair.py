@@ -110,7 +110,7 @@ def repo(tmp_path):
     return directory
 
 
-def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang=False):
+def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang=False, project_path=None):
     completed = threading.Event()
     broadcasts = []
     def broadcast(kind, payload):
@@ -139,7 +139,7 @@ def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang
         return original_popen([sys.executable, "-c", script], **kwargs)
     monkeypatch.setattr("core.code_repair.shutil.which", lambda _: "fixture-codex")
     monkeypatch.setattr("core.code_repair.subprocess.Popen", launch)
-    proposal = manager.propose("Fix VALUE to 2")
+    proposal = manager.propose("Fix VALUE to 2", project_path=project_path)
     result = manager.dispatch_if_approved(proposal["action_id"], True)
     assert result["status"] == "running", result
     assert completed.wait(20), manager.snapshot()
@@ -200,6 +200,32 @@ def test_untracked_patch_collision_blocks_apply(monkeypatch, repo):
     assert manager.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "error"
     assert collision.read_text(encoding="utf-8") == "KEEP = True\n"
     assert (repo / "answer.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_other_git_project_uses_own_checkout_and_review(monkeypatch, repo):
+    other = repo.parent / "other-project"
+    other.mkdir()
+    for command in (("init",), ("config", "user.email", "test@example.invalid"),
+                    ("config", "user.name", "ARGO Test")):
+        subprocess.run(["git", "-C", str(other), *command], check=True, capture_output=True)
+    (other / "answer.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(other), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-m", "baseline"], check=True, capture_output=True)
+    manager, job = launch_fixture_agent(monkeypatch, repo, project_path=str(other))
+    assert job["status"] == "review_ready", job
+    assert job["verification_scope"].startswith("Git diff check only")
+    assert job["project_root"] == str(other)
+    assert manager.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "applied"
+    assert (other / "answer.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert (repo / "answer.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert manager.restart_if_applied(job["action_id"])["status"] == "error"
+
+
+def test_non_git_project_is_refused(repo, tmp_path):
+    other = tmp_path / "not-git"
+    other.mkdir()
+    with pytest.raises(ValueError, match="not a Git project"):
+        CodeRepairManager(repo).propose("Add feature", project_path=str(other))
 
 
 @pytest.mark.parametrize("agent_fail,test_fail", [(True, False), (False, True)])
@@ -367,6 +393,10 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path, repo):
         assert feature["status"] == "proposed"
         assert feature["job"]["request"] == "Add a timer to ARGO"
         assert code_repairs.snapshot()[0]["status"] == "proposed"
+        project = json.loads(asyncio.run(realtime.ArgoRealtimeAgent.work_on_project(
+            None, "Update this project", str(repo))))
+        assert project["status"] == "proposed"
+        assert project["job"]["project_root"] == str(repo)
     finally:
         server.shutdown()
         server.server_close()

@@ -2210,6 +2210,7 @@ input[type="range"]::-moz-range-thumb {
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>CHANGE ARGO</div>
           <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Request a feature or repair. Codex prepares a separate, reviewable change after you approve the exact request.</div>
+          <input id="codeRepairProject" type="text" placeholder="Git project path (leave blank for I:\argo)" aria-label="Git project path" style="width:100%;margin-bottom:8px">
           <textarea id="codeRepairRequest" rows="3" placeholder="Example: Add a timer I can set by voice, or fix the selected speaker output."></textarea>
           <div style="margin-top:8px"><button class="btn btn-primary" onclick="requestCodeRepair()">Create Change Request</button></div>
         </div>
@@ -2982,15 +2983,16 @@ async function refreshHA() {
 
 function requestCodeRepair() {
   const request = $('codeRepairRequest').value.trim();
+  const project_path = $('codeRepairProject').value.trim();
   if (!request) { addSystemLog('Describe the feature or repair first'); return; }
-  send('code_repair_request', { request });
+  send('code_repair_request', { request, project_path });
 }
 
 function handleCodeRepairProposal(data) {
   if (!data) return;
   pendingCodeRepairId = data.action_id;
   $('codeRepairCard').style.display = 'block';
-  $('codeRepairContent').textContent = `${data.request}\n\n${data.message}\n${data.task_path}`;
+  $('codeRepairContent').textContent = `${data.project_root || 'I:\\argo'}\n\n${data.request}\n\n${data.message}\n${data.task_path}`;
   switchPage('pageSystem');
 }
 
@@ -3011,7 +3013,7 @@ function renderCodeRepairJobs(jobs) {
   (jobs || []).slice().reverse().forEach(job => {
     const item = document.createElement('section');
     const title = document.createElement('p');
-    title.textContent = `${job.status}: ${job.request}\n${job.message}\nAgent exit: ${job.exit_code ?? 'pending'} · Tests: ${job.test_exit ?? 'not run'}`;
+    title.textContent = `${job.status}: ${job.request}\nProject: ${job.project_root || 'I:\\argo'}\n${job.message}\nAgent exit: ${job.exit_code ?? 'pending'} · Verification: ${job.verification_scope || 'pending'} (${job.test_exit ?? 'not run'})`;
     item.append(title);
     for (const [label, content] of [['Changed files', (job.changed_files || []).join('\n')], ['Diff', job.diff], ['Test output', job.test_log], ['Agent report', job.report]]) {
       if (!content) continue;
@@ -3047,7 +3049,7 @@ function renderCodeRepairJobs(jobs) {
       apply.onclick = () => { apply.disabled = true; send('code_repair_apply', {action_id: job.action_id, patch_sha256: job.patch_sha256, approved: true}); };
       item.append(apply);
     }
-    if (job.status === 'applied') {
+    if (job.status === 'applied' && job.restart_available !== false) {
       const restart = document.createElement('button');
       restart.className = 'btn btn-primary';
       restart.textContent = 'Restart ARGO stack';

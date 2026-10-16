@@ -73,3 +73,12 @@ test('saved proposal can be approved after reopening System', () => {
   assert.equal(sent[0][1].action_id, 'job-3');
   assert.equal(sent[0][1].approved, true);
 });
+
+test('other project is named and has no ARGO restart button', () => {
+  const {context, nodes} = harness();
+  context.renderCodeRepairJobs([{action_id: 'job-4', status: 'applied', request: 'Fix app',
+    project_root: 'I:\\other-project', restart_available: false, message: 'Applied'}]);
+  const section = nodes.get('codeRepairJobs').children[0];
+  assert.ok(section.children[0].textContent.includes('I:\\other-project'));
+  assert.equal(section.children.length, 1);
+});

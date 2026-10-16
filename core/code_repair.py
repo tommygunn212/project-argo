@@ -60,19 +60,46 @@ class CodeRepairManager:
         with self.lock:
             return [dict(job) for job in self.jobs.values()][-20:]
 
-    def propose(self, request):
+    def _project_root(self, project_path):
+        if not project_path:
+            return self.root
+        from core.filesystem_access import check_read, check_write, path_shape_problem
+        problem = path_shape_problem(project_path)
+        if problem:
+            raise ValueError(f"Project path refused: {problem}.")
+        target = Path(project_path).expanduser()
+        if not target.is_absolute() or not target.is_dir():
+            raise ValueError("Give the absolute path to an existing local Git project.")
+        target = target.resolve()
+        refusal = check_read(target) or check_write(target)
+        if refusal:
+            raise ValueError(refusal["message"])
+        try:
+            git_root = Path(self._git(target, "rev-parse", "--show-toplevel").strip()).resolve()
+        except RuntimeError as exc:
+            raise ValueError("That folder is not a Git project.") from exc
+        if git_root != target:
+            raise ValueError(f"Use the Git project root: {git_root}")
+        return target
+
+    def _job_root(self, job):
+        return Path(job.get("project_root", self.root)).resolve()
+
+    def propose(self, request, project_path=None):
         request = str(request or "").strip()
         if not request or len(request) > 8000:
-            raise ValueError("Describe the repair in 1–8000 characters.")
+            raise ValueError("Describe the feature or repair in 1–8000 characters.")
+        project = self._project_root(project_path)
         with self.lock:
             job = {"action_id": uuid.uuid4().hex, "request": request,
-                "status": "proposed", "base": self._git(self.root, "rev-parse", "HEAD").strip(),
+                "project_root": str(project), "restart_available": project == self.root,
+                "status": "proposed", "base": self._git(project, "rev-parse", "HEAD").strip(),
                 "expires_at": time.time() + 600,
                 "message": "Astra will prepare changes in a separate checkout. Review the diff and test results before applying."}
             folder = self._folder(job)
             job.update(task_path=str(folder / "request.md"), result_path=str(folder / "result.md"))
             self._save(job)
-            Path(job["task_path"]).write_text("# ARGO repair request\n\n" + request + "\n", encoding="utf-8")
+            Path(job["task_path"]).write_text(f"# Code change request\n\nProject: {project}\n\n{request}\n", encoding="utf-8")
             self.jobs[job["action_id"]] = job
         self.broadcast("code_repair_proposal", dict(job))
         return dict(job)
@@ -89,10 +116,11 @@ class CodeRepairManager:
                 self._save(job)
                 return dict(job)
             try:
-                if self._git(self.root, "status", "--porcelain", "--untracked-files=no").strip():
+                project = self._job_root(job)
+                if self._git(project, "status", "--porcelain", "--untracked-files=no").strip():
                     raise RuntimeError("Commit or set aside tracked changes before starting an isolated code change.")
-                if self._git(self.root, "rev-parse", "HEAD").strip() != job["base"]:
-                    raise RuntimeError("ARGO changed since this proposal. Create a new request.")
+                if self._git(project, "rev-parse", "HEAD").strip() != job["base"]:
+                    raise RuntimeError("The project changed since this proposal. Create a new request.")
                 codex = shutil.which("codex")
                 if not codex:
                     raise RuntimeError("Codex CLI is unavailable on PATH.")
@@ -100,11 +128,11 @@ class CodeRepairManager:
                 self._save(job)
                 directory = self._folder(job)
                 workspace = directory / "workspace"
-                self._git(self.root, "clone", "--no-hardlinks", "--no-local", str(self.root), str(workspace))
+                self._git(project, "clone", "--no-hardlinks", "--no-local", str(project), str(workspace))
                 self._git(workspace, "checkout", "--detach", job["base"])
                 self._git(workspace, "remote", "remove", "origin")
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
-                prompt = ("Implement this requested ARGO feature or repair in the current isolated checkout:\n" + job["request"] +
+                prompt = (f"Implement this requested feature or repair for {project} in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
                     "Commit each cohesive change inside this isolated checkout. Do not push, access external systems, or edit outside this checkout. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
@@ -154,7 +182,8 @@ class CodeRepairManager:
             test_exit = None
             if exit_code == 0 and not job.get("timed_out"):
                 with test_path.open("w", encoding="utf-8") as log:
-                    for command in self.verify_commands:
+                    commands = self.verify_commands if self._job_root(job) == self.root else [["git", "diff", "--check", job["base"], "--"]]
+                    for command in commands:
                         log.write("Command: " + subprocess.list2cmdline(command) + "\n")
                         log.flush()
                         check = subprocess.run(command, cwd=workspace, stdout=log,
@@ -172,6 +201,7 @@ class CodeRepairManager:
                     patch_path=str(patch_path), patch_sha256=hashlib.sha256(patch.encode("utf-8")).hexdigest(),
                     diff=patch[:100000], diff_truncated=len(patch) > 100000, report=report,
                     test_exit=test_exit, test_log=test_path.read_text(encoding="utf-8", errors="replace")[-30000:] if test_path.exists() else "Tests not run after agent failure.",
+                    verification_scope="ARGO focused tests" if self._job_root(job) == self.root else "Git diff check only; review agent-reported project tests",
                     message="Review the diff and verification output. Changes have not been applied.")
                 self._save(job)
         except Exception as exc:
@@ -186,18 +216,20 @@ class CodeRepairManager:
             if approved is not True or not job or job["status"] != "review_ready":
                 return {"status": "error", "message": "A reviewed, passing repair and explicit approval are required."}
             try:
+                project = self._job_root(job)
                 patch = Path(job["patch_path"]).read_bytes()
                 if patch_sha256 != job["patch_sha256"] or hashlib.sha256(patch).hexdigest() != patch_sha256:
                     raise RuntimeError("Patch changed since review.")
-                if self._git(self.root, "rev-parse", "HEAD").strip() != job["base"] or self._git(self.root, "status", "--porcelain", "--untracked-files=no").strip():
+                if self._git(project, "rev-parse", "HEAD").strip() != job["base"] or self._git(project, "status", "--porcelain", "--untracked-files=no").strip():
                     raise RuntimeError("Working checkout changed. Rebase and review the repair before applying.")
-                self._git(self.root, "apply", "--check", job["patch_path"])
-                self._git(self.root, "apply", job["patch_path"])
-                self._git(self.root, "add", "-A", "--", *job["changed_files"])
-                self._git(self.root, "commit", "-m", f"Apply reviewed ARGO change {action_id[:12]}")
-                commit = self._git(self.root, "rev-parse", "HEAD").strip()
+                self._git(project, "apply", "--check", job["patch_path"])
+                self._git(project, "apply", job["patch_path"])
+                self._git(project, "add", "-A", "--", *job["changed_files"])
+                self._git(project, "commit", "-m", f"Apply reviewed code change {action_id[:12]}")
+                commit = self._git(project, "rev-parse", "HEAD").strip()
                 job.update(status="applied", commit=commit,
-                           message="Reviewed patch applied and committed. Use Restart ARGO stack to load it in the voice worker.")
+                           message="Reviewed patch applied and committed. " +
+                           ("Use Restart ARGO stack to load it in the voice worker." if project == self.root else "Project deployment and runtime verification remain to be done."))
                 self._save(job)
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
@@ -209,6 +241,8 @@ class CodeRepairManager:
             job = self.jobs.get(action_id)
             if not job or job["status"] != "applied":
                 return {"status": "error", "message": "Apply a reviewed code change before restarting ARGO."}
+            if self._job_root(job) != self.root:
+                return {"status": "error", "message": "This project needs its own deployment procedure, not an ARGO restart."}
             script = self.root / "scripts" / "start_argo_stack.ps1"
             if not script.is_file():
                 return {"status": "error", "message": "ARGO's full-stack restart script is missing."}
