@@ -438,6 +438,9 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path, repo):
             None, "Update this project", str(repo))))
         assert project["status"] == "proposed"
         assert project["job"]["project_root"] == str(repo)
+        roadmap = json.loads(asyncio.run(realtime.ArgoRealtimeAgent.argo_roadmap(None, "robot vacuum")))
+        assert roadmap["ok"] is True
+        assert any("Robot vacuum" in item["title"] for item in roadmap["items"])
     finally:
         server.shutdown()
         server.server_close()

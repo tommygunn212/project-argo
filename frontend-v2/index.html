@@ -2225,6 +2225,13 @@ input[type="range"]::-moz-range-thumb {
           </div>
         </div>
         <div class="card">
+          <div class="card-title">ARGO ROADMAP</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Search documented plans. ARGO checks current code when you request an item.</div>
+          <input id="argoRoadmapQuery" type="text" placeholder="Search plans, e.g. speaker recognition" aria-label="Search ARGO roadmap">
+          <button class="btn btn-sm" onclick="loadArgoRoadmap()">Find plans</button>
+          <div id="argoRoadmapResults" style="margin-top:10px"></div>
+        </div>
+        <div class="card">
           <div class="card-title">CHANGE PROGRESS & REVIEW</div>
           <button class="btn btn-sm" onclick="send('code_repair_status', {})">Refresh repair jobs</button>
           <div id="codeRepairJobs" style="white-space:pre-wrap;overflow-wrap:anywhere"></div>
@@ -2988,6 +2995,38 @@ function requestCodeRepair() {
   const verification_command = $('codeRepairVerify').value.trim();
   if (!request) { addSystemLog('Describe the feature or repair first'); return; }
   send('code_repair_request', { request, project_path, verification_command });
+}
+
+function renderArgoRoadmap(data) {
+  const container = $('argoRoadmapResults');
+  container.replaceChildren();
+  if (!data?.items?.length) { container.textContent = 'No matching plan found.'; return; }
+  data.items.forEach(item => {
+    const row = document.createElement('div');
+    const text = document.createElement('p');
+    text.textContent = `${item.title} — ${item.source}:${item.line} (${item.kind})`;
+    const use = document.createElement('button');
+    use.className = 'btn btn-sm';
+    use.textContent = 'Use for change request';
+    use.onclick = () => {
+      $('codeRepairProject').value = '';
+      $('codeRepairRequest').value = `Inspect current ARGO code and implement the next needed step for: ${item.title}. Source: ${item.source}:${item.line}.`;
+      $('codeRepairRequest').focus();
+    };
+    row.append(text, use);
+    container.append(row);
+  });
+}
+
+async function loadArgoRoadmap() {
+  const query = $('argoRoadmapQuery').value.trim();
+  try {
+    const response = await fetch(`/api/argo-roadmap?q=${encodeURIComponent(query)}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderArgoRoadmap(await response.json());
+  } catch (error) {
+    $('argoRoadmapResults').textContent = `Could not load ARGO plans: ${error.message}`;
+  }
 }
 
 function handleCodeRepairProposal(data) {

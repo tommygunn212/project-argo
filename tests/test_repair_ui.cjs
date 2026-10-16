@@ -8,9 +8,10 @@ const html = fs.readFileSync(require.resolve('../frontend-v2/index.html'), 'utf8
 // button handlers are observable without running unrelated audio/WebRTC code.
 function harness() {
   class Element {
-    constructor() { this.children = []; this.style = {}; this.textContent = ''; }
+    constructor() { this.children = []; this.style = {}; this.textContent = ''; this.value = ''; }
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
+    focus() {}
     set innerHTML(_) { throw Error('Repair rendering must insert untrusted text as text'); }
   }
   const nodes = new Map();
@@ -25,6 +26,7 @@ function harness() {
     vm.runInContext(html.slice(start, end), context);
   }
   load('renderCodeRepairJobs', '\nsetInterval(');
+  load('renderArgoRoadmap', '\nasync function loadArgoRoadmap');
   load('handleCodeRepairProposal', '\nfunction handleCodeRepairResult');
   load('handleRecoveryProposal', '\nfunction handleRecoveryResult');
   return {context, nodes, sent};
@@ -81,4 +83,13 @@ test('other project is named and has no ARGO restart button', () => {
   const section = nodes.get('codeRepairJobs').children[0];
   assert.ok(section.children[0].textContent.includes('I:\\other-project'));
   assert.equal(section.children.length, 1);
+});
+
+test('roadmap item fills an ARGO change request with its source', () => {
+  const {context, nodes} = harness();
+  context.renderArgoRoadmap({items: [{title: 'Robot vacuum control', source: 'docs/specs/master-feature-list.md', line: 107, kind: 'planned capability'}]});
+  nodes.get('argoRoadmapResults').children[0].children[1].onclick();
+  assert.equal(nodes.get('codeRepairProject').value, '');
+  assert.ok(nodes.get('codeRepairRequest').value.includes('Robot vacuum control'));
+  assert.ok(nodes.get('codeRepairRequest').value.includes('master-feature-list.md:107'));
 });

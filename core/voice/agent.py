@@ -157,6 +157,22 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
                                "message": f"Project coding service could not be reached: {type(exc).__name__}."})
 
     @function_tool()
+    async def argo_roadmap(self, query: str = "") -> str:
+        """Find ARGO's documented future work and planned capabilities.
+
+        Use when Tommy asks what was planned, what is next, or whether an idea
+        is on the roadmap. Give a short query such as "speaker recognition";
+        use an empty query for immediate work. The result is a document pointer,
+        not proof that the feature is missing; inspect current code before
+        requesting implementation.
+        """
+        try:
+            return await asyncio.to_thread(_post_repair_request, query, kind="roadmap")
+        except Exception as exc:
+            return json.dumps({"status": "unavailable",
+                               "message": f"ARGO roadmap could not be reached: {type(exc).__name__}."})
+
+    @function_tool()
     async def think_deeply(self, question: str) -> str:
         """Work a hard question through properly with the deep reasoning model.
 

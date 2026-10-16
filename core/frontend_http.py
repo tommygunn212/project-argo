@@ -139,6 +139,9 @@ def build_frontend_handler(services):
                         result = service.propose_code_request(
                             text, project_path=str(body.get("project_path") or ""),
                             verification_command=str(body.get("verification_command") or ""))
+                    elif kind == "roadmap":
+                        from core.roadmap_catalog import search_argo_roadmap
+                        result = search_argo_roadmap(text)
                     elif kind == "repair" and service:
                         result = service.handle_text(text)
                     else:
@@ -183,6 +186,9 @@ def build_frontend_handler(services):
                     "service": "ARGO Local Voice Assistant",
                     "ws_endpoint": f"ws://{request_host}:{ws_port}/ws"
                 })
+            elif path == '/api/argo-roadmap':
+                from core.roadmap_catalog import search_argo_roadmap
+                self._send_json(search_argo_roadmap(_query_first(query, "q")))
             elif path == '/api/livekit-status':
                 try:
                     from core.livekit_config import livekit_status
