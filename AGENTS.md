@@ -2,7 +2,7 @@
 
 Read this before touching anything. It exists because agents keep rebuilding
 things ARGO already has: `core/` (with the `core/voice/` and
-`core/realtime_tools/` packages), 53 voice tools, 118 Python test files.
+`core/realtime_tools/` packages), 53 voice tools, 241 Python test files.
 Almost everything you are about to propose probably exists.
 
 **Owner:** Tommy. Windows, repo at `I:\argo`, venv at `I:\argo\.venv`.
