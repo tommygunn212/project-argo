@@ -20,7 +20,7 @@ Next step: add optional live camera frame capture for repeated looks, with a vis
 
 Goal: let Tommy say a coding request to ARGO and have it become a concrete coding-agent task.
 
-Current status (2026-10-15): Smooth Voice can propose an ARGO feature or a
+Current status (2026-10-15): Smooth Voice can start an ARGO feature or a
 change to a named local Git project. System shows the target, request, test
 command, progress, diff, and agent report. Passing ARGO changes auto-apply and
 commit; another project needs a supplied test command for auto-apply. ARGO
@@ -47,9 +47,9 @@ Implemented first step:
 
 - `scripts/create_code_request.py` creates the request record and can open it in VS Code with `--open-vscode`.
 
-Remaining steps:
+Current behavior and remaining steps:
 
-- Local Codex CLI is confirmed. The `/v2` System panel records a task and dispatches `gpt-6-astra` with high reasoning in an independent checkout after approval. The running checkout remains untouched until the reviewed patch is explicitly applied.
+- Local Codex CLI is confirmed. An explicit Smooth Voice or `/v2` System request dispatches `gpt-6-astra` with high reasoning in an independent checkout immediately. Passing independently verified changes apply and commit automatically; changes without a passing verification gate wait for review.
 - Process tracking, failure/timeout handling, persisted results, focused test execution, and a diff/review panel are implemented. See [Self Repair](SELF_REPAIR.md) for exact behavior and verification limits.
 - Add Claude only after a local CLI or API path is installed and authenticated.
 

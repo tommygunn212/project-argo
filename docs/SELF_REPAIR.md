@@ -40,15 +40,16 @@ plans are pointers for inspection, not proof that the feature is missing.
 For an unresolved runtime symptom, **“prepare code repair”** still records the
 diagnostic finding.
 
-1. Review the exact request, project root, and optional project test command;
-   approve **Prepare Code Change**.
+1. An explicit voice or System change request records the exact request,
+   project root, and optional project test command, then starts Codex directly.
+   Existing saved proposals can still be started from System.
 2. ARGO requires tracked files to match a committed base. Unrelated untracked
    work stays in place; an untracked file that collides with the patch blocks it.
 3. It creates an independent local Git clone under
    `runtime/code_requests/<job-id>/workspace`, detaches it at that commit, and
    removes its remote. Ignored local data and environment files are not copied.
 4. Local Codex runs `gpt-6-astra` with high reasoning and `workspace-write`, with
-   automatic escalation disabled and user Codex configuration ignored. Local
+   automatic escalation disabled. Tommy's Codex configuration remains available. Local
    Codex authentication is still required. No model substitution is performed.
 5. ARGO tracks exit status and a 30-minute agent deadline and captures tracked
    and new-file changes. For ARGO itself it runs focused pytest and Node checks.
