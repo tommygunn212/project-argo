@@ -144,7 +144,8 @@ class CodeRepairManager:
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
                 prompt = (f"Implement this requested feature or repair for {project} in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
-                    "Commit each cohesive change inside this isolated checkout. Use available tools and documentation as needed. "
+                    "ARGO's host manager will commit the captured change; do not spend time trying to write the sandboxed .git directory. "
+                    "Use available tools and documentation as needed. "
                     "Do not push, deploy, send messages, or edit outside this checkout unless Tommy's request expressly authorizes that action. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
                 with Path(job["log_path"]).open("w", encoding="utf-8") as log:
@@ -185,6 +186,11 @@ class CodeRepairManager:
             self._git(workspace, "add", "-N", "--", ".")
             patch = self._git(workspace, "diff", "--binary", job["base"], "--")
             changed = self._git(workspace, "diff", "--name-only", job["base"], "--").splitlines()
+            if patch and self._git(workspace, "status", "--porcelain").strip():
+                self._git(workspace, "add", "-A", "--", *changed)
+                self._git(workspace, "-c", "user.name=ARGO", "-c", "user.email=argo@local.invalid",
+                          "commit", "-m", f"Capture isolated code change {action_id[:12]}")
+            isolated_commit = self._git(workspace, "rev-parse", "HEAD").strip()
             patch_path = self._folder(job) / "changes.patch"
             patch_path.write_bytes(patch.encode("utf-8"))
             result_path = Path(job["result_path"])
@@ -214,6 +220,7 @@ class CodeRepairManager:
             ready = ready and after == patch
             with self.lock:
                 job.update(status="review_ready" if ready else "review_failed", changed_files=changed,
+                    isolated_commit=isolated_commit,
                     patch_path=str(patch_path), patch_sha256=hashlib.sha256(patch.encode("utf-8")).hexdigest(),
                     diff=patch[:100000], diff_truncated=len(patch) > 100000, report=report,
                     test_exit=test_exit, test_log=test_path.read_text(encoding="utf-8", errors="replace")[-30000:] if test_path.exists() else "Tests not run after agent failure.",

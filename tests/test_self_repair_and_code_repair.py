@@ -153,6 +153,7 @@ def test_isolated_repair_end_to_end_review_then_apply(monkeypatch, repo):
     manager, job = launch_fixture_agent(monkeypatch, repo)
     assert job["status"] == "review_ready", job
     assert job["test_exit"] == 0 and job["exit_code"] == 0
+    assert job["isolated_commit"] != job["base"]
     assert "new_file.py" in job["changed_files"]
     assert (repo / "answer.py").read_text() == "VALUE = 1\n"
     assert not (repo / "new_file.py").exists()
