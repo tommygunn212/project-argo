@@ -123,9 +123,9 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         """Prepare a code change to ARGO herself, including a new feature.
 
         Use when Tommy asks you to add, change, or repair an ARGO capability.
-        Pass his actual request. This creates a reviewable proposal in System;
-        tell him it is proposed, not implemented. The coding job, tested patch,
-        and deployment each have their own visible status.
+        Pass his actual request. This records the task and starts Codex in an
+        isolated checkout. Tell him it started, not that it is implemented.
+        System shows progress, tests, and the applied result.
         """
         try:
             return await asyncio.to_thread(_post_repair_request, request, kind="code_request")
@@ -142,9 +142,9 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         """Prepare a coding task in one of Tommy's local Git projects.
 
         Use an absolute project root Tommy named or that search_drives found.
-        Pass his requested change without inventing details. This only records
-        a proposal; System shows the target path and requires approval before
-        Codex starts. If Tommy names a test command, pass it verbatim as
+        Pass his requested change without inventing details. This records the
+        target and starts Codex in an isolated checkout. If Tommy names a test
+        command, pass it verbatim as
         verification_command. A passing independent test lets ARGO apply the
         patch automatically; without one, it waits for review.
         """

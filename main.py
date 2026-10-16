@@ -534,7 +534,9 @@ def _handle_code_repair_request(payload: dict):
         request = str(payload.get("request") or "")
         proposal = code_repair_ref.propose(request, project_path=payload.get("project_path"),
                                            verification_command=payload.get("verification_command"))
-        log_event(f"CODE_REPAIR_PROPOSED {proposal['action_id']}", stage="recovery")
+        result = code_repair_ref.dispatch_if_approved(proposal["action_id"], True)
+        log_event(f"CODE_REPAIR_{result['status'].upper()} {proposal['action_id']}", stage="recovery")
+        broadcast_msg("code_repair_result", result)
     except (ValueError, RuntimeError) as exc:
         broadcast_msg("code_repair_result", {"status": "error", "message": str(exc)})
 

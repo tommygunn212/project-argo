@@ -2209,11 +2209,11 @@ input[type="range"]::-moz-range-thumb {
 
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent4)"></span>CHANGE ARGO</div>
-          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Request a feature or repair. Codex prepares it after you approve the exact task. Passing ARGO changes apply automatically; other projects need a test command for automatic apply.</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Request a feature or repair. Codex starts in a separate checkout. Passing ARGO changes apply automatically; other projects need a test command for automatic apply.</div>
           <input id="codeRepairProject" type="text" placeholder="Git project path (leave blank for I:\argo)" aria-label="Git project path" style="width:100%;margin-bottom:8px">
           <input id="codeRepairVerify" type="text" placeholder="Project test command, e.g. npm test (optional for ARGO)" aria-label="Project test command" style="width:100%;margin-bottom:8px">
           <textarea id="codeRepairRequest" rows="3" placeholder="Example: Add a timer I can set by voice, or fix the selected speaker output."></textarea>
-          <div style="margin-top:8px"><button class="btn btn-primary" onclick="requestCodeRepair()">Create Change Request</button></div>
+          <div style="margin-top:8px"><button class="btn btn-primary" onclick="requestCodeRepair()">Start Code Change</button></div>
         </div>
 
         <div class="card" id="codeRepairCard" style="display:none">

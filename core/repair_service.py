@@ -60,11 +60,13 @@ class ActiveDiagnostics(SystemDiagnostics):
 
 
 class RepairService:
-    def __init__(self, recovery, code_repairs, broadcast, diagnostics_factory=SystemDiagnostics):
+    def __init__(self, recovery, code_repairs, broadcast, diagnostics_factory=SystemDiagnostics,
+                 *, auto_dispatch=True):
         self.recovery = recovery
         self.code_repairs = code_repairs
         self.broadcast = broadcast
         self.diagnostics_factory = diagnostics_factory
+        self.auto_dispatch = auto_dispatch
         self.lock = threading.Lock()
         self.last_report = ""
         self.last_problem = ""
@@ -134,7 +136,11 @@ class RepairService:
                                             verification_command=verification_command)
         except (ValueError, RuntimeError) as exc:
             return {"status": "error", "message": str(exc)}
-        return {"status": "proposed", "message": "Code change recorded. Review the exact request in System and approve the coding job there.", "job": job}
+        if self.auto_dispatch:
+            job = self.code_repairs.dispatch_if_approved(job["action_id"], True)
+            self.broadcast("code_repair_result", job)
+            return {"status": job["status"], "message": job["message"], "job": job}
+        return {"status": "proposed", "message": "Code change recorded in System.", "job": job}
 
     def _handle_text(self, text):
         normalized = re.sub(r"[.!?,]+$", "", text.lower().strip())

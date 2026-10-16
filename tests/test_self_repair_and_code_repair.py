@@ -94,6 +94,19 @@ def test_spoken_diagnosis_approval_repair_and_recheck():
     assert len([e for e in events if e[0] == "diagnostics_result"]) == 2
 
 
+def test_spoken_code_request_starts_coding_once():
+    code = Mock()
+    code.propose.return_value = {"action_id": "job-1", "status": "proposed"}
+    code.dispatch_if_approved.return_value = {"action_id": "job-1", "status": "running", "message": "Codex started"}
+    service = RepairService(AssistedRecovery(), code, Mock())
+    result = service.propose_code_request("Add a timer", project_path="I:/project",
+                                          verification_command="npm test")
+    assert result["status"] == "running"
+    code.propose.assert_called_once_with("Add a timer", project_path="I:/project",
+                                         verification_command="npm test")
+    code.dispatch_if_approved.assert_called_once_with("job-1", True)
+
+
 @pytest.fixture
 def repo(tmp_path):
     directory = tmp_path / "argo"
@@ -393,7 +406,7 @@ def test_livekit_tool_to_real_http_repair_endpoint(monkeypatch, tmp_path, repo):
     recovery = AssistedRecovery()
     recovery._execute_action = AsyncMock(return_value={"status": "error", "message": "Disconnected device"})
     code_repairs = CodeRepairManager(repo)
-    service = RepairService(recovery, code_repairs, Mock())
+    service = RepairService(recovery, code_repairs, Mock(), auto_dispatch=False)
     recovery.propose("reinit_audio", "Input failed")
     handler = build_frontend_handler({
         "repo_root": Path(__file__).resolve().parents[1],
