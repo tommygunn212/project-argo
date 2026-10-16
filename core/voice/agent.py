@@ -29,13 +29,15 @@ REPAIR_TIMEOUT_S = 90
 DEEP_THINK_HISTORY_TURNS = 24
 
 
-def _post_repair_request(text: str, *, kind: str = "repair", project_path: str = "") -> str:
+def _post_repair_request(text: str, *, kind: str = "repair", project_path: str = "",
+                         verification_command: str = "") -> str:
     """Hand a repair request to the backend's /api/repair-voice bridge."""
     token = REPAIR_TOKEN_FILE.read_text(encoding="utf-8")
     port = int(os.getenv("ARGO_HTTP_PORT", "8000"))
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/repair-voice",
-        data=json.dumps({"text": text, "kind": kind, "project_path": project_path}).encode(),
+        data=json.dumps({"text": text, "kind": kind, "project_path": project_path,
+                         "verification_command": verification_command}).encode(),
         headers={"Content-Type": "application/json", "X-Argo-Repair": token},
     )
     with urllib.request.urlopen(request, timeout=REPAIR_TIMEOUT_S) as response:
@@ -135,17 +137,21 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
             })
 
     @function_tool()
-    async def work_on_project(self, request: str, project_path: str) -> str:
+    async def work_on_project(self, request: str, project_path: str,
+                              verification_command: str = "") -> str:
         """Prepare a coding task in one of Tommy's local Git projects.
 
         Use an absolute project root Tommy named or that search_drives found.
         Pass his requested change without inventing details. This only records
         a proposal; System shows the target path and requires approval before
-        Codex starts. The reviewed result requires a separate apply approval.
+        Codex starts. If Tommy names a test command, pass it verbatim as
+        verification_command. A passing independent test lets ARGO apply the
+        patch automatically; without one, it waits for review.
         """
         try:
             return await asyncio.to_thread(_post_repair_request, request,
-                                           kind="code_request", project_path=project_path)
+                                           kind="code_request", project_path=project_path,
+                                           verification_command=verification_command)
         except Exception as exc:
             return json.dumps({"status": "unavailable",
                                "message": f"Project coding service could not be reached: {type(exc).__name__}."})

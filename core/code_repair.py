@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,11 +14,12 @@ from pathlib import Path
 
 
 class CodeRepairManager:
-    def __init__(self, root=None, broadcast_fn=None, *, timeout=1800, verify_command=None):
+    def __init__(self, root=None, broadcast_fn=None, *, timeout=1800, verify_command=None, auto_apply=True):
         self.root = Path(root or Path(__file__).resolve().parents[1]).resolve()
         self.request_dir = self.root / "runtime" / "code_requests"
         self.broadcast = broadcast_fn or (lambda *_: None)
         self.timeout = timeout
+        self.auto_apply = auto_apply
         self.verify_command = verify_command or [sys.executable, "-m", "pytest",
             "tests/test_self_repair_and_code_repair.py", "tests/test_voice_audit_repairs.py",
             "tests/test_llm_router.py", "-q"]
@@ -85,21 +87,29 @@ class CodeRepairManager:
     def _job_root(self, job):
         return Path(job.get("project_root", self.root)).resolve()
 
-    def propose(self, request, project_path=None):
+    def propose(self, request, project_path=None, verification_command=None):
         request = str(request or "").strip()
         if not request or len(request) > 8000:
             raise ValueError("Describe the feature or repair in 1–8000 characters.")
         project = self._project_root(project_path)
+        verification = str(verification_command or "").strip()
+        if len(verification) > 500 or "\n" in verification or "\r" in verification:
+            raise ValueError("Verification command must be one line under 500 characters.")
+        try:
+            verification_args = shlex.split(verification, posix=True) if verification else []
+        except ValueError as exc:
+            raise ValueError("Verification command has invalid quoting.") from exc
         with self.lock:
             job = {"action_id": uuid.uuid4().hex, "request": request,
                 "project_root": str(project), "restart_available": project == self.root,
+                "verification_command": verification, "verification_args": verification_args,
                 "status": "proposed", "base": self._git(project, "rev-parse", "HEAD").strip(),
                 "expires_at": time.time() + 600,
                 "message": "Astra will prepare changes in a separate checkout. Review the diff and test results before applying."}
             folder = self._folder(job)
             job.update(task_path=str(folder / "request.md"), result_path=str(folder / "result.md"))
             self._save(job)
-            Path(job["task_path"]).write_text(f"# Code change request\n\nProject: {project}\n\n{request}\n", encoding="utf-8")
+            Path(job["task_path"]).write_text(f"# Code change request\n\nProject: {project}\nVerification: {verification or 'ARGO focused tests' if project == self.root else verification or 'not supplied'}\n\n{request}\n", encoding="utf-8")
             self.jobs[job["action_id"]] = job
         self.broadcast("code_repair_proposal", dict(job))
         return dict(job)
@@ -182,7 +192,12 @@ class CodeRepairManager:
             test_exit = None
             if exit_code == 0 and not job.get("timed_out"):
                 with test_path.open("w", encoding="utf-8") as log:
-                    commands = self.verify_commands if self._job_root(job) == self.root else [["git", "diff", "--check", job["base"], "--"]]
+                    is_argo = self._job_root(job) == self.root
+                    commands = self.verify_commands if is_argo else []
+                    if not is_argo and job.get("verification_args"):
+                        commands = [job["verification_args"]]
+                    if not is_argo:
+                        commands.append(["git", "diff", "--check", job["base"], "--"])
                     for command in commands:
                         log.write("Command: " + subprocess.list2cmdline(command) + "\n")
                         log.flush()
@@ -201,9 +216,15 @@ class CodeRepairManager:
                     patch_path=str(patch_path), patch_sha256=hashlib.sha256(patch.encode("utf-8")).hexdigest(),
                     diff=patch[:100000], diff_truncated=len(patch) > 100000, report=report,
                     test_exit=test_exit, test_log=test_path.read_text(encoding="utf-8", errors="replace")[-30000:] if test_path.exists() else "Tests not run after agent failure.",
-                    verification_scope="ARGO focused tests" if self._job_root(job) == self.root else "Git diff check only; review agent-reported project tests",
+                    verification_scope="ARGO focused tests" if self._job_root(job) == self.root else
+                    ("Project command plus Git diff check" if job.get("verification_args") else "Git diff check only; review agent-reported project tests"),
                     message="Review the diff and verification output. Changes have not been applied.")
                 self._save(job)
+                if ready and self.auto_apply and (self._job_root(job) == self.root or job.get("verification_args")):
+                    applied = self.apply_if_approved(action_id, job["patch_sha256"], True)
+                    if applied["status"] == "error":
+                        job["message"] = "Automatic apply stopped: " + applied["message"]
+                        self._save(job)
         except Exception as exc:
             with self.lock:
                 job.update(status="review_failed", message=f"Verification did not complete: {exc}")

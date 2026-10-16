@@ -110,7 +110,8 @@ def repo(tmp_path):
     return directory
 
 
-def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang=False, project_path=None):
+def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang=False,
+                         project_path=None, verification_command=None, auto_apply=False):
     completed = threading.Event()
     broadcasts = []
     def broadcast(kind, payload):
@@ -118,7 +119,8 @@ def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang
         if kind == "code_repair_result":
             completed.set()
     manager = CodeRepairManager(repo, broadcast, timeout=0.2 if hang else 1800,
-        verify_command=[sys.executable, "-c", "import answer; assert answer.VALUE == " + ("999" if test_fail else "2")])
+        verify_command=[sys.executable, "-c", "import answer; assert answer.VALUE == " + ("999" if test_fail else "2")],
+        auto_apply=auto_apply)
     # Real subprocess writes a deterministic repair in the checkout. Git clone,
     # review collection, tests, hash checking, and apply are production code.
     original_popen = subprocess.Popen
@@ -139,7 +141,8 @@ def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang
         return original_popen([sys.executable, "-c", script], **kwargs)
     monkeypatch.setattr("core.code_repair.shutil.which", lambda _: "fixture-codex")
     monkeypatch.setattr("core.code_repair.subprocess.Popen", launch)
-    proposal = manager.propose("Fix VALUE to 2", project_path=project_path)
+    proposal = manager.propose("Fix VALUE to 2", project_path=project_path,
+                               verification_command=verification_command)
     result = manager.dispatch_if_approved(proposal["action_id"], True)
     assert result["status"] == "running", result
     assert completed.wait(20), manager.snapshot()
@@ -219,6 +222,44 @@ def test_other_git_project_uses_own_checkout_and_review(monkeypatch, repo):
     assert (other / "answer.py").read_text(encoding="utf-8") == "VALUE = 2\n"
     assert (repo / "answer.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert manager.restart_if_applied(job["action_id"])["status"] == "error"
+
+
+def test_passing_argo_change_applies_without_second_click(monkeypatch, repo):
+    manager, job = launch_fixture_agent(monkeypatch, repo, auto_apply=True)
+    assert job["status"] == "applied", job
+    assert (repo / "answer.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+
+
+def test_external_change_without_project_tests_waits_for_review(monkeypatch, repo):
+    other = repo.parent / "other-project"
+    other.mkdir()
+    subprocess.run(["git", "-C", str(other), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(other), "config", "user.email", "test@example.invalid"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(other), "config", "user.name", "ARGO Test"], check=True, capture_output=True)
+    (other / "answer.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(other), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-m", "baseline"], check=True, capture_output=True)
+    manager, job = launch_fixture_agent(monkeypatch, repo, project_path=str(other), auto_apply=True)
+    assert job["status"] == "review_ready"
+    assert (other / "answer.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_external_change_with_passing_project_command_applies(monkeypatch, repo):
+    other = repo.parent / "tested-project"
+    other.mkdir()
+    for command in (("init",), ("config", "user.email", "test@example.invalid"),
+                    ("config", "user.name", "ARGO Test")):
+        subprocess.run(["git", "-C", str(other), *command], check=True, capture_output=True)
+    (other / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    (other / "answer.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(other), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-m", "baseline"], check=True, capture_output=True)
+    verification = f'{sys.executable.replace(chr(92), "/")} -c "import answer; assert answer.VALUE == 2"'
+    manager, job = launch_fixture_agent(monkeypatch, repo, project_path=str(other),
+                                        verification_command=verification, auto_apply=True)
+    assert job["status"] == "applied", job
+    assert job["verification_scope"] == "Project command plus Git diff check"
+    assert (other / "answer.py").read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
 def test_non_git_project_is_refused(repo, tmp_path):

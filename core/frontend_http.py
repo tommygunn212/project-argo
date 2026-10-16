@@ -136,7 +136,9 @@ def build_frontend_handler(services):
                     kind = body.get("kind", "repair") if isinstance(body, dict) else "repair"
                     service = services["get_repair_service"]()
                     if kind == "code_request" and service:
-                        result = service.propose_code_request(text, project_path=str(body.get("project_path") or ""))
+                        result = service.propose_code_request(
+                            text, project_path=str(body.get("project_path") or ""),
+                            verification_command=str(body.get("verification_command") or ""))
                     elif kind == "repair" and service:
                         result = service.handle_text(text)
                     else:
