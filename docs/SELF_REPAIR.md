@@ -94,7 +94,10 @@ node --test tests/test_cortana_avatar.cjs tests/test_repair_ui.cjs
 ```
 
 This verification does not spend model credits or open a microphone. A live
-Astra completion and a physical microphone/speaker repair still require an
-actual reported problem and the corresponding runtime approval.
+Astra completion in a disposable local Git project was verified on 2026-10-15:
+Codex edited `answer.py`, ARGO made an isolated commit, reran the supplied test,
+and auto-applied and committed the patch. That proves the coding bridge for a
+small local project. A physical microphone/speaker repair and a post-change
+ARGO voice restart still require their own live checks.
 
 Codex launch behavior follows the [official non-interactive documentation](https://developers.openai.com/codex/noninteractive/).

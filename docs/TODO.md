@@ -19,7 +19,8 @@ Short list of deferred or optional work items. The v1.9.1 voice reliability batc
 - [x] Accept ARGO feature requests and named local Git projects through Smooth Voice and System.
 - [x] Auto-apply and commit passing ARGO changes, or other project changes with an independent test command.
 - [x] Search documented ARGO plans by voice or in System without claiming the documents prove current implementation status.
-- [ ] Prove a real Codex completion, automatic apply, and full-stack restart on a selected live request.
+- [x] Prove a real Codex completion and automatic apply in a disposable local Git project (2026-10-15).
+- [ ] Prove the full-stack restart after a selected ARGO source change, including new worker registration and a live voice interaction.
 - [ ] Add project-specific deployment and runtime verification after local code changes.
 - [x] Share runtime diagnosis, explicit spoken approval, and post-repair reporting between classic and Smooth Voice.
 - [x] Replace the placeholder retry with a saved conversational-generation callback.

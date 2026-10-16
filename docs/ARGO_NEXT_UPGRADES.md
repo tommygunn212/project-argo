@@ -24,8 +24,10 @@ Current status (2026-10-15): Smooth Voice can propose an ARGO feature or a
 change to a named local Git project. System shows the target, request, test
 command, progress, diff, and agent report. Passing ARGO changes auto-apply and
 commit; another project needs a supplied test command for auto-apply. ARGO
-roadmap search points to documented plans. The live paid Codex path and
-project-specific deployment still need end-to-end proof. See [Self Repair](SELF_REPAIR.md).
+roadmap search points to documented plans. A real Codex run in a disposable
+local Git project completed, passed its project test, and auto-applied on
+2026-10-15. ARGO's own full-stack restart after a source change and other
+projects' deployment still need end-to-end proof. See [Self Repair](SELF_REPAIR.md).
 
 Recommended safe architecture:
 

@@ -105,7 +105,7 @@ class CodeRepairManager:
                 "verification_command": verification, "verification_args": verification_args,
                 "status": "proposed", "base": self._git(project, "rev-parse", "HEAD").strip(),
                 "expires_at": time.time() + 600,
-                "message": "Astra will prepare changes in a separate checkout. Review the diff and test results before applying."}
+                "message": "Codex will work in a separate checkout. Passing independently verified changes apply automatically; otherwise review the diff and results in System."}
             folder = self._folder(job)
             job.update(task_path=str(folder / "request.md"), result_path=str(folder / "result.md"))
             self._save(job)
@@ -154,7 +154,7 @@ class CodeRepairManager:
                         "--sandbox", "workspace-write", "-C", str(workspace), "-o", job["result_path"], prompt],
                         cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                job.update(status="running", pid=process.pid, message="Astra is preparing an isolated repair.")
+                job.update(status="running", pid=process.pid, message="Codex is preparing an isolated code change.")
                 self._save(job)
                 threading.Thread(target=self._monitor, args=(action_id, process), daemon=True).start()
             except Exception as exc:
