@@ -144,10 +144,11 @@ class CodeRepairManager:
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
                 prompt = (f"Implement this requested feature or repair for {project} in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
-                    "Commit each cohesive change inside this isolated checkout. Do not push, access external systems, or edit outside this checkout. "
+                    "Commit each cohesive change inside this isolated checkout. Use available tools and documentation as needed. "
+                    "Do not push, deploy, send messages, or edit outside this checkout unless Tommy's request expressly authorizes that action. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
                 with Path(job["log_path"]).open("w", encoding="utf-8") as log:
-                    process = subprocess.Popen([codex, "exec", "--ignore-user-config", "-m", "gpt-6-astra",
+                    process = subprocess.Popen([codex, "exec", "-m", "gpt-6-astra",
                         "-c", 'model_reasoning_effort="high"', "-c", 'approval_policy="never"',
                         "--sandbox", "workspace-write", "-C", str(workspace), "-o", job["result_path"], prompt],
                         cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
