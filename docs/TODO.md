@@ -15,7 +15,12 @@ Short list of deferred or optional work items. The v1.9.1 voice reliability batc
 - [x] Re-run diagnostics after a successful runtime repair and show the observed result.
 - [x] Create an auditable code-repair task and require an additional UI approval before local Codex dispatch.
 - [x] Add process-status polling and a diff/review panel for completed Astra repair tasks.
-- [x] Prepare changes in an independent checkout and apply only the reviewed, tested patch to an unchanged clean base.
+- [x] Prepare changes in an independent checkout and apply only a stable, verified patch to an unchanged tracked base; unrelated untracked work remains.
+- [x] Accept ARGO feature requests and named local Git projects through Smooth Voice and System.
+- [x] Auto-apply and commit passing ARGO changes, or other project changes with an independent test command.
+- [x] Search documented ARGO plans by voice or in System without claiming the documents prove current implementation status.
+- [ ] Prove a real Codex completion, automatic apply, and full-stack restart on a selected live request.
+- [ ] Add project-specific deployment and runtime verification after local code changes.
 - [x] Share runtime diagnosis, explicit spoken approval, and post-repair reporting between classic and Smooth Voice.
 - [x] Replace the placeholder retry with a saved conversational-generation callback.
 - [x] Verify failure, timeout, restart recovery, changed-patch rejection, and isolated apply using real temporary repositories/processes.

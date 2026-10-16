@@ -2,7 +2,7 @@
 
 Read this before touching anything. It exists because agents keep rebuilding
 things ARGO already has: `core/` (with the `core/voice/` and
-`core/realtime_tools/` packages), 50 voice tools, 118 Python test files.
+`core/realtime_tools/` packages), 53 voice tools, 118 Python test files.
 Almost everything you are about to propose probably exists.
 
 **Owner:** Tommy. Windows, repo at `I:\argo`, venv at `I:\argo\.venv`.
@@ -19,7 +19,7 @@ Almost everything you are about to propose probably exists.
 | Brain | local STT → LLM → TTS | OpenAI realtime model over LiveKit |
 | Status | fallback / offline only | **canonical, this is the live one** |
 | Memory | fully wired | wired via `core/voice_memory.py` |
-| Tools | its own path | 50 `@function_tool` methods |
+| Tools | its own path | 53 `@function_tool` methods |
 
 When Smooth Voice became canonical it inherited the voice and *not* the rest of
 the stack. Anything that "looks missing" from Smooth Voice may simply be wired
@@ -35,13 +35,15 @@ layer, currently disabled), `conversation_buffer.py` (short-term), `brain.py`
 (3-layer facts/state/last-exchange), `session_memory.py`, `voice_memory.py`
 (the Smooth Voice adapter).
 
-**Voice tools** — 50 of them on the realtime agent, including `repair_argo`,
+**Voice tools** — 53 of them on the realtime agent, including `repair_argo`,
 `run_self_diagnostics`, `open_app` / `close_app` / `focus_app`,
 `play_music_from_era(era, genre, artist)`, `write_file` / `move_file` /
 `remove_file`, `write_in_app`, `set_volume`, `search_drives`, `think_deeply`,
-`recall`. Grep `@function_tool` before adding one.
+`recall`, `improve_argo`, `work_on_project`, `argo_roadmap`. Grep
+`@function_tool` before adding one.
 
-Where they live: `recall`, `repair_argo` and `think_deeply` are in
+Where they live: `recall`, `repair_argo`, `improve_argo`, `work_on_project`,
+`argo_roadmap` and `think_deeply` are in
 `core/voice/agent.py` (they need the agent's state); the other 47 are
 one-line doors in `core/voice/tools.py`, grouped by domain, onto bodies in
 `core/realtime_tools/` (a package: machine, files, music, apps, video,

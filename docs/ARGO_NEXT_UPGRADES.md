@@ -20,6 +20,13 @@ Next step: add optional live camera frame capture for repeated looks, with a vis
 
 Goal: let Tommy say a coding request to ARGO and have it become a concrete coding-agent task.
 
+Current status (2026-10-15): Smooth Voice can propose an ARGO feature or a
+change to a named local Git project. System shows the target, request, test
+command, progress, diff, and agent report. Passing ARGO changes auto-apply and
+commit; another project needs a supplied test command for auto-apply. ARGO
+roadmap search points to documented plans. The live paid Codex path and
+project-specific deployment still need end-to-end proof. See [Self Repair](SELF_REPAIR.md).
+
 Recommended safe architecture:
 
 1. ARGO records the request as a Markdown task file under `runtime/code_requests/`.

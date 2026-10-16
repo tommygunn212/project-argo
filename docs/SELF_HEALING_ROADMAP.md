@@ -1,5 +1,11 @@
 # ARGO Self-Healing Roadmap
 
+> Historical design from February 2026. Its proposed phases and "Forbidden
+> Forever" list describe the old runtime-recovery boundary, not the current
+> coding workflow. Tommy has since authorized feature and repair coding through
+> the isolated Codex workflow. See [Self Repair](SELF_REPAIR.md) and
+> [TODO](TODO.md) for current behavior and remaining proof.
+
 ## Vision: ARGO That Can Fix Itself
 
 This document outlines the path to making ARGO self-diagnosing and self-repairing. The goal is for ARGO to detect issues, understand what's wrong, and either fix itself or guide the user through resolution.

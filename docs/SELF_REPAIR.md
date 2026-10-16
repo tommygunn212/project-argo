@@ -31,29 +31,38 @@ Unsupported actions, failed return values, exceptions, expired proposals, and
 duplicate approvals report errors. The service does not infer success from a
 process launch or silently retry side-effecting commands.
 
-## Code repair with Astra
+## Code changes with Astra
 
-If checks cannot explain the symptom, say **“prepare code repair”**. ARGO records
-the complaint and diagnostic finding. You can also describe a problem directly
-in **System → Code Repair**.
+Say **“add this feature to ARGO”**, ask ARGO to work on a named local Git
+project, or enter the request in **System → Change ARGO**. Use **ARGO Roadmap**
+there, or ask Smooth Voice about the roadmap, to find a documented plan. Old
+plans are pointers for inspection, not proof that the feature is missing.
+For an unresolved runtime symptom, **“prepare code repair”** still records the
+diagnostic finding.
 
-1. Review the request and approve **Run Astra Repair**.
-2. ARGO requires a clean committed checkout matching the proposal's base commit.
+1. Review the exact request, project root, and optional project test command;
+   approve **Prepare Code Change**.
+2. ARGO requires tracked files to match a committed base. Unrelated untracked
+   work stays in place; an untracked file that collides with the patch blocks it.
 3. It creates an independent local Git clone under
    `runtime/code_requests/<job-id>/workspace`, detaches it at that commit, and
    removes its remote. Ignored local data and environment files are not copied.
 4. Local Codex runs `gpt-6-astra` with high reasoning and `workspace-write`, with
    automatic escalation disabled and user Codex configuration ignored. Local
    Codex authentication is still required. No model substitution is performed.
-5. ARGO tracks exit status and a 30-minute agent deadline, captures tracked and
-   new-file changes, and runs fixed focused pytest and Node UI checks in the
-   clone with the ARGO Python interpreter. Each command has a three-minute limit.
+5. ARGO tracks exit status and a 30-minute agent deadline and captures tracked
+   and new-file changes. For ARGO itself it runs focused pytest and Node checks.
+   For another Git project, supply its test command for independent verification;
+   otherwise ARGO runs only `git diff --check` and waits for manual review.
+   Each verification command has a three-minute limit.
 6. System shows progress, changed files, diff, test output, and the agent report.
    The report is agent-written; the separate test output is captured by ARGO.
-7. **Apply reviewed patch** appears only after a zero agent exit, passing tests,
-   an agent report, and a nonempty stable patch. It requires the reviewed hash,
-   unchanged base commit, and a clean running checkout. ARGO checks the patch
-   before applying it. It does not commit, push, or restart the running app.
+7. A zero agent exit, passing independent tests, an agent report, and a nonempty
+   stable patch trigger automatic apply and an atomic commit when the base has
+   not changed. Without a project test command, another project's patch waits
+   for explicit review and apply. ARGO never pushes automatically. For changes
+   to ARGO itself, System offers **Restart ARGO stack** so Smooth Voice loads
+   the new code; another project needs its own deployment and runtime proof.
 
 Job metadata, request, agent log, report, tests, and patch are kept in the job
 directory. The dashboard refreshes every five seconds while visible. After an
