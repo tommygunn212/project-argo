@@ -290,6 +290,9 @@ def build_frontend_handler(services):
                     'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
                     'avatar-motion.js': ('assets', 'application/javascript; charset=utf-8'),
                     'neural-orb.js': ('assets', 'application/javascript; charset=utf-8'),
+                    'milkdrop-visuals.js': ('assets', 'application/javascript; charset=utf-8'),
+                    'butterchurn.min.js': ('vendor', 'application/javascript; charset=utf-8'),
+                    'butterchurnPresets.min.js': ('vendor', 'application/javascript; charset=utf-8'),
                     'cortana_hedra_avatar_test.mp4': ('assets', 'video/mp4'),
                 }
                 if asset_name not in allowed_assets:

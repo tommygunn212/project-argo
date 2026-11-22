@@ -726,6 +726,21 @@ input:focus { border-color: var(--accent); box-shadow: var(--glow-sm); }
 .avatar-stage.orb-mode .avatar-video { visibility: hidden; }
 .avatar-stage.orb-mode::before { display: none; }
 .avatar-stage.orb-mode[data-state="ERROR"] { border-color: rgba(239,68,68,0.7); }
+/* ═══════ MILKDROP VISUALS (Winamp-style, dance to ARGO's voice) ═══════ */
+.viz-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
+  opacity: 0; pointer-events: none; transition: opacity 0.35s ease;
+}
+.avatar-stage.viz-mode { background: #000; }
+.avatar-stage.viz-mode .viz-canvas { opacity: 1; }
+.avatar-stage.viz-mode .orb-canvas,
+.avatar-stage.viz-mode .avatar-fallback,
+.avatar-stage.viz-mode .avatar-canvas,
+.avatar-stage.viz-mode .avatar-local-media,
+.avatar-stage.viz-mode .avatar-generated,
+.avatar-stage.viz-mode .avatar-video { visibility: hidden; }
+.avatar-stage.viz-mode::before { display: none; }
+.avatar-stage.viz-mode:fullscreen { border-radius: 0; }
 .avatar-picker {
   display: flex;
   flex-wrap: wrap;
@@ -1346,7 +1361,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="dash-hero">
         <div class="avatar-stage" id="dashAvatarStage" data-state="IDLE">
           <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
-          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasDash" role="img" aria-label="ARGO voice orb"></canvas>
+          <canvas class="avatar-canvas" id="avatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasDash" role="img" aria-label="ARGO voice orb"></canvas><canvas class="viz-canvas" id="vizCanvasDash" role="img" aria-label="MilkDrop visuals"></canvas>
           <div class="avatar-hud">
             <span>CORTANA PORTRAIT</span>
             <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -1359,7 +1374,7 @@ input[type="range"]::-moz-range-thumb {
             <legend>Avatar</legend>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="dashboardAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
           </fieldset>
         </div>
       </div>
@@ -1524,7 +1539,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="voice-avatar-row">
             <div class="avatar-stage" id="voiceAvatarStage" data-state="IDLE">
               <img class="avatar-fallback" src="/v2-assets/cortana_portrait_smirky.png" alt="Cortana portrait">
-              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasVoice" role="img" aria-label="ARGO voice orb"></canvas>
+              <canvas class="avatar-canvas" id="voiceAvatarCanvas" aria-label="Cortana voice-driven portrait"></canvas><canvas class="orb-canvas" id="orbCanvasVoice" role="img" aria-label="ARGO voice orb"></canvas><canvas class="viz-canvas" id="vizCanvasVoice" role="img" aria-label="MilkDrop visuals"></canvas>
               <div class="avatar-hud">
                 <span>CORTANA PORTRAIT</span>
                 <div class="avatar-signal" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -1559,7 +1574,7 @@ input[type="range"]::-moz-range-thumb {
                 <legend>Avatar</legend>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="voiceAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
               </fieldset>
             </div>
           </div>
@@ -2293,6 +2308,9 @@ input[type="range"]::-moz-range-thumb {
 <script src="/v2-assets/livekit-client.umd.js"></script>
 <script src="/v2-assets/cortana-avatar.js"></script>
 <script src="/v2-assets/neural-orb.js"></script>
+<script src="/v2-assets/butterchurn.min.js"></script>
+<script src="/v2-assets/butterchurnPresets.min.js"></script>
+<script src="/v2-assets/milkdrop-visuals.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    ARGO v2 — WebSocket Client & UI Logic
@@ -2320,9 +2338,10 @@ let realtimeAvatarVideoEls = [];
 let localAvatarMediaEls = [];
 let localAvatarMediaUrl = '';
 let avatarMode = 'orb';
+let milkdropReady = false;  // set by initMilkdrop(); read by syncOrbMode()
 try {
   const savedAvatar = localStorage.getItem('argo_avatar');
-  if (['auto', 'cortana', 'cyber_male', 'orb'].includes(savedAvatar)) avatarMode = savedAvatar;
+  if (['auto', 'cortana', 'cyber_male', 'orb', 'milkdrop'].includes(savedAvatar)) avatarMode = savedAvatar;
 } catch (_) {}
 let selectedAvatar = avatarMode === 'cyber_male' ? 'cyber_male' : 'cortana';
 let avatarMotionPreference = null;
@@ -3479,7 +3498,7 @@ function attachLocalAvatarRenderer(stage, el) {
 }
 
 function selectAvatar(value, persist = true) {
-  avatarMode = ['cortana', 'cyber_male', 'orb'].includes(value) ? value : 'auto';
+  avatarMode = ['cortana', 'cyber_male', 'orb', 'milkdrop'].includes(value) ? value : 'auto';
   if (persist) {
     try { localStorage.setItem('argo_avatar', avatarMode); } catch (_) {}
   }
@@ -3496,7 +3515,7 @@ function configureLocalAvatarMedia(status) {
   const voice = livekitConnected ? `openai:${livekitMeta.voice}` : $('ttsSelect').value;
   selectedAvatar = avatarMode === 'auto'
     ? (window.CortanaAvatar?.avatarForVoice(voice, selectedAvatar) || selectedAvatar)
-    : (avatarMode === 'orb' ? 'cortana' : avatarMode);
+    : (avatarMode === 'orb' || avatarMode === 'milkdrop' ? 'cortana' : avatarMode);
   const male = selectedAvatar === 'cyber_male';
   const name = male ? 'Cyber Male' : 'Cortana';
   document.querySelectorAll('.avatar-picker input').forEach(input => {
@@ -3562,6 +3581,13 @@ function configureLocalAvatarMedia(status) {
 function updateAvatarProviderDisplay(status) {
   const el = $('infoAvatar');
   if (!el) return;
+  if (avatarMode === 'milkdrop') {
+    const live = livekitConnected && Boolean(realtimeAvatarMeter);
+    el.textContent = `MILKDROP · ${live ? 'VOICE SYNC' : 'IDLE'}`;
+    el.style.color = 'var(--accent3)';
+    el.title = window.MilkdropVisuals?.presetName || 'Winamp-style visuals driven by ARGO voice audio.';
+    return;
+  }
   if (avatarMode === 'orb') {
     const live = livekitConnected && realtimeAvatarMeter?.audioContext.state === 'running';
     el.textContent = `NEURAL ORB · ${live ? 'VOICE SYNC' : 'LOCAL'}`;
@@ -4113,7 +4139,7 @@ function drawAvatarLoop(now) {
   const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : desktopLevel,dt) : 0;
   setAvatarState(avatarVisualState());
   portraitRenderers.forEach(renderer => {
-    if (avatarMode === 'orb') return;
+    if (avatarMode === 'orb' || avatarMode === 'milkdrop') return;
     const stage = renderer.canvas.closest('.avatar-stage');
     const localMedia = stage?.querySelector('.avatar-local-media');
     if (!stage?.classList.contains('has-video') && (!localMedia || renderer.image === localMedia)) {
@@ -4149,6 +4175,9 @@ const orbRenderers = [];
 function syncOrbMode() {
   const on = avatarMode === 'orb';
   avatarStages.forEach(stage => stage.classList.toggle('orb-mode', on));
+  const viz = avatarMode === 'milkdrop' && milkdropReady;
+  avatarStages.forEach(stage => stage.classList.toggle('viz-mode', viz));
+  window.MilkdropVisuals?.setActive(viz);
   document.querySelectorAll('.avatar-picker input').forEach(input => { input.checked = input.value === avatarMode; });
 }
 function orbLoop(now) {
@@ -4161,6 +4190,25 @@ function orbLoop(now) {
   const state = avatarVisualState();
   orbRenderers.forEach(orb => orb.draw(now, level, state, reduced));
 }
+function initMilkdrop() {
+  if (!window.MilkdropVisuals) return;
+  milkdropReady = window.MilkdropVisuals.init(document.querySelectorAll('.viz-canvas'));
+  if (!milkdropReady) {
+    addSystemLog('MilkDrop visuals need WebGL; using the orb instead.');
+    if (avatarMode === 'milkdrop') avatarMode = 'orb';
+  } else if (realtimeAvatarMeter) {
+    window.MilkdropVisuals.connect(realtimeAvatarMeter.audioContext, realtimeAvatarMeter.source);
+  }
+  avatarStages.forEach(stage => stage.addEventListener('dblclick', () => {
+    if (avatarMode !== 'milkdrop') return;
+    try {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else stage.requestFullscreen();
+    } catch (_) {}
+  }));
+  syncOrbMode();
+}
+
 function initOrb() {
   if (!window.NeuralOrb) {
     addSystemLog('Neural orb renderer unavailable; using the portrait instead.');
@@ -4182,6 +4230,7 @@ function stopRealtimeAvatarMeter() {
     return;
   }
   if (realtimeAvatarMeter.raf) cancelAnimationFrame(realtimeAvatarMeter.raf);
+  try { window.MilkdropVisuals?.disconnect(); } catch(e) {}
   try { realtimeAvatarMeter.source.disconnect(); } catch(e) {}
   try { realtimeAvatarMeter.analyser.disconnect(); } catch(e) {}
   try { realtimeAvatarMeter.silentOutput.disconnect(); } catch(e) {}
@@ -4207,6 +4256,7 @@ function setupRealtimeAvatarMeter(track) {
     const data = new Float32Array(analyser.fftSize);
     const meter = { audioContext, source, analyser, silentOutput, data, raf: null };
     realtimeAvatarMeter = meter;
+    if (milkdropReady) window.MilkdropVisuals.connect(audioContext, source);
 
     const sample = () => {
       if (realtimeAvatarMeter !== meter) return;
@@ -4718,6 +4768,7 @@ window.addEventListener('beforeunload', () => {
 function init() {
   initAvatar();
   initOrb();
+  initMilkdrop();
   initWaveform();
   initGateSliders();
   connect();
