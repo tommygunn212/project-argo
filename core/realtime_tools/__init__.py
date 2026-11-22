@@ -28,5 +28,6 @@ from core.realtime_tools.home import *  # noqa: F401,F403
 from core.realtime_tools.knowledge import *  # noqa: F401,F403
 from core.realtime_tools.machine import *  # noqa: F401,F403
 from core.realtime_tools.music import *  # noqa: F401,F403
+from core.realtime_tools.scheduling import *  # noqa: F401,F403
 from core.realtime_tools.video import *  # noqa: F401,F403
 from core.realtime_tools.writing import *  # noqa: F401,F403

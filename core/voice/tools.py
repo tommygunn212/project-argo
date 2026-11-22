@@ -355,6 +355,86 @@ class KnowledgeTools:
         return await _call(capabilities.rag_search, query)
 
 
+class SchedulingTools:
+    """Reminders and the calendar - she speaks up when a reminder comes due."""
+
+    @function_tool()
+    async def what_time_is_it(self) -> str:
+        """The exact local date and time. Use it before working out any relative
+        time or date ("in two hours", "next Tuesday") so you never guess."""
+        return await _call(capabilities.now_local)
+
+    @function_tool()
+    async def set_reminder(self, message: str, when: str) -> str:
+        """Remind Tommy of something at a time. message is what to remind him of,
+        in his words. when is 'in 20 minutes', 'tomorrow at 9am', 'friday 3pm',
+        or an exact local ISO time like 2026-11-22T20:00. You will say the
+        reminder out loud when it comes due."""
+        return await _call(capabilities.reminder_set, message, when)
+
+    @function_tool()
+    async def list_reminders(self) -> str:
+        """Reminders that have not gone off yet."""
+        return await _call(capabilities.reminders_upcoming)
+
+    @function_tool()
+    async def cancel_reminder(self, match: str) -> str:
+        """Cancel the next reminder whose text contains match."""
+        return await _call(capabilities.reminder_cancel, match)
+
+    @function_tool()
+    async def add_calendar_event(self, title: str, when: str, duration_minutes: int = 60,
+                                 location: str = "") -> str:
+        """Put an event on Tommy's ARGO calendar. when takes the same forms as
+        set_reminder."""
+        return await _call(capabilities.calendar_add, title, when, duration_minutes, location)
+
+    @function_tool()
+    async def list_calendar(self, day: str = "", days_ahead: int = 7) -> str:
+        """Calendar events: for one day ('today', 'tomorrow', 'friday', or an ISO
+        date), or the next days_ahead days when day is empty."""
+        return await _call(capabilities.calendar_list, day, days_ahead)
+
+    @function_tool()
+    async def cancel_calendar_event(self, match: str) -> str:
+        """Remove the next upcoming calendar event whose title contains match."""
+        return await _call(capabilities.calendar_cancel, match)
+
+
+class JournalTools:
+    """What happened when, what's still open, and the morning briefing."""
+
+    @function_tool()
+    async def where_we_left_off(self, when: str = "yesterday") -> str:
+        """What you and Tommy talked about, decided and left open on a given day:
+        'today', 'yesterday', 'two days ago', 'thursday', 'last friday' or an ISO
+        date. Use it for "where did we leave off", "what were we doing Tuesday",
+        "pick up where we left off" - recall searches by topic, this searches by
+        day. Speak from the summary; never read it out verbatim."""
+        return await _call(capabilities.conversation_recap, when)
+
+    @function_tool()
+    async def whats_pending(self) -> str:
+        """Things still open from the last week of conversations - unfinished,
+        promised or planned - plus upcoming reminders and calendar events. Use
+        for "what's pending", "what am I forgetting", "what's left to do"."""
+        return await _call(capabilities.pending_items)
+
+    @function_tool()
+    async def mark_pending_done(self, item: str) -> str:
+        """Mark an open item finished so it stops coming up as pending. Pass the
+        item in a few words ("Feit lights re-added")."""
+        return await _call(capabilities.pending_done, item)
+
+    @function_tool()
+    async def morning_briefing(self) -> str:
+        """Today's rundown: calendar, reminders due, what's pending, background
+        jobs, and where things were left last time. Give it as a short, natural
+        spoken briefing - the headlines first, offer details."""
+        return await _call(capabilities.daily_briefing)
+
+
 class CapabilityTools(MachineTools, FileTools, MusicTools, AppTools, VideoTools,
-                      HomeTools, WritingTools, KnowledgeTools):
+                      HomeTools, WritingTools, KnowledgeTools, SchedulingTools,
+                      JournalTools):
     """Every capability tool, for the agent to inherit."""
