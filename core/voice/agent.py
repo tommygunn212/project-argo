@@ -47,10 +47,12 @@ def _post_repair_request(text: str, *, kind: str = "repair", project_path: str =
 class ArgoRealtimeAgent(CapabilityTools, Agent):
     """ARGO's realtime agent: one per room session."""
 
-    def __init__(self, cfg: LiveKitRealtimeConfig, memory=None) -> None:
+    def __init__(self, cfg: LiveKitRealtimeConfig, memory=None, extra_tools=None) -> None:
         self._cfg = cfg
         self._memory = memory
+        # extra_tools: connected MCP toolsets from core.voice.mcp_bridge, if any.
         super().__init__(instructions=self._opening_instructions(cfg, memory),
+                         tools=list(extra_tools or []),
                          allow_interruptions=True)
 
     @staticmethod

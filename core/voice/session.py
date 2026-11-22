@@ -28,6 +28,7 @@ from core.voice.action_log import wire_action_log
 from core.voice.activity import ensure_logging, log_session_activity
 from core.voice.agent import ArgoRealtimeAgent
 from core.voice.avatars import start_avatar
+from core.voice.mcp_bridge import close_toolsets, ready_toolsets
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 
@@ -171,10 +172,13 @@ def _new_session(cfg: LiveKitRealtimeConfig) -> AgentSession:
 async def _start_in_room(ctx: JobContext, cfg: LiveKitRealtimeConfig, memory):
     """Build a session on cfg.model, attach any avatar, and start it in the room."""
     session = _new_session(cfg)
+    # Plug-ins connect before the session starts, and any that fail are left
+    # out: a dead MCP server must never cost ARGO her voice.
+    plugins = await ready_toolsets()
     avatar = await start_avatar(session, ctx.room)
     try:
         await session.start(
-            agent=ArgoRealtimeAgent(cfg, memory=memory),
+            agent=ArgoRealtimeAgent(cfg, memory=memory, extra_tools=plugins),
             room=ctx.room,
             room_input_options=room_io.RoomInputOptions(
                 audio_enabled=True,
@@ -193,7 +197,10 @@ async def _start_in_room(ctx: JobContext, cfg: LiveKitRealtimeConfig, memory):
                 await avatar.aclose()
         with contextlib.suppress(Exception):
             await session.aclose()
+        await close_toolsets(plugins)
         raise
+    if plugins:
+        ctx.add_shutdown_callback(lambda *_: close_toolsets(plugins))
     return session, avatar
 
 
