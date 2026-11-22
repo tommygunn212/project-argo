@@ -38,6 +38,50 @@ def _load_ha_config() -> Dict:
         return {}
 
 
+# Home Assistant runs in a Hyper-V VM on the "Default Switch", whose NAT range
+# moves after a host reboot (2026-09-19: .109.193 -> 172.26.52.139; 2026-11-22:
+# -> 172.22.100.209). When the configured address stops answering, ARGO finds
+# the VM again by its mDNS name and remembers the new address here, so the
+# lights don't silently die after every reboot.
+_RESOLVED_URL_FILE = _CONFIG_PATH.parent / "runtime" / "home_assistant_url.txt"
+
+
+def _base_url(cfg: Dict) -> str:
+    try:
+        remembered = _RESOLVED_URL_FILE.read_text(encoding="utf-8").strip()
+        if remembered:
+            return remembered.rstrip("/")
+    except OSError:
+        pass
+    return str(cfg.get("url", "")).rstrip("/")
+
+
+def _rediscover(cfg: Dict, current: str) -> Optional[str]:
+    """Look the VM up by mDNS (IPv4 only); return a new base URL if it moved."""
+    import socket
+    from urllib.parse import urlparse
+
+    host = str(cfg.get("mdns_host") or "homeassistant.local")
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET)
+    except OSError:
+        return None
+    if not infos:
+        return None
+    ip = infos[0][4][0]
+    parsed = urlparse(current or str(cfg.get("url", "")))
+    candidate = f"{parsed.scheme or 'http'}://{ip}:{parsed.port or 8123}"
+    if candidate.rstrip("/") == (current or "").rstrip("/"):
+        return None
+    try:
+        _RESOLVED_URL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _RESOLVED_URL_FILE.write_text(candidate, encoding="utf-8")
+    except OSError:
+        pass
+    logger.warning(f"Home Assistant moved: {current} -> {candidate} (found via {host})")
+    return candidate
+
+
 def is_home_assistant_configured() -> bool:
     cfg = _load_ha_config()
     return bool(cfg.get("url") and cfg.get("token"))
@@ -54,11 +98,28 @@ def _ha_request(
 ) -> dict:
     """Make an authenticated request to the Home Assistant REST API."""
     cfg = _load_ha_config()
-    url = cfg.get("url", "").rstrip("/")
+    url = _base_url(cfg)
     token = cfg.get("token", "")
     if not url or not token:
         raise RuntimeError("Home Assistant not configured. Add home_assistant.url and home_assistant.token to config.json.")
+    try:
+        return _ha_send(method, url, path, body, token, cfg, timeout)
+    except _Unreachable as first:
+        moved = _rediscover(cfg, url)
+        if not moved:
+            raise RuntimeError(f"Cannot reach Home Assistant: {first}")
+        try:
+            return _ha_send(method, moved, path, body, token, cfg, timeout)
+        except _Unreachable as second:
+            raise RuntimeError(f"Cannot reach Home Assistant: {second}")
 
+
+class _Unreachable(Exception):
+    pass
+
+
+def _ha_send(method: str, url: str, path: str, body: Optional[dict], token: str,
+             cfg: Dict, timeout: Optional[float]) -> dict:
     full_url = f"{url}/api/{path.lstrip('/')}"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -84,7 +145,10 @@ def _ha_request(
         raise RuntimeError(f"Home Assistant returned {e.code}: {e.reason}")
     except URLError as e:
         logger.error(f"HA connection error: {e.reason}")
-        raise RuntimeError(f"Cannot reach Home Assistant: {e.reason}")
+        raise _Unreachable(e.reason)
+    except (TimeoutError, OSError) as e:
+        logger.error(f"HA connection error: {e}")
+        raise _Unreachable(e)
 
 
 def _ha_post(path: str, body: Optional[dict] = None) -> dict:
@@ -98,15 +162,15 @@ def _ha_get(path: str) -> dict:
 def get_connection_status(timeout: float = 3.0) -> dict:
     """Return a UI-safe Home Assistant readiness snapshot."""
     cfg = _load_ha_config()
-    url = str(cfg.get("url") or "").rstrip("/")
+    url = _base_url(cfg)
     configured = bool(url and cfg.get("token"))
     if not configured:
         return {"configured": False, "connected": False, "url": url}
     try:
         _ha_request("GET", "", timeout=timeout)
     except (RuntimeError, ValueError):
-        return {"configured": True, "connected": False, "url": url}
-    return {"configured": True, "connected": True, "url": url}
+        return {"configured": True, "connected": False, "url": _base_url(cfg)}
+    return {"configured": True, "connected": True, "url": _base_url(cfg)}
 
 
 # ── Device discovery ──────────────────────────────────────────────────
@@ -121,10 +185,11 @@ DOMAIN_FRIENDLY = {
     "lock": "lock",
     "scene": "scene",
     "automation": "automation",
+    "vacuum": "vacuum",
 }
 
 # Domains we expose to voice control
-CONTROLLABLE_DOMAINS = {"light", "switch", "climate", "media_player", "fan", "cover", "lock", "scene"}
+CONTROLLABLE_DOMAINS = {"light", "switch", "climate", "media_player", "fan", "cover", "lock", "scene", "vacuum"}
 _ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 
@@ -202,6 +267,19 @@ def turn_off(entity_id: str) -> str:
     _ha_post(f"services/{domain}/turn_off", {"entity_id": entity_id})
     friendly = _get_friendly_name(entity_id)
     return f"{friendly} turned off."
+
+
+VACUUM_SERVICES = {"vacuum_start": ("start", "is cleaning"),
+                   "vacuum_stop": ("pause", "has stopped"),
+                   "vacuum_dock": ("return_to_base", "is heading back to its dock")}
+
+
+def vacuum_command(entity_id: str, action: str) -> str:
+    """Start, stop or dock a robot vacuum / mop (Roomba, Braava) via Home Assistant."""
+    _validate_entity_id(entity_id, controllable=True)
+    service, said = VACUUM_SERVICES[action]
+    _ha_post(f"services/vacuum/{service}", {"entity_id": entity_id})
+    return f"{_get_friendly_name(entity_id)} {said}."
 
 
 def toggle(entity_id: str) -> str:
@@ -358,6 +436,22 @@ def parse_smart_home_command(text: str) -> Dict:
     text = (text or "").strip()
     lower = text.lower()
     result: Dict = {"action": None, "device": "", "domain": None, "value": None, "mode": None}
+
+    # ── Robot vacuum / mop (Roomba, Braava) ──
+    if re.search(r"\b(roomba|braava|vacuum|hoover|mop|robot)\b", lower):
+        name = "mop" if re.search(r"\b(braava|mop)\b", lower) else "vacuum"
+        if re.search(r"\b(dock|home|base|charge|charging)\b", lower):
+            result["action"] = "vacuum_dock"
+        elif re.search(r"\b(stop|pause|halt|enough|quit)\b", lower):
+            result["action"] = "vacuum_stop"
+        elif re.search(r"\b(start|clean|run|go|vacuum the|mop the|begin)\b", lower):
+            result["action"] = "vacuum_start"
+        elif re.search(r"\b(status|where|doing|state)\b", lower):
+            result["action"] = "status"
+        if result["action"]:
+            result["device"] = "braava" if name == "mop" else "roomba"
+            result["domain"] = "vacuum"
+            return result
 
     # ── Scene activation ──
     m = re.search(r"\b(activate|set|trigger)\s+(the\s+)?(.+?)\s+scene\b", lower)
@@ -529,6 +623,17 @@ def execute_smart_home_command(text: str) -> str:
             pct = int(attrs["brightness"] * 100 / 255)
             info += f" Brightness is {pct}%."
         return info
+
+    if action in VACUUM_SERVICES:
+        device_name = parsed.get("device", "")
+        entity_id = resolve_entity(device_name, "vacuum")
+        if not entity_id:
+            vacuums = [d for d in list_devices("vacuum")]
+            entity_id = vacuums[0]["entity_id"] if len(vacuums) == 1 else None
+        if not entity_id:
+            return ("I couldn't find the Roomba or Braava in Home Assistant. Add the iRobot "
+                    "integration there first (Settings, Devices and services).")
+        return vacuum_command(entity_id, action)
 
     if action == "activate_scene":
         scene_name = parsed.get("device", "")
