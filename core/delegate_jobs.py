@@ -1,5 +1,9 @@
 """Hand open-ended work to a full coding agent and keep talking while it runs.
 
+Two engines: OpenAI Codex (``codex exec``, the default - it runs on Tommy's
+ChatGPT plan, so jobs come out of that subscription with no per-job bill) and
+Claude Code (``claude -p``, per-use or Agent SDK credit depending on login).
+
 The realtime voice model is fast but can only call the tools it was given.
 Anything that needs real hands - research across the web, making folders and
 files, writing and running code, finding an STL and saving it - goes here: a
@@ -17,7 +21,8 @@ has an answer. Settings live in config.json -> "delegate":
 
     "delegate": {
       "enabled": true,
-      "command": "claude",
+      "engine": "codex",                     # or "claude"
+      "command": "",                         # path to the CLI; found automatically if empty
       "workspace": "I:/argo-workspace",
       "permission_mode": "bypassPermissions",
       "timeout_s": 1800,
@@ -61,10 +66,17 @@ and anything Tommy needs to decide. Say plainly if something failed or could
 not be verified. Never print or copy secrets from config.json or .env files."""
 
 
+CODEX_DEFAULT_MODEL = "gpt-6-astra"
+CODEX_FALLBACK_PATHS = (
+    Path(os.environ.get("LOCALAPPDATA", "")) / "OpenAI" / "Codex" / "bin" / "codex.exe",
+)
+
+
 @dataclass(frozen=True)
 class DelegateSettings:
     enabled: bool = True
-    command: str = "claude"
+    engine: str = "codex"
+    command: str = ""
     workspace: str = str(ROOT / "runtime" / "agent_workspace")
     permission_mode: str = "bypassPermissions"
     timeout_s: float = 1800.0
@@ -84,8 +96,10 @@ def load_settings(config: dict | None = None) -> DelegateSettings:
     enabled = bool(raw.get("enabled", base.enabled))
     if env is not None and env.strip():
         enabled = env.strip().lower() in {"1", "true", "yes", "on"}
+    engine = str(os.getenv("ARGO_DELEGATE_ENGINE") or raw.get("engine") or base.engine).lower()
     return DelegateSettings(
         enabled=enabled,
+        engine=engine if engine in {"codex", "claude"} else "codex",
         command=str(raw.get("command") or base.command),
         workspace=str(raw.get("workspace") or base.workspace),
         permission_mode=str(raw.get("permission_mode") or base.permission_mode),
@@ -129,9 +143,62 @@ _jobs: dict[str, Job] = {}
 _tasks: dict[str, asyncio.Task] = {}
 
 
-def build_command(settings: DelegateSettings, executable: str) -> list[str]:
+def resolve_executable(settings: DelegateSettings) -> str | None:
+    """The engine's CLI: the configured path, then PATH, then known install spots."""
+    if settings.command:
+        found = shutil.which(settings.command)
+        if found:
+            return found
+        return settings.command if Path(settings.command).exists() else None
+    name = "codex" if settings.engine == "codex" else "claude"
+    found = shutil.which(name)
+    if found:
+        return found
+    if settings.engine == "codex":
+        bundled = _codex_from_desktop_app()
+        if bundled:
+            return bundled
+        for candidate in CODEX_FALLBACK_PATHS:
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+def _codex_from_desktop_app() -> str | None:
+    """The CLI bundled with the Codex desktop app (kept current by the app's own
+    updates). Its folder name changes with every version and WindowsApps can't
+    be listed, so ask Windows where the package lives."""
+    if os.name != "nt":
+        return None
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "(Get-AppxPackage OpenAI.Codex).InstallLocation"],
+            capture_output=True, text=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+    except Exception:
+        return None
+    candidate = Path(out.splitlines()[0]) / "app" / "resources" / "codex.exe" if out else None
+    return str(candidate) if candidate and candidate.exists() else None
+
+
+def build_command(settings: DelegateSettings, executable: str,
+                  result_file: str = "") -> list[str]:
     """The headless agent command line. The task itself goes in on stdin, so no
     shell quoting (cmd.exe on Windows) can mangle or inject into it."""
+    if settings.engine == "codex":
+        # Files only inside the job's folder, but the network is open so it can
+        # research and download. "-" = read the task from stdin.
+        cmd = [executable, "exec", "--skip-git-repo-check",
+               "-c", 'approval_policy="never"', "--sandbox", "workspace-write",
+               "-c", "sandbox_workspace_write.network_access=true"]
+        if result_file:
+            cmd += ["-o", result_file]
+        # Tommy's own Codex default (gpt-6-sol) is refused on a ChatGPT-plan
+        # login; gpt-6-astra is what ARGO's code-repair bridge already runs on.
+        cmd += ["-m", settings.model or CODEX_DEFAULT_MODEL]
+        return cmd + ["-"]
     cmd = [executable, "-p", "--output-format", "json",
            "--permission-mode", settings.permission_mode]
     if settings.model:
@@ -168,9 +235,10 @@ async def start(task: str, folder: str = "", *, settings: DelegateSettings | Non
     if running_count() >= settings.max_running:
         return {"ok": False, "message": f"{running_count()} jobs are already running; "
                                         "wait for one to finish or cancel one."}
-    executable = shutil.which(settings.command)
+    executable = resolve_executable(settings)
     if not executable:
-        return {"ok": False, "message": f"The agent command '{settings.command}' is not on PATH."}
+        return {"ok": False, "message": f"The {settings.engine} agent CLI is not installed or "
+                                        "not on PATH."}
     workdir = Path(folder).expanduser() if folder else Path(settings.workspace)
     try:
         workdir.mkdir(parents=True, exist_ok=True)
@@ -194,8 +262,9 @@ async def _run(job: Job, settings: DelegateSettings, executable: str,
     prompt = AGENT_BRIEF.format(task=job.task)
     process = None
     try:
+        result_file = str(job.job_dir / "last_message.txt")
         process = await asyncio.create_subprocess_exec(
-            *build_command(settings, executable), cwd=job.folder,
+            *build_command(settings, executable, result_file), cwd=job.folder,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -208,7 +277,14 @@ async def _run(job: Job, settings: DelegateSettings, executable: str,
             (job.job_dir / "result.json").write_text(out, encoding="utf-8")
             if err.strip():
                 (job.job_dir / "stderr.txt").write_text(err, encoding="utf-8")
-        ok, summary, cost = parse_result(out)
+        if settings.engine == "codex":
+            try:
+                summary = Path(result_file).read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                summary = ""
+            ok, cost = bool(summary), None
+        else:
+            ok, summary, cost = parse_result(out)
         job.summary, job.cost_usd = summary, cost
         job.status = "done" if ok and process.returncode == 0 else "failed"
         if job.status == "failed":

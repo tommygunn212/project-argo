@@ -15,12 +15,12 @@ FAKE_CLI = str(Path(__file__).parent / "fixtures" / "fake_agent_cli.py")
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "JOBS_DIR", tmp_path / "jobs")
-    monkeypatch.setattr(D, "build_command", lambda settings, exe: [sys.executable, FAKE_CLI])
+    monkeypatch.setattr(D, "build_command", lambda settings, exe, result_file="": [sys.executable, FAKE_CLI])
     monkeypatch.setattr(D, "_jobs", {})
     monkeypatch.setattr(D, "_tasks", {})
     monkeypatch.delenv("ARGO_DELEGATE_ENABLED", raising=False)
-    settings = D.DelegateSettings(command="python", workspace=str(tmp_path / "work"),
-                                  timeout_s=20)
+    settings = D.DelegateSettings(engine="claude", command="python",
+                                  workspace=str(tmp_path / "work"), timeout_s=20)
     monkeypatch.setattr(D.shutil, "which", lambda name: sys.executable)
     return settings, tmp_path
 
@@ -76,9 +76,9 @@ def test_switched_off_means_nothing_starts(setup, monkeypatch):
 
 def test_missing_cli_is_a_clear_message(setup, monkeypatch):
     settings, _ = setup
-    monkeypatch.setattr(D.shutil, "which", lambda name: None)
+    monkeypatch.setattr(D, "resolve_executable", lambda s: None)
     result, _ = _run_job("anything", settings)
-    assert result["ok"] is False and "not on PATH" in result["message"]
+    assert result["ok"] is False and "not installed" in result["message"]
 
 
 def test_running_limit_is_enforced(setup):
@@ -106,9 +106,19 @@ def test_parse_result_reads_the_cli_json():
 
 
 def test_task_goes_in_on_stdin_not_the_command_line():
-    cmd = D.build_command(D.DelegateSettings(), "claude")
+    cmd = D.build_command(D.DelegateSettings(engine="claude"), "claude")
     assert cmd[:2] == ["claude", "-p"] and "--permission-mode" in cmd
     assert not any("Tommy" in part for part in cmd)
+    codex = D.build_command(D.DelegateSettings(), "codex", "out.txt")
+    assert codex[:2] == ["codex", "exec"] and codex[-1] == "-"
+    assert "workspace-write" in codex and ["-o", "out.txt"] == codex[codex.index("-o"):codex.index("-o") + 2]
+
+
+def test_codex_is_the_default_engine(monkeypatch):
+    monkeypatch.delenv("ARGO_DELEGATE_ENGINE", raising=False)
+    assert D.load_settings({}).engine == "codex"
+    assert D.load_settings({"delegate": {"engine": "claude"}}).engine == "claude"
+    assert D.load_settings({"delegate": {"engine": "nonsense"}}).engine == "codex"
 
 
 def test_the_agent_exposes_the_delegate_tools():
@@ -116,3 +126,13 @@ def test_the_agent_exposes_the_delegate_tools():
 
     for name in ("delegate_task", "check_background_tasks", "cancel_background_task"):
         assert hasattr(agent_mod.ArgoRealtimeAgent, name)
+
+
+def test_a_codex_job_reports_its_last_message(setup, monkeypatch):
+    settings, tmp = setup
+    codex = D.DelegateSettings(**{**settings.__dict__, "engine": "codex"})
+    monkeypatch.setattr(D, "build_command",
+                        lambda s, exe, result_file="": [sys.executable, FAKE_CLI, "-o", result_file])
+    _result, done = _run_job("make a file", codex)
+    assert done[0].status == "done" and "made_by_agent.txt" in done[0].summary
+    assert done[0].cost_usd is None

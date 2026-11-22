@@ -14,6 +14,10 @@ if "FAIL" in prompt:
                       "is_error": True, "result": "could not do it"}))
     sys.exit(1)
 Path("made_by_agent.txt").write_text("hi from argo", encoding="utf-8")
+if "-o" in sys.argv:  # codex exec style: the last message goes to a file
+    Path(sys.argv[sys.argv.index("-o") + 1]).write_text(
+        "I created made_by_agent.txt in the work folder.", encoding="utf-8")
+    sys.exit(0)
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
                   "result": "I created made_by_agent.txt in the work folder.",
                   "total_cost_usd": 0.01}))

@@ -129,7 +129,8 @@
 
   "delegate": {
     "enabled": true,
-    "command": "claude",
+    "engine": "codex",
+    "command": "",
     "workspace": "I:/argo-workspace",
     "permission_mode": "bypassPermissions",
     "timeout_s": 1800,
