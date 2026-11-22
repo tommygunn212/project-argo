@@ -24,6 +24,7 @@ from core.livekit_config import (
     get_livekit_realtime_config,
     speaker_identity_status,
 )
+from core.voice.action_log import wire_action_log
 from core.voice.activity import ensure_logging, log_session_activity
 from core.voice.agent import ArgoRealtimeAgent
 from core.voice.avatars import start_avatar
@@ -85,6 +86,7 @@ async def run_realtime_session(ctx: JobContext) -> None:
         ctx.add_shutdown_callback(avatar.aclose)
 
     log_session_activity(session, room=ids.room, memory=memory)
+    wire_action_log(session, room=ids.room)
     wire_urgent_interrupts(session, cfg)
     wire_wake_sleep_gate(session, cfg)
     _announce_active(cfg, model, ids)
