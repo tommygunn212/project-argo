@@ -32,6 +32,7 @@ from core.voice.mcp_bridge import close_toolsets, ready_toolsets
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 from core.voice.proactive import start_proactive
+from core.voice.voice_output import build_tts
 
 logger = logging.getLogger("ARGO.LiveKit")
 
@@ -152,14 +153,20 @@ def _log_live_config(cfg: LiveKitRealtimeConfig, room: str) -> None:
 
 
 def _new_session(cfg: LiveKitRealtimeConfig) -> AgentSession:
+    # A designed ElevenLabs voice, if configured and usable; otherwise None and
+    # the realtime model speaks with its own voice exactly as before.
+    tts = build_tts()
     try:
-        llm = build_realtime_model(cfg)
+        llm = build_realtime_model(cfg, text_only=tts is not None)
     except Exception as exc:
         voice_events.emit("model_build_failed", model=cfg.model, error=redacted_error(exc))
         raise
-    voice_events.emit("model_built", model=cfg.model, voice=cfg.voice)
+    voice_events.emit("model_built", model=cfg.model, voice=cfg.voice,
+                      speaks_with="elevenlabs" if tts is not None else "realtime")
+    extra = {"tts": tts} if tts is not None else {}
     return AgentSession(
         llm=llm,
+        **extra,
         allow_interruptions=True,
         min_interruption_duration=cfg.min_interruption_duration,
         # Was 0: a cough, a chair creak or a stray "uh" cut ARGO off

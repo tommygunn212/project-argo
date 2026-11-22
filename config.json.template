@@ -135,5 +135,24 @@
     "timeout_s": 1800,
     "max_running": 2,
     "model": ""
+  },
+
+  "proactive": {
+    "enabled": true,
+    "interval_s": 30,
+    "morning_offer": true
+  },
+
+  "voice_output": {
+    "provider": "openai",
+    "elevenlabs": {
+      "voice_id": "",
+      "model": "eleven_flash_v2_5",
+      "stability": 0.45,
+      "similarity_boost": 0.8,
+      "style": 0.35,
+      "speed": 1.0
+    },
+    "fallback_openai_voice": "ash"
   }
 }

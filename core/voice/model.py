@@ -140,12 +140,18 @@ def _require_openai_key() -> str:
     return api_key
 
 
-def build_realtime_model(cfg: LiveKitRealtimeConfig) -> openai.realtime.RealtimeModel:
-    """The realtime model for one session, tuned from config."""
+def build_realtime_model(cfg: LiveKitRealtimeConfig, *,
+                         text_only: bool = False) -> openai.realtime.RealtimeModel:
+    """The realtime model for one session, tuned from config.
+
+    text_only: the model answers in text and a separate TTS (ElevenLabs, see
+    core.voice.voice_output) speaks it. Listening, turn-taking and tools are
+    unchanged.
+    """
     kwargs: dict[str, Any] = dict(
         model=cfg.model,
         voice=cfg.voice,
-        modalities=["text", "audio"],
+        modalities=["text"] if text_only else ["text", "audio"],
         api_key=_require_openai_key(),
         temperature=cfg.temperature,
         speed=cfg.speed,
