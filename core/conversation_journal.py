@@ -215,6 +215,12 @@ Summarizer = Callable[[str, str], str]  # (system_prompt, transcript) -> JSON te
 def _openai_summarizer(system: str, transcript: str) -> str:
     from openai import OpenAI
 
+    try:  # the key may live only in the Windows User environment (see runtime_guard)
+        from core.runtime_guard import ensure_openai_key
+
+        ensure_openai_key()
+    except Exception:
+        pass
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set")
     client = OpenAI()

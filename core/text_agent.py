@@ -177,6 +177,12 @@ async def _run_tool(name: str, raw_args: str, notify: Notify | None) -> str:
 def _client():
     from openai import AsyncOpenAI
 
+    try:  # the key may live only in the Windows User environment (see runtime_guard)
+        from core.runtime_guard import ensure_openai_key
+
+        ensure_openai_key()
+    except Exception:
+        pass
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set")
     return AsyncOpenAI()

@@ -163,7 +163,13 @@ def status(settings: VoiceOutputSettings | None = None) -> dict:
             problems.append("ELEVEN_API_KEY missing from .env")
         if not voice.voice_id:
             problems.append("no voice_id")
-        if _elevenlabs is None:
+        # The dashboard backend imports this module off its main thread, where
+        # LiveKit refuses plugin registration - so ask pip, not the import.
+        try:
+            from importlib.metadata import version
+
+            version("livekit-plugins-elevenlabs")
+        except Exception:
             problems.append("ElevenLabs plugin not installed")
         return {"provider": "elevenlabs", "ready": not problems, "voice_id": voice.voice_id,
                 "model": voice.model, "label": voice.name or "ElevenLabs voice",
