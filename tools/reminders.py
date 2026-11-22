@@ -129,8 +129,14 @@ def get_due_reminders() -> List[Dict]:
         ).fetchall()
         results = []
         for rid, msg, due in rows:
-            conn.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (rid,))
-            results.append({"id": rid, "message": msg, "due_at": due})
+            # Claim it atomically: with more than one checker (two rooms, or the
+            # classic pipeline and Smooth Voice) only the one whose UPDATE hits
+            # gets to announce it, so a reminder never fires twice.
+            claimed = conn.execute(
+                "UPDATE reminders SET fired = 1 WHERE id = ? AND fired = 0", (rid,)
+            ).rowcount
+            if claimed:
+                results.append({"id": rid, "message": msg, "due_at": due})
         conn.commit()
         return results
     finally:
