@@ -109,5 +109,31 @@
         { "name": "Gate 5: Report ID Match", "summary": "The dry-run report ID must also match to prevent mismatched artifacts." }
       ]
     }
+  },
+
+  "mcp": {
+    "enabled": false,
+    "connect_timeout_s": 8,
+    "servers": [
+      {
+        "id": "home",
+        "enabled": false,
+        "transport": "http",
+        "url": "http://HOME_ASSISTANT_IP:8123/api/mcp",
+        "headers_env": { "Authorization": "HA_MCP_TOKEN" },
+        "header_prefix": { "Authorization": "Bearer " },
+        "allowed_tools": []
+      }
+    ]
+  },
+
+  "delegate": {
+    "enabled": true,
+    "command": "claude",
+    "workspace": "I:/argo-workspace",
+    "permission_mode": "bypassPermissions",
+    "timeout_s": 1800,
+    "max_running": 2,
+    "model": ""
   }
 }

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from livekit.agents import Agent, function_tool
 
-from core import deep_think, voice_events
+from core import deep_think, delegate_jobs, voice_events
 from core.livekit_config import LiveKitRealtimeConfig
 from core.voice.tools import CapabilityTools
 
@@ -206,6 +206,58 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
             return json.dumps({"ok": False, "message": deep_think.spoken_failure(result)})
         return json.dumps({"ok": True, "answer": result.text, "model": result.model,
                            "elapsed_ms": result.elapsed_ms})
+
+    @function_tool()
+    async def delegate_task(self, task: str, folder: str = "") -> str:
+        """Hand a real job to your background agent - your hands - and keep talking.
+
+        Use this whenever Tommy asks for something none of your other tools can
+        do, INSTEAD of telling him you can't: research on the web, finding and
+        downloading files (an STL, a datasheet, a manual), making folders and
+        documents, writing and running scripts, comparing products, anything
+        multi-step. Pass his request in his own words with every detail he gave
+        (sizes, colors, materials, where to save). Optionally pass an absolute
+        folder to work in. It runs in the background and can take minutes: tell
+        him you're on it, and you'll be told when it finishes. Do NOT use it for
+        code changes to ARGO herself (improve_argo) or to a Git project
+        (work_on_project).
+        """
+        result = await delegate_jobs.start(task, folder, on_done=self._report_delegate_done)
+        voice_events.emit("delegate_start", ok=result.get("ok"), job_id=result.get("job_id", ""))
+        return json.dumps(result)
+
+    @function_tool()
+    async def check_background_tasks(self, job_id: str = "") -> str:
+        """What your background agent jobs are doing: running, done, or failed,
+        with each finished job's summary. Leave job_id empty for all of them."""
+        return json.dumps(delegate_jobs.status(job_id), default=str)
+
+    @function_tool()
+    async def cancel_background_task(self, job_id: str) -> str:
+        """Stop a running background agent job. Get the id from check_background_tasks."""
+        return json.dumps(delegate_jobs.cancel(job_id))
+
+    async def _report_delegate_done(self, job) -> None:
+        """Tell Tommy a background job finished, in her own voice.
+
+        If he is mid-sentence the reply waits its turn like any other; if the
+        sleep gate is on, the gate cuts it off and the result stays in
+        check_background_tasks for later.
+        """
+        voice_events.emit("delegate_done", job_id=job.id, status=job.status)
+        if job.status == "done":
+            note = (f"A background job you started just finished. The task was: {job.task[:300]}. "
+                    f"Its report: {job.summary[:1200]}. Tell Tommy the outcome in one or two "
+                    "natural sentences - what was done and where - without reading it verbatim.")
+        else:
+            note = (f"A background job you started did not finish ({job.status}). The task was: "
+                    f"{job.task[:300]}. Problem: {job.error[:300]}. Tell Tommy briefly and "
+                    "plainly what went wrong.")
+        try:
+            self.session.generate_reply(instructions=note, allow_interruptions=True)
+        except Exception:
+            logger.info("[Delegate] job %s finished but the session is gone; "
+                        "result kept for check_background_tasks", job.id)
 
     def _recent_history(self) -> list[dict]:
         """The last few spoken turns, so the deep model knows what "that" means."""
