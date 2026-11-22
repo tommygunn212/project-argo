@@ -372,6 +372,33 @@ class MemoryStore:
         ]
 
 
+    def turns_between(self, start_utc: str, end_utc: str,
+                      limit: int = 400) -> List[ConversationTurnRecord]:
+        """Turns whose UTC timestamp falls in [start_utc, end_utc), oldest first.
+
+        Timestamps are ISO-8601 UTC strings ending in Z, so they sort and
+        compare correctly as text.
+        """
+        limit = max(1, min(int(limit or 400), 2000))
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, user_text, assistant_text, source, intent, metadata, timestamp "
+                "FROM conversation_turns WHERE timestamp >= ? AND timestamp < ? "
+                "ORDER BY id ASC LIMIT ?",
+                (start_utc, end_utc, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            ConversationTurnRecord(
+                id=row[0], user_text=row[1], assistant_text=row[2], source=row[3],
+                intent=row[4], metadata=json.loads(row[5] or "{}"), timestamp=row[6],
+            )
+            for row in rows
+        ]
+
+
 class PostgresMemoryStore:
     """PostgreSQL-backed durable memory store.
 
@@ -647,6 +674,36 @@ class PostgresMemoryStore:
                     source=row[3],
                     intent=row[4],
                     metadata=dict(row[5] or {}),
+                    timestamp=_format_timestamp(row[6]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+
+    def turns_between(self, start_utc: str, end_utc: str,
+                      limit: int = 400) -> List[ConversationTurnRecord]:
+        """Turns whose timestamp falls in [start_utc, end_utc), oldest first."""
+        limit = max(1, min(int(limit or 400), 2000))
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, user_text, assistant_text, source, intent, metadata, timestamp
+                    FROM conversation_turns
+                    WHERE timestamp >= %s::timestamptz AND timestamp < %s::timestamptz
+                    ORDER BY id ASC
+                    LIMIT %s
+                    """,
+                    (start_utc, end_utc, limit),
+                )
+                rows = cur.fetchall()
+            return [
+                ConversationTurnRecord(
+                    id=row[0], user_text=row[1], assistant_text=row[2], source=row[3],
+                    intent=row[4], metadata=dict(row[5] or {}),
                     timestamp=_format_timestamp(row[6]),
                 )
                 for row in rows
