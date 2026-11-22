@@ -53,6 +53,18 @@ what the model reads. `@capability` turns any exception into `ok: false`.
 Tests that monkeypatch a `realtime_tools` global must patch the submodule
 (`realtime_tools.music.ROOT`), not the package.
 
+**Jarvis upgrade (2026-11-22, branch `jarvis-upgrade`)** -
+`core/voice/action_log.py` writes every executed voice tool call (ARGO's and
+MCP's) to `runtime/logs/actions.jsonl`, secrets redacted; `ARGO_ACTION_LOG=off`
+disables it. `core/voice/mcp_bridge.py` turns `config.json` -> `mcp.servers`
+into MCPToolsets on the agent; each connects under a timeout before the
+session starts and a dead one is left out (never costs the voice);
+`ARGO_MCP_ENABLED=0` is the kill switch. `core/delegate_jobs.py` +
+`delegate_task` / `check_background_tasks` / `cancel_background_task` run
+headless Claude Code (`claude -p`) in the background for errands no tool
+covers and announce the result; jobs are recorded in `runtime/agent_jobs/`.
+That is different from `improve_argo` / `work_on_project` (Codex, Git, review).
+
 **Smooth Voice layout** — `livekit_realtime_agent.py` is a 26-line launcher
 kept at the root because scripts find the worker by that path. The code is
 `core/voice/`: `worker.py` (process, lock, drain, stale agents),
