@@ -109,6 +109,26 @@ Start-Process -FilePath $Py -ArgumentList '-u', (Join-Path $Root 'livekit_realti
     -RedirectStandardError  (Join-Path $Logs 'worker.err.log')
 Start-Sleep -Seconds 12
 
+# ---- 4b. Telegram bridge (text ARGO from anywhere) ----------------------------------
+# Optional: it exits on its own if TELEGRAM_BOT_TOKEN is not in .env. A running
+# bridge is asked to stop with a stop file (no force-kill), then started fresh.
+$TgStop = Join-Path $Locks "telegram-bridge.stop"
+$oldTg = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'telegram_bridge\.py' }
+if ($oldTg) {
+    New-Item -ItemType File -Force $TgStop | Out-Null
+    $tgDeadline = (Get-Date).AddSeconds(40)
+    while ((Get-Process -Id $oldTg.ProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $tgDeadline) {
+        Start-Sleep -Seconds 1
+    }
+}
+Remove-Item $TgStop -ErrorAction SilentlyContinue
+Write-Host "Starting Telegram bridge (no-op without TELEGRAM_BOT_TOKEN)..."
+Start-Process -FilePath $Py -ArgumentList '-u', (Join-Path $Root 'telegram_bridge.py') `
+    -WorkingDirectory $Root -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $Logs 'telegram.out.log') `
+    -RedirectStandardError  (Join-Path $Logs 'telegram.err.log')
+
 # ---- 5. prove it -----------------------------------------------------------------------
 # The backend takes ~30s to bind (audio enumeration, model warmup, ambient
 # calibration). A single snapshot right after a fixed sleep catches it mid-boot

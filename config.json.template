@@ -154,5 +154,13 @@
       "speed": 1.0
     },
     "fallback_openai_voice": "ash"
+  },
+
+  "telegram": {
+    "enabled": true,
+    "allowed_user_ids": [],
+    "persona": "",
+    "model": "",
+    "push_reminders": true
   }
 }
