@@ -74,3 +74,24 @@ def test_text_only_model_when_a_tts_speaks(monkeypatch):
     assert captured["modalities"] == ["text"]
     M.build_realtime_model(get_livekit_realtime_config())
     assert captured["modalities"] == ["text", "audio"]
+
+
+def test_the_plugin_is_imported_at_module_load_not_inside_a_session():
+    """LiveKit refuses plugin registration off the main thread; importing it
+    inside build_tts() took the ElevenLabs voice down live (2026-11-22)."""
+    import inspect
+
+    assert V._elevenlabs is not None
+    assert "from livekit.plugins import elevenlabs" not in inspect.getsource(V.build_tts)
+
+
+def test_status_for_the_dashboard(monkeypatch):
+    monkeypatch.setenv("ELEVEN_API_KEY", "test-key-not-real")
+    s = V.load_settings({"voice_output": {"provider": "elevenlabs",
+                                          "elevenlabs": {"voice_id": "abc", "name": "Argo Cockney"}}})
+    st = V.status(s)
+    assert st["ready"] and st["label"] == "Argo Cockney" and st["provider"] == "elevenlabs"
+    monkeypatch.delenv("ELEVEN_API_KEY")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    assert V.status(s)["ready"] is False
+    assert V.status(V.load_settings({}))["provider"] == "openai"

@@ -36,6 +36,18 @@ from core import voice_events
 
 logger = logging.getLogger("ARGO.VoiceOutput")
 
+# LiveKit refuses to register a plugin anywhere but the main thread, and a
+# session runs off it - importing ElevenLabs lazily inside build_tts() failed
+# live with "Plugins must be registered on the main thread". So import it
+# here, when the worker first loads this module.
+try:
+    from livekit.plugins import elevenlabs as _elevenlabs
+except Exception as _exc:  # plugin not installed: the realtime voice is used
+    _elevenlabs = None
+    _ELEVENLABS_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
+else:
+    _ELEVENLABS_IMPORT_ERROR = ""
+
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE = ROOT / "config.json"
 
@@ -43,6 +55,7 @@ CONFIG_FILE = ROOT / "config.json"
 @dataclass(frozen=True)
 class ElevenLabsVoice:
     voice_id: str = ""
+    name: str = ""
     model: str = "eleven_flash_v2_5"
     stability: float = 0.45
     similarity_boost: float = 0.8
@@ -75,6 +88,7 @@ def load_settings(config: dict | None = None) -> VoiceOutputSettings:
 
     voice = ElevenLabsVoice(
         voice_id=(os.getenv("ARGO_ELEVENLABS_VOICE_ID") or str(el.get("voice_id") or "")).strip(),
+        name=str(el.get("name") or ""),
         model=str(el.get("model") or base.model),
         stability=num("stability", base.stability),
         similarity_boost=num("similarity_boost", base.similarity_boost),
@@ -109,12 +123,14 @@ def build_tts(settings: VoiceOutputSettings | None = None):
         if not voice.voice_id:
             _fall_back("voice_output.elevenlabs.voice_id is empty")
             return None
-        try:
-            from livekit.agents import tts as agents_tts
-            from livekit.plugins import elevenlabs, openai
-        except ImportError as exc:
-            _fall_back(f"plugin missing ({exc.name}); pip install livekit-plugins-elevenlabs==1.5.17")
+        if _elevenlabs is None:
+            _fall_back(f"ElevenLabs plugin unavailable ({_ELEVENLABS_IMPORT_ERROR}); "
+                       "pip install livekit-plugins-elevenlabs==1.5.17")
             return None
+        from livekit.agents import tts as agents_tts
+        from livekit.plugins import openai
+
+        elevenlabs = _elevenlabs
         primary = elevenlabs.TTS(
             voice_id=voice.voice_id,
             model=voice.model,
@@ -132,3 +148,25 @@ def build_tts(settings: VoiceOutputSettings | None = None):
     except Exception as exc:
         _fall_back(f"{type(exc).__name__}: {exc}"[:200])
         return None
+
+
+def status(settings: VoiceOutputSettings | None = None) -> dict:
+    """What voice the NEXT Smooth Voice session will speak with, for the dashboard.
+    No network calls - this only checks that everything needed is in place."""
+    try:
+        settings = settings or load_settings()
+        voice = settings.elevenlabs
+        if settings.provider != "elevenlabs":
+            return {"provider": "openai", "ready": True, "label": "OpenAI realtime voice"}
+        problems = []
+        if not elevenlabs_key():
+            problems.append("ELEVEN_API_KEY missing from .env")
+        if not voice.voice_id:
+            problems.append("no voice_id")
+        if _elevenlabs is None:
+            problems.append("ElevenLabs plugin not installed")
+        return {"provider": "elevenlabs", "ready": not problems, "voice_id": voice.voice_id,
+                "model": voice.model, "label": voice.name or "ElevenLabs voice",
+                "fallback": settings.fallback_openai_voice, "problems": problems}
+    except Exception as exc:
+        return {"provider": "unknown", "ready": False, "problems": [type(exc).__name__]}

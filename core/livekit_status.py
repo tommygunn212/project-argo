@@ -29,6 +29,15 @@ def _persona_list() -> list[dict[str, str]]:
         return []
 
 
+def _voice_output_status() -> dict[str, Any]:
+    try:
+        from core.voice.voice_output import status
+
+        return status()
+    except Exception as exc:
+        return {"provider": "unknown", "ready": False, "problems": [type(exc).__name__]}
+
+
 def livekit_status(config: Any | None = None) -> dict[str, Any]:
     from core.livekit_config import get_livekit_realtime_config
 
@@ -45,6 +54,7 @@ def livekit_status(config: Any | None = None) -> dict[str, Any]:
         "personality": cfg.personality,
         "avatar": hedra_avatar_status(config),
         "speaker_identity": speaker_identity_status(cfg),
+        "voice_output": _voice_output_status(),
         "voice_mode": read_voice_mode(),
         "active_now": _active_now(),
         "saved_for_next": {

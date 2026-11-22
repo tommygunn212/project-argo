@@ -1689,6 +1689,7 @@ input[type="range"]::-moz-range-thumb {
           <div id="personalityBox" style="margin-top:14px;padding:12px 14px;border:1px solid var(--accent);border-radius:var(--radius);background:var(--bg-input)">
             <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Smooth Voice — voice &amp; personality</div>
             <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px">Voice</label>
+            <div id="voiceOutputNote" style="display:none;font-size:12px;margin:0 0 8px;padding:8px 10px;border:1px solid var(--accent);border-radius:var(--radius);line-height:1.45"></div>
             <select id="realtimeVoiceSelect" style="width:100%;margin-bottom:10px" onchange="handleRealtimeVoiceChange(this)">
               <option value="marin">Marin — warm, natural (default)</option>
               <option value="cedar">Cedar — warm, lower</option>
@@ -3323,6 +3324,26 @@ function applyServerPersonality(personality) {
 }
 
 
+// ElevenLabs speaks instead of the realtime voice when config.json ->
+// voice_output.provider is "elevenlabs". The voice list then only matters as
+// the fallback, so say which voice will really be heard.
+function applyVoiceOutputStatus(vo) {
+  const note = $('voiceOutputNote');
+  if (!note) return;
+  if (!vo || vo.provider !== 'elevenlabs') { note.style.display = 'none'; return; }
+  const name = vo.label || 'ElevenLabs voice';
+  if (vo.ready) {
+    note.style.color = 'var(--text-secondary)';
+    note.innerHTML = `<b style="color:var(--accent)">Speaking voice: ElevenLabs \u2014 ${name}</b><br>` +
+      'Set in config.json (voice_output). The list below is only the backup voice if ElevenLabs is off or fails.';
+    $('livekitVoice').textContent = `ElevenLabs \u00b7 ${name}`;
+  } else {
+    note.style.color = 'var(--warning, #f59e0b)';
+    note.textContent = `ElevenLabs is selected but not ready (${(vo.problems || []).join(', ')}). ARGO will use the voice below.`;
+  }
+  note.style.display = 'block';
+}
+
 async function refreshRealtimeStatus() {
   try {
     const res = await fetch(argoUrl('/api/livekit-status'), { cache: 'no-store' });
@@ -3346,6 +3367,7 @@ async function refreshRealtimeStatus() {
     applyServerRealtimeVoice(savedNext.voice || data.voice, data.voices);
     $('livekitRoom').textContent = livekitMeta.room;
     $('livekitVoice').textContent = livekitMeta.voice;
+    applyVoiceOutputStatus(data.voice_output);
     updateSpeakerIdentityDisplay(livekitMeta.speakerIdentity);
     configureLocalAvatarMedia(livekitMeta.avatar);
     updateAvatarProviderDisplay(livekitMeta.avatar);
