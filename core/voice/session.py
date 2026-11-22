@@ -31,6 +31,7 @@ from core.voice.avatars import start_avatar
 from core.voice.mcp_bridge import close_toolsets, ready_toolsets
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
+from core.voice.proactive import start_proactive
 
 logger = logging.getLogger("ARGO.LiveKit")
 
@@ -90,6 +91,7 @@ async def run_realtime_session(ctx: JobContext) -> None:
     wire_action_log(session, room=ids.room)
     wire_urgent_interrupts(session, cfg)
     wire_wake_sleep_gate(session, cfg)
+    start_proactive(ctx, session)
     _announce_active(cfg, model, ids)
 
     if cfg.greeting:
