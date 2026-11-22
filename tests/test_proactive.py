@@ -69,3 +69,24 @@ def test_switch_off(monkeypatch):
     monkeypatch.setenv("ARGO_PROACTIVE", "0")
     assert P.load_settings({}).enabled is False
     assert P.start_proactive(object(), FakeSession()) is None
+
+
+def test_reminders_get_through_while_asleep_but_the_morning_offer_waits(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(P, "BRIEFING_MARKER", tmp_path / "marker.txt")
+    monkeypatch.setattr(P, "morning_offer_due", lambda *a, **k: True)
+    monkeypatch.setattr(P.voice_events, "emit", lambda *a, **k: None)
+    session, stop = FakeSession(), asyncio.Event()
+    session.argo_wake = SimpleNamespace(asleep=True, allow_once=False)
+    batches = [[{"id": 1, "message": "oven", "due_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]]
+
+    def due():
+        batch = batches.pop(0) if batches else []
+        stop.set()
+        return batch
+
+    settings = P.ProactiveSettings(interval_s=5, morning_offer=True, morning_delay_s=0)
+    asyncio.run(asyncio.wait_for(P.run_loop(session, settings, due=due, stop=stop), 10))
+    assert len(session.said) == 1 and "oven" in session.said[0]   # no morning offer while asleep
+    assert session.argo_wake.allow_once is True

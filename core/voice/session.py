@@ -95,7 +95,8 @@ async def run_realtime_session(ctx: JobContext) -> None:
     start_proactive(ctx, session)
     _announce_active(cfg, model, ids)
 
-    if cfg.greeting:
+    wake = getattr(session, "argo_wake", None)
+    if cfg.greeting and not (wake is not None and wake.asleep):
         session.generate_reply(instructions=cfg.greeting, allow_interruptions=True)
 
 

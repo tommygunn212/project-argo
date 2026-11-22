@@ -197,3 +197,42 @@ class TestUrgentInterrupts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStartAsleepAndDeliberateLines(unittest.TestCase):
+    """Tommy's ask (2026-11-22): asleep until the wake word, awake until the sleep word."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        with patch("core.voice_events.emit"):
+            gates.wire_wake_sleep_gate(self.session, make_cfg(wake_start_asleep=True))
+
+    def _speak(self):
+        with patch("core.voice_events.emit"):
+            self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+
+    def test_starts_asleep_and_silences_replies(self):
+        self.assertTrue(self.session.argo_wake.asleep)
+        self._speak()
+        self.session.interrupt.assert_called_once()
+
+    def test_wake_word_then_she_stays_awake(self):
+        with patch("core.voice_events.emit"):
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="hey argo", is_final=False))
+        self.assertFalse(self.session.argo_wake.asleep)
+        self._speak()
+        self._speak()
+        self.session.interrupt.assert_not_called()
+
+    def test_a_deliberate_line_gets_through_once(self):
+        self.session.argo_wake.allow_once = True
+        self._speak()
+        self.session.interrupt.assert_not_called()
+        self._speak()  # the pass is used up
+        self.session.interrupt.assert_called_once()
+
+    def test_default_still_starts_awake(self):
+        session = FakeSession()
+        with patch("core.voice_events.emit"):
+            gates.wire_wake_sleep_gate(session, make_cfg())
+        self.assertFalse(session.argo_wake.asleep)

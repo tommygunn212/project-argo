@@ -117,6 +117,17 @@ MORNING_INSTRUCTION = (
 )
 
 
+def _asleep(session) -> bool:
+    state = getattr(session, "argo_wake", None)
+    return bool(state is not None and state.asleep)
+
+
+def _allow_one_line(session) -> None:
+    state = getattr(session, "argo_wake", None)
+    if state is not None and state.asleep:
+        state.allow_once = True
+
+
 async def _say(session, instructions: str) -> bool:
     try:
         session.generate_reply(instructions=instructions, allow_interruptions=True)
@@ -130,16 +141,24 @@ async def run_loop(session, settings: ProactiveSettings, *, due=_due_reminders,
                    stop: asyncio.Event | None = None) -> None:
     """Check for due reminders until cancelled (or until `stop` is set)."""
     stop = stop or asyncio.Event()
-    if settings.morning_offer and morning_offer_due():
+    morning_pending = settings.morning_offer and morning_offer_due()
+    if morning_pending:
         await asyncio.sleep(settings.morning_delay_s)
-        if await _say(session, MORNING_INSTRUCTION):
-            _mark_morning_offer()
-            voice_events.emit("proactive_morning_offer")
     while not stop.is_set():
+        # The morning offer waits until she's awake (wake/sleep gate); a
+        # sleeping ARGO doesn't volunteer chatter.
+        if morning_pending and not _asleep(session):
+            morning_pending = False
+            if await _say(session, MORNING_INSTRUCTION):
+                _mark_morning_offer()
+                voice_events.emit("proactive_morning_offer")
         try:
             for reminder in await asyncio.to_thread(due):
                 logger.info("[Proactive] reminder due: %s", reminder.get("message"))
                 voice_events.emit("proactive_reminder", id=reminder.get("id"))
+                # A reminder he set is said even while she's asleep: let this
+                # one line through the gate.
+                _allow_one_line(session)
                 await _say(session, reminder_instruction(reminder))
         except asyncio.CancelledError:
             raise

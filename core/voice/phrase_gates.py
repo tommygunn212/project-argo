@@ -114,6 +114,14 @@ def wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) ->
         logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
 
 
+class WakeState:
+    """Whether ARGO is asleep, plus a one-shot pass for a deliberate line."""
+
+    def __init__(self, asleep: bool = False) -> None:
+        self.asleep = asleep
+        self.allow_once = False
+
+
 def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> None:
     """Optional sleep-word / wake-word gate. A no-op unless the config enables it.
 
@@ -143,11 +151,16 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         return
 
     latch = _OncePerUtterance()
-    asleep = False
+    state = WakeState(asleep=bool(getattr(cfg, "wake_start_asleep", False)))
+    # Shared with core.voice.proactive, which needs to know whether she's
+    # asleep and to let one deliberate line (a due reminder) through.
+    try:
+        session.argo_wake = state
+    except Exception:
+        pass
 
     def fall_asleep(phrase: str, transcript: str) -> None:
-        nonlocal asleep
-        asleep = True
+        state.asleep = True
         logger.info("[WakeSleep] sleep phrase %r -> going quiet (heard %r)",
                     phrase, transcript[:80])
         voice_events.emit("sleep_word_triggered", phrase=phrase, transcript=transcript[:120])
@@ -155,8 +168,7 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
             _interrupt(session, "WakeSleep")
 
     def wake_up(phrase: str, transcript: str) -> None:
-        nonlocal asleep
-        asleep = False
+        state.asleep = False
         logger.info("[WakeSleep] wake phrase %r -> listening again (heard %r)",
                     phrase, transcript[:80])
         voice_events.emit("wake_word_triggered", phrase=phrase, transcript=transcript[:120])
@@ -171,14 +183,18 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         transcript = latch.candidate(event)
         if transcript is None:
             return
-        phrase = opening_phrase(transcript, wake_phrases if asleep else sleep_phrases)
+        phrase = opening_phrase(transcript, wake_phrases if state.asleep else sleep_phrases)
         if not phrase:
             return
         latch.acted(transcript)
-        (wake_up if asleep else fall_asleep)(phrase, transcript)
+        (wake_up if state.asleep else fall_asleep)(phrase, transcript)
 
     def on_agent_state(event) -> None:
-        if not asleep or str(getattr(event, "new_state", "")) != "speaking":
+        if not state.asleep or str(getattr(event, "new_state", "")) != "speaking":
+            return
+        if state.allow_once:
+            # A line ARGO was told to say on purpose (a due reminder).
+            state.allow_once = False
             return
         # The model ran its own turn detection on something said while asleep
         # and decided to answer. Cut it off; she stays asleep.
@@ -190,8 +206,9 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         session.on("user_input_transcribed", on_transcript)
         session.on("agent_state_changed", on_agent_state)
         logger.info(
-            "[WakeSleep] gate armed: %d sleep phrase(s), %d wake phrase(s), wake_ack=%s",
-            len(sleep_phrases), len(wake_phrases), cfg.wake_ack_enabled,
+            "[WakeSleep] gate armed: %d sleep phrase(s), %d wake phrase(s), wake_ack=%s, "
+            "starts %s", len(sleep_phrases), len(wake_phrases), cfg.wake_ack_enabled,
+            "asleep" if state.asleep else "awake",
         )
     except Exception:
         logger.warning("[WakeSleep] could not arm gate", exc_info=True)

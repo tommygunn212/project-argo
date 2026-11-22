@@ -156,6 +156,9 @@ class LiveKitRealtimeConfig:
     # the sleep side, which never confirms - Tommy can turn this on alone
     # without changing anything else.
     wake_ack_enabled: bool = False
+    # Start each session asleep, so ARGO says nothing until she hears a wake
+    # phrase - then she stays awake until a sleep phrase.
+    wake_start_asleep: bool = False
 
 
 DEFAULT_URGENT_INTERRUPT_PHRASES = (
@@ -336,6 +339,9 @@ def get_livekit_realtime_config(config: Any | None = None) -> LiveKitRealtimeCon
         wake_phrases=_wake_phrases(cfg),
         wake_ack_enabled=_bool(
             _env_or_config(cfg, "ARGO_WAKE_ACK_ENABLED", "livekit.wake_sleep_gate.wake_ack_enabled", False)
+        ),
+        wake_start_asleep=_bool(
+            _env_or_config(cfg, "ARGO_WAKE_START_ASLEEP", "livekit.wake_sleep_gate.start_asleep", False)
         ),
         idle_processes=max(
             0,
