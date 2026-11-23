@@ -121,6 +121,21 @@ def build_frontend_handler(services):
                     self._send_json({"error": str(exc)}, status=500)
                 return
     
+            if path == "/api/board/layout":
+                origin = self.headers.get("Origin") or ""
+                host = self.headers.get("Host") or ""
+                if origin and origin.split("://", 1)[-1] != host:
+                    self._send_json({"error": "Forbidden"}, status=403)
+                    return
+                try:
+                    from core import board_service
+                    body = self._read_json_body(max_bytes=64_000)
+                    layout = board_service.save_layout(str(body.get("project") or ""), body.get("layout") or {})
+                    self._send_json({"ok": True, "saved": len(layout)})
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                return
+
             if path == "/api/show":
                 # Same local-sidecar guard as the repair bridge.
                 import secrets
@@ -160,6 +175,12 @@ def build_frontend_handler(services):
                             verification_command=str(body.get("verification_command") or ""))
                     elif kind == "skill_request" and service:
                         result = service.propose_skill_request(str(body.get("name") or ""), text)
+                    elif kind == "board_focus":
+                        from core import board_service
+                        result = {"status": "ok", "project": board_service.set_focus(text)}
+                    elif kind == "board_tidy":
+                        from core import board_service
+                        result = {"status": "ok", "project": board_service.tidy(text)}
                     elif kind == "roadmap":
                         from core.roadmap_catalog import search_argo_roadmap
                         result = search_argo_roadmap(text)
@@ -210,6 +231,12 @@ def build_frontend_handler(services):
             elif path == '/api/show':
                 from core.show_service import BOARD
                 self._send_json({"items": BOARD.snapshot()})
+            elif path == '/api/board':
+                from core import board_service, delegate_jobs
+                from core.show_service import BOARD
+                self._send_json(board_service.snapshot(
+                    _query_first(query, "project") or "", delegate_jobs.status(limit=60)["jobs"],
+                    BOARD.snapshot()))
             elif path == '/api/jobs':
                 from core import delegate_jobs
                 try:
@@ -350,6 +377,12 @@ def build_frontend_handler(services):
                 self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(asset_path.read_bytes())
+            elif path == '/board':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.end_headers()
+                self.wfile.write((repo_root / 'frontend-v2' / 'board.html').read_bytes())
             elif path == '/' or path == '/index.html':
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')

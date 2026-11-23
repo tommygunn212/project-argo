@@ -178,6 +178,31 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
                                "message": f"The skill builder could not be reached: {type(exc).__name__}."})
 
     @function_tool()
+    async def show_board(self, project: str = "") -> str:
+        """Put one project's board up on Tommy's screen: its jobs, parked ideas,
+        notes and the last thing you showed him, as cards. Use when he says
+        "show me the H2D stuff", "pull up ChefsByte", "put the board up". Leave
+        project empty for everything."""
+        try:
+            result = json.loads(await asyncio.to_thread(
+                _post_repair_request, project, kind="board_focus"))
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"{type(exc).__name__}"})
+        return json.dumps({"ok": True, "message": f"The {result.get('project', project) or 'All'} board is up "
+                           "at the /board page on his dashboard."})
+
+    @function_tool()
+    async def tidy_board(self, project: str = "") -> str:
+        """Reset a project's board cards to a neat grid. Use when he says the
+        board is messy or asks you to tidy up."""
+        try:
+            result = json.loads(await asyncio.to_thread(
+                _post_repair_request, project, kind="board_tidy"))
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"{type(exc).__name__}"})
+        return json.dumps({"ok": True, "message": f"Tidied the {result.get('project', project) or 'All'} board."})
+
+    @function_tool()
     async def list_my_skills(self) -> str:
         """List the skills you have taught yourself and any that failed to load.
 
