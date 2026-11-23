@@ -44,6 +44,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -63,7 +65,15 @@ Do the whole job, not a plan for it. Work in the current folder unless the task
 names another place. When you finish, end with a short plain-language summary
 (2-4 sentences) that ARGO will read aloud: what you did, where any files are,
 and anything Tommy needs to decide. Say plainly if something failed or could
-not be verified. Never print or copy secrets from config.json or .env files."""
+not be verified. Never print or copy secrets from config.json or .env files.
+
+If you cannot continue without an answer from Tommy, stop and make your final
+message start with a line of the form "NEED_ANSWER: <the one question>" - do
+not guess at a decision that is his to make.
+
+If the job has several steps, early on write {progress_file} (in the current
+folder) as JSON like {{"done": 0, "total": 5, "step": "what you're on"}} and
+update "done" as each step finishes, so Tommy can see it moving."""
 
 
 CODEX_DEFAULT_MODEL = "gpt-6-astra"
@@ -120,6 +130,16 @@ class Job:
     summary: str = ""
     error: str = ""
     cost_usd: float | None = None
+    project: str = ""
+    heartbeat: float = 0.0
+    last_activity: float = 0.0
+    pid: int = 0
+    runner_pid: int = 0
+    question: str = ""
+    progress_done: int = 0
+    progress_total: int = 0
+    step: str = ""
+    reported: bool = False  # the voice session has told Tommy how it ended
 
     @property
     def job_dir(self) -> Path:
@@ -132,10 +152,29 @@ class Job:
                                                       encoding="utf-8")
 
     def brief(self) -> dict:
-        elapsed = (self.finished or time.time()) - self.started
-        return {"id": self.id, "task": self.task[:200], "status": self.status,
+        now = time.time()
+        elapsed = (self.finished or now) - self.started
+        state = self.status
+        # The runner's heartbeat only says the runner is alive; "quiet" is how long
+        # since the agent itself wrote output or changed a file.
+        quiet_s = now - max(self.last_activity, self.started)
+        if state == "running" and quiet_s > STALL_AFTER_S:
+            state = "stalled"
+        percent = None
+        if self.status == "done" and self.progress_total:
+            percent = 100
+        elif self.progress_total:
+            percent = round(100 * self.progress_done / self.progress_total)
+        return {"id": self.id, "task": self.task[:200], "status": self.status, "state": state,
                 "minutes": round(elapsed / 60, 1), "summary": self.summary[:1500],
-                "error": self.error[:300], "folder": self.folder}
+                "error": self.error[:300], "folder": self.folder, "project": self.project,
+                "percent": percent, "step": self.step, "question": self.question,
+                "quiet_seconds": int(quiet_s) if self.status in ACTIVE else 0}
+
+
+ACTIVE = {"starting", "running"}
+FINAL = {"done", "failed", "timed_out", "cancelled", "waiting"}
+STALL_AFTER_S = 300.0  # no output or file change for this long = "stalled"
 
 
 OnDone = Callable[[Job], Awaitable[None] | None]
@@ -219,13 +258,76 @@ def parse_result(stdout: str) -> tuple[bool, str, float | None]:
     return ok, str(data.get("result") or ""), data.get("total_cost_usd")
 
 
+def _read_job(job_id: str) -> Job | None:
+    """A job as its runner last wrote it (None if there is no such job)."""
+    try:
+        data = json.loads((JOBS_DIR / job_id / "status.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    known = {f for f in Job.__dataclass_fields__}
+    data.setdefault("reported", True)  # jobs from before this field existed are not news
+    try:
+        return Job(**{k: v for k, v in data.items() if k in known})
+    except TypeError:
+        return None
+
+
+def _alive(pid: int) -> bool:
+    if not pid:
+        return False
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except Exception:
+        return True  # cannot tell; do not declare a live job dead
+
+
+def _reconcile(job: Job) -> Job:
+    """A job that says it is running but whose runner is gone is failed, not 'running forever'."""
+    if job.status not in ACTIVE:
+        return job
+    last_sign = max(job.heartbeat, job.started)
+    if time.time() - last_sign > 30 and not _alive(job.runner_pid):
+        job.status = "failed"
+        job.error = job.error or "The job's runner stopped before it finished."
+        job.finished = time.time()
+        job.save()
+    return job
+
+
+def _all_jobs(limit: int = 10) -> list[Job]:
+    try:
+        names = sorted((p.name for p in JOBS_DIR.iterdir() if p.is_dir()), reverse=True)
+    except OSError:
+        return []
+    jobs = []
+    for name in names[:max(limit, 1)]:
+        job = _read_job(name)
+        if job is not None:
+            jobs.append(_reconcile(job))
+    return jobs
+
+
 def running_count() -> int:
-    return sum(1 for j in _jobs.values() if j.status in {"starting", "running"})
+    return sum(1 for j in _all_jobs(50) if j.status in ACTIVE)
+
+
+def _spawn_runner(job: Job) -> None:
+    flags = 0
+    if os.name == "nt":  # own process group, no console, not tied to the voice worker
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0x8)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200))
+    subprocess.Popen([sys.executable, "-m", "core.job_runner", str(job.job_dir)],
+                     cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
 
 
 async def start(task: str, folder: str = "", *, settings: DelegateSettings | None = None,
-                on_done: OnDone | None = None) -> dict:
-    """Start a background agent job. Returns at once; never raises."""
+                on_done: OnDone | None = None, project: str = "") -> dict:
+    """Start a background agent job. Returns at once; never raises.
+
+    The job runs in its own detached process (core.job_runner), so it keeps going
+    when the voice session ends. This worker only starts it and watches for the end."""
     settings = settings or load_settings()
     if not settings.enabled:
         return {"ok": False, "message": "Background agent jobs are switched off."}
@@ -246,92 +348,143 @@ async def start(task: str, folder: str = "", *, settings: DelegateSettings | Non
         return {"ok": False, "message": f"Could not use folder {workdir}: {type(exc).__name__}"}
 
     job = Job(id=time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6], task=task,
-              folder=str(workdir))
-    _jobs[job.id] = job
-    job.save()
-    with contextlib.suppress(Exception):
+              folder=str(workdir), project=(project or "").strip()[:60])
+    progress_name = f".argo_progress_{job.id}.json"
+    result_file = str(job.job_dir / "last_message.txt")
+    try:
+        job.save()
+        spec = {"cmd": build_command(settings, executable, result_file), "cwd": job.folder,
+                "prompt": AGENT_BRIEF.format(task=job.task, progress_file=progress_name),
+                "timeout_s": settings.timeout_s, "engine": settings.engine,
+                "result_file": result_file if settings.engine == "codex" else "",
+                "progress_file": str(workdir / progress_name)}
+        (job.job_dir / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
         (job.job_dir / "task.txt").write_text(task, encoding="utf-8")
-    _tasks[job.id] = asyncio.create_task(_run(job, settings, executable, on_done))
+        _spawn_runner(job)
+    except Exception as exc:
+        job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
+        job.finished = time.time()
+        job.save()
+        return {"ok": False, "message": f"Could not start the job: {type(exc).__name__}"}
+    _jobs[job.id] = job
+    _tasks[job.id] = asyncio.create_task(_watch(job, on_done))
     logger.info("[Delegate] job %s started in %s: %r", job.id, workdir, task[:160])
     return {"ok": True, "job_id": job.id, "folder": str(workdir),
             "message": "Started in the background. I'll report back when it's done."}
 
 
-async def _run(job: Job, settings: DelegateSettings, executable: str,
-               on_done: OnDone | None) -> None:
-    prompt = AGENT_BRIEF.format(task=job.task)
-    process = None
+async def _watch(job: Job, on_done: OnDone | None) -> None:
+    """Wait for the detached runner to finish, then report. Cancelling this task
+    cancels the job; the voice session simply ending does not."""
     try:
-        result_file = str(job.job_dir / "last_message.txt")
-        process = await asyncio.create_subprocess_exec(
-            *build_command(settings, executable, result_file), cwd=job.folder,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        job.status = "running"
-        job.save()
-        stdout, stderr = await asyncio.wait_for(process.communicate(prompt.encode("utf-8")),
-                                                timeout=settings.timeout_s)
-        out, err = stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
-        with contextlib.suppress(Exception):
-            (job.job_dir / "result.json").write_text(out, encoding="utf-8")
-            if err.strip():
-                (job.job_dir / "stderr.txt").write_text(err, encoding="utf-8")
-        if settings.engine == "codex":
-            try:
-                summary = Path(result_file).read_text(encoding="utf-8").strip()
-            except FileNotFoundError:
-                summary = ""
-            ok, cost = bool(summary), None
-        else:
-            ok, summary, cost = parse_result(out)
-        job.summary, job.cost_usd = summary, cost
-        job.status = "done" if ok and process.returncode == 0 else "failed"
-        if job.status == "failed":
-            job.error = (err.strip() or summary or f"exit code {process.returncode}")[-500:]
-    except asyncio.TimeoutError:
-        job.status, job.error = "timed_out", f"stopped after {int(settings.timeout_s)}s"
-        await _stop(process)
+        while True:
+            await asyncio.sleep(0.5)
+            fresh = _read_job(job.id)
+            if fresh is not None:
+                job.__dict__.update(fresh.__dict__)
+            _reconcile(job)
+            if job.status in FINAL:
+                break
     except asyncio.CancelledError:
-        job.status = "cancelled"
-        await _stop(process)
+        with contextlib.suppress(Exception):
+            (job.job_dir / "cancel").write_text("1", encoding="utf-8")
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            fresh = _read_job(job.id)
+            if fresh is not None:
+                job.__dict__.update(fresh.__dict__)
+            if job.status in FINAL:
+                break
         raise
-    except Exception as exc:
-        job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
-        await _stop(process)
-    finally:
-        job.finished = time.time()
-        job.save()
-        logger.info("[Delegate] job %s %s", job.id, job.status)
-        if on_done is not None and job.status != "cancelled":
-            with contextlib.suppress(Exception):
-                maybe = on_done(job)
-                if asyncio.iscoroutine(maybe):
-                    await maybe
+    logger.info("[Delegate] job %s %s", job.id, job.status)
+    told = True
+    if on_done is not None and job.status != "cancelled":
+        with contextlib.suppress(Exception):
+            maybe = on_done(job)
+            if asyncio.iscoroutine(maybe):
+                maybe = await maybe
+            told = maybe is not False  # a callback returns False when it could not speak
+    if told:
+        job.reported = True
+        with contextlib.suppress(Exception):
+            from core.job_runner import update_status
+            update_status(job.job_dir, reported=True)
 
 
-async def _stop(process) -> None:
-    """Kill the agent process and reap it, so no pipes outlive the job."""
-    if process is None or process.returncode is not None:
-        return
-    with contextlib.suppress(Exception):
-        process.kill()
-    with contextlib.suppress(Exception):
-        await asyncio.wait_for(process.wait(), timeout=5)
+def adopt(on_done: OnDone | None = None) -> int:
+    """Watch jobs a previous voice session started and that are still running,
+    so their completion is reported by this session. Returns how many."""
+    count = 0
+    for job in _all_jobs(30):
+        task = _tasks.get(job.id)
+        unannounced = (job.status in FINAL and job.status != "cancelled" and not job.reported
+                       and time.time() - (job.finished or 0) < 24 * 3600)
+        if (job.status in ACTIVE or unannounced) and (task is None or task.done()):
+            _jobs[job.id] = job
+            _tasks[job.id] = asyncio.create_task(_watch(job, on_done))
+            count += 1
+    return count
 
 
-def status(job_id: str = "") -> dict:
-    """One job, or every job from this run (newest first)."""
+def status(job_id: str = "", limit: int = 10) -> dict:
+    """One job, or the newest jobs (from every session, newest first)."""
     if job_id:
-        job = _jobs.get(job_id)
-        return {"ok": bool(job), "job": job.brief() if job else None}
-    jobs = sorted(_jobs.values(), key=lambda j: j.started, reverse=True)
-    return {"ok": True, "running": running_count(), "jobs": [j.brief() for j in jobs[:10]]}
+        job_id = resolve_id(job_id)
+        job = _read_job(job_id)
+        return {"ok": bool(job), "job": _reconcile(job).brief() if job else None}
+    jobs = _all_jobs(limit)
+    return {"ok": True, "running": sum(1 for j in jobs if j.status in ACTIVE),
+            "jobs": [j.brief() for j in jobs]}
+
+
+def resolve_id(text: str) -> str:
+    """A full job id, or the last few characters of one ("6256fa"), to the full id."""
+    text = (text or "").strip()
+    if not text or (JOBS_DIR / text).is_dir():
+        return text
+    try:
+        matches = [p.name for p in JOBS_DIR.iterdir() if p.is_dir() and p.name.endswith(text)]
+    except OSError:
+        return text
+    return matches[0] if len(matches) == 1 else text
+
+
+async def retry(job_id: str, detail: str = "", *, on_done: OnDone | None = None,
+                settings: DelegateSettings | None = None) -> dict:
+    """Run a job again (stopping it first if it is still going), optionally with
+    more detail from Tommy. The old job is kept as the record."""
+    job_id = resolve_id(job_id)
+    job = _read_job(job_id)
+    if job is None:
+        return {"ok": False, "message": "No job with that id."}
+    if job.status in ACTIVE:
+        cancel(job_id)
+        for _ in range(24):
+            await asyncio.sleep(0.25)
+            fresh = _read_job(job_id)
+            if fresh is None or fresh.status not in ACTIVE:
+                break
+    try:
+        task = (job.job_dir / "task.txt").read_text(encoding="utf-8")
+    except OSError:
+        task = job.task
+    if (detail or "").strip():
+        task += "\n\nMore detail from Tommy for this retry: " + detail.strip()
+    result = await start(task, job.folder, settings=settings, on_done=on_done, project=job.project)
+    if result.get("ok"):
+        result["retry_of"] = job_id
+    return result
 
 
 def cancel(job_id: str) -> dict:
+    job_id = resolve_id(job_id)
     task = _tasks.get(job_id)
-    if task is None or task.done():
-        return {"ok": False, "message": "No running job with that id."}
-    task.cancel()
-    return {"ok": True, "message": "Cancelled."}
+    if task is not None and not task.done():
+        task.cancel()
+        return {"ok": True, "message": "Cancelled."}
+    job = _read_job(job_id)
+    if job is not None and job.status in ACTIVE:  # started by an earlier session
+        with contextlib.suppress(Exception):
+            (job.job_dir / "cancel").write_text("1", encoding="utf-8")
+        return {"ok": True, "message": "Cancelling."}
+    return {"ok": False, "message": "No running job with that id."}

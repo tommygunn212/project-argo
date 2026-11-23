@@ -243,7 +243,7 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
                            "elapsed_ms": result.elapsed_ms})
 
     @function_tool()
-    async def delegate_task(self, task: str, folder: str = "") -> str:
+    async def delegate_task(self, task: str, folder: str = "", project: str = "") -> str:
         """Hand a real job to your background agent - your hands - and keep talking.
 
         Use this whenever Tommy asks for something none of your other tools can
@@ -255,9 +255,11 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         folder to work in. It runs in the background and can take minutes: tell
         him you're on it, and you'll be told when it finishes. Do NOT use it for
         code changes to ARGO herself (improve_argo) or to a Git project
-        (work_on_project).
+        (work_on_project). Pass project (ChefsByte, H2D Workbench, MSUDBytes,
+        Argo...) when you know which one it belongs to.
         """
-        result = await delegate_jobs.start(task, folder, on_done=self._report_delegate_done)
+        result = await delegate_jobs.start(task, folder, on_done=self._report_delegate_done,
+                                           project=project)
         voice_events.emit("delegate_start", ok=result.get("ok"), job_id=result.get("job_id", ""))
         return json.dumps(result)
 
@@ -272,6 +274,16 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         """Stop a running background agent job. Get the id from check_background_tasks."""
         return json.dumps(delegate_jobs.cancel(job_id))
 
+    @function_tool()
+    async def retry_background_task(self, job_id: str, more_detail: str = "") -> str:
+        """Run a background job again - when it failed, stalled, or Tommy answered
+        its question. Pass the job id (the last six characters are enough) and,
+        if he gave more detail or an answer, put it in more_detail."""
+        result = await delegate_jobs.retry(job_id, more_detail,
+                                           on_done=self._report_delegate_done)
+        voice_events.emit("delegate_retry", ok=result.get("ok"), job_id=result.get("job_id", ""))
+        return json.dumps(result)
+
     async def _report_delegate_done(self, job) -> None:
         """Tell Tommy a background job finished, in her own voice.
 
@@ -279,8 +291,15 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         sleep gate is on, the gate cuts it off and the result stays in
         check_background_tasks for later.
         """
+        wake = getattr(self.session, "argo_wake", None)
+        if wake is not None and getattr(wake, "asleep", False):
+            return False  # asleep: keep it for when he wakes me (adopt() will retry)
         voice_events.emit("delegate_done", job_id=job.id, status=job.status)
-        if job.status == "done":
+        if job.status == "waiting":
+            note = (f"A background job you started is blocked and needs an answer from Tommy. The "
+                    f"task was: {job.task[:300]}. Its question: {job.question[:300]}. Ask him that "
+                    "question plainly in one or two sentences.")
+        elif job.status == "done":
             note = (f"A background job you started just finished. The task was: {job.task[:300]}. "
                     f"Its report: {job.summary[:1200]}. Tell Tommy the outcome in one or two "
                     "natural sentences - what was done and where - without reading it verbatim.")

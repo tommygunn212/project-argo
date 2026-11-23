@@ -210,6 +210,13 @@ def build_frontend_handler(services):
             elif path == '/api/show':
                 from core.show_service import BOARD
                 self._send_json({"items": BOARD.snapshot()})
+            elif path == '/api/jobs':
+                from core import delegate_jobs
+                try:
+                    limit = max(1, min(60, int(_query_first(query, "limit") or 30)))
+                except ValueError:
+                    limit = 30
+                self._send_json(delegate_jobs.status(limit=limit))
             elif path == '/api/argo-roadmap':
                 from core.roadmap_catalog import search_argo_roadmap
                 self._send_json(search_argo_roadmap(_query_first(query, "q")))

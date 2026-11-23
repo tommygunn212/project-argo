@@ -4826,6 +4826,33 @@ init();
 #showBody iframe{width:100%;height:62vh;border:0;border-radius:8px;background:#fff}
 #showCaption{padding:0 14px 12px;color:#8fb2c4;font-size:13px}
 #showFab{position:fixed;left:24px;bottom:24px;z-index:8999;display:none}
+
+#jobsFab{position:fixed;left:96px;bottom:24px;z-index:8999;background:#12202b;color:#bfe3f5;border:1px solid #28506a;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+#jobsFab:hover{background:#1a3040}
+#jobsFab .jb{display:inline-block;min-width:16px;margin-left:6px;padding:0 5px;border-radius:9px;background:#28506a;color:#fff;font-size:12px;text-align:center}
+#jobsFab .jb.hot{background:#c9852b}
+#jobsPanel{position:fixed;left:24px;bottom:64px;width:min(560px,92vw);max-height:78vh;display:none;flex-direction:column;z-index:9001;background:#0b1117;border:1px solid #1f3a4a;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.6);color:#d5e6ef}
+#jobsPanel.open{display:flex}
+#jobsPanel header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #1f3a4a}
+#jobsPanel header b{flex:1;font-weight:500}
+#jobsPanel header button{background:#12202b;color:#bfe3f5;border:1px solid #28506a;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+#jobsList{overflow:auto;padding:8px 12px 12px}
+.jobRow{border:1px solid #1f3a4a;border-radius:10px;padding:8px 10px;margin:8px 0;background:#0f1a22}
+.jobRow .jt{display:flex;gap:8px;align-items:baseline}
+.jobRow .jt b{flex:1;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jobRow .jp{color:#7fb7d4;font-size:12px}
+.jobRow .js{font-size:12px;padding:1px 8px;border-radius:9px;border:1px solid}
+.jobRow .js.working{color:#5fd39a;border-color:#2c6a4c}
+.jobRow .js.stalled{color:#f0b34a;border-color:#7a5a1c}
+.jobRow .js.waiting{color:#7db8ff;border-color:#2f5d99}
+.jobRow .js.done{color:#5fd0d0;border-color:#2c6a6a}
+.jobRow .js.failed,.jobRow .js.timed_out{color:#ff7b7b;border-color:#8a3a3a}
+.jobRow .js.cancelled,.jobRow .js.starting{color:#9aa7b0;border-color:#3a4650}
+.jobRow .jm{margin-top:4px;color:#8fb2c4;font-size:12px}
+.jobRow .jbar{height:5px;background:#162630;border-radius:3px;margin-top:6px;overflow:hidden}
+.jobRow .jbar i{display:block;height:100%;background:#2fa87a}
+.jobRow .jq{margin-top:6px;color:#bcd9ff;font-size:13px}
+.jobRow .jn{margin-top:4px;color:#a9c2d0;font-size:12px}
 </style>
 <div id="showPanel" role="dialog" aria-label="Argo is showing you something">
   <header><button id="showPrev" aria-label="Previous">&lsaquo;</button><b id="showTitle"></b><span id="showCount"></span><button id="showNext" aria-label="Next">&rsaquo;</button><button id="showClose" aria-label="Close">&times;</button></header>
@@ -4863,6 +4890,66 @@ document.getElementById('showFab').onclick = function () { showRender(); };
 fetch('/api/show', {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : {items: []}; })
   .then(function (d) { if (d.items && d.items.length) { showItems = d.items.slice(-12); showIndex = showItems.length - 1;
     document.getElementById('showFab').style.display = 'block'; } }).catch(function () {});
+</script>
+
+<button id="jobsFab" aria-label="Background jobs">Jobs<span class="jb" id="jobsBadge">0</span></button>
+<div id="jobsPanel" role="dialog" aria-label="Argo's background jobs">
+  <header><b>Jobs</b><span id="jobsSummary" class="jp"></span><button id="jobsClose" aria-label="Close">&times;</button></header>
+  <div id="jobsList"></div>
+</div>
+<script>
+(function () {
+  var panel = document.getElementById('jobsPanel'), list = document.getElementById('jobsList');
+  var badge = document.getElementById('jobsBadge'), timer = null;
+  function dur(min) { if (min < 1) return Math.max(1, Math.round(min * 60)) + 's'; if (min < 60) return Math.round(min) + 'm';
+    var h = Math.floor(min / 60); return h + 'h ' + Math.round(min - h * 60) + 'm'; }
+  function ago(s) { if (s < 90) return s + 's'; if (s < 5400) return Math.round(s / 60) + 'm'; return Math.round(s / 3600) + 'h'; }
+  function label(j) {
+    if (j.state === 'running') return ['working', 'working'];
+    if (j.state === 'stalled') return ['stalled', 'stalled'];
+    if (j.status === 'waiting') return ['waiting', 'needs you'];
+    if (j.status === 'done') return ['done', 'done'];
+    if (j.status === 'timed_out') return ['timed_out', 'timed out'];
+    return [j.status, j.status];
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function row(j) {
+    var r = el('div', 'jobRow'), l = label(j), t = el('div', 'jt');
+    if (j.project) t.appendChild(el('span', 'jp', j.project));
+    t.appendChild(el('b', '', j.task || j.id)); t.appendChild(el('span', 'js ' + l[0], l[1]));
+    r.appendChild(t);
+    var active = j.status === 'running' || j.status === 'starting';
+    var meta = (active ? 'running ' + dur(j.minutes) : (j.status === 'done' ? 'took ' + dur(j.minutes) : dur(j.minutes)));
+    if (active) meta += ' \u00b7 last activity ' + ago(j.quiet_seconds) + ' ago';
+    if (j.percent != null) meta += ' \u00b7 ' + j.percent + '%';
+    if (j.step && active) meta += ' \u00b7 ' + j.step;
+    r.appendChild(el('div', 'jm', meta));
+    if (j.percent != null) { var bar = el('div', 'jbar'), fill = el('i'); fill.style.width = j.percent + '%'; bar.appendChild(fill); r.appendChild(bar); }
+    if (j.status === 'waiting' && j.question) r.appendChild(el('div', 'jq', 'Question: ' + j.question));
+    if (j.state === 'stalled') r.appendChild(el('div', 'jn', 'No output for ' + ago(j.quiet_seconds) + '. Tell Argo "retry job ' + j.id.slice(-6) + '" or "cancel it".'));
+    if (j.status === 'failed' && j.error) r.appendChild(el('div', 'jn', j.error));
+    if (j.status === 'done' && j.summary) r.appendChild(el('div', 'jn', j.summary.slice(0, 220)));
+    return r;
+  }
+  function refresh() {
+    fetch('/api/jobs?limit=30', {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d || !d.jobs) return;
+      var live = d.jobs.filter(function (j) { return j.status === 'running' || j.status === 'starting'; }).length;
+      var ask = d.jobs.filter(function (j) { return j.status === 'waiting'; }).length;
+      var stuck = d.jobs.filter(function (j) { return j.state === 'stalled'; }).length;
+      badge.textContent = String(live + ask); badge.className = 'jb' + (ask || stuck ? ' hot' : '');
+      document.getElementById('jobsSummary').textContent = live + ' active' + (stuck ? ', ' + stuck + ' stalled' : '') + (ask ? ', ' + ask + ' waiting on you' : '');
+      if (!panel.classList.contains('open')) return;
+      list.textContent = '';
+      if (!d.jobs.length) list.appendChild(el('div', 'jn', 'No jobs yet.'));
+      d.jobs.forEach(function (j) { list.appendChild(row(j)); });
+    }).catch(function () {});
+  }
+  function poll() { refresh(); clearTimeout(timer); timer = setTimeout(poll, panel.classList.contains('open') ? 4000 : 20000); }
+  document.getElementById('jobsFab').onclick = function () { panel.classList.toggle('open'); poll(); };
+  document.getElementById('jobsClose').onclick = function () { panel.classList.remove('open'); poll(); };
+  poll();
+})();
 </script>
 </body>
 </html>

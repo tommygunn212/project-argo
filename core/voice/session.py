@@ -191,9 +191,10 @@ async def _start_in_room(ctx: JobContext, cfg: LiveKitRealtimeConfig, memory):
         load_skills_for_session, builtin_tool_names())
     plugins = list(plugins or []) + list(skill_tools)
     avatar = await start_avatar(session, ctx.room)
+    agent = ArgoRealtimeAgent(cfg, memory=memory, extra_tools=plugins)
     try:
         await session.start(
-            agent=ArgoRealtimeAgent(cfg, memory=memory, extra_tools=plugins),
+            agent=agent,
             room=ctx.room,
             room_input_options=room_io.RoomInputOptions(
                 audio_enabled=True,
@@ -216,6 +217,11 @@ async def _start_in_room(ctx: JobContext, cfg: LiveKitRealtimeConfig, memory):
         raise
     if plugins:
         ctx.add_shutdown_callback(lambda *_: close_toolsets(plugins))
+    # Jobs a previous session started keep running on their own; this session
+    # takes over reporting them (and any that finished while nobody was here).
+    with contextlib.suppress(Exception):
+        from core import delegate_jobs
+        delegate_jobs.adopt(agent._report_delegate_done)
     return session, avatar
 
 
