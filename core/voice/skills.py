@@ -51,8 +51,13 @@ Skill file contract (enforced by core/voice/skills.py - read it first):
   hard-code or print a key.
 - Do not touch the microphone, ARGO's config, or any file outside this repo's
   runtime/ folder at run time. Network calls are fine if the feature needs them.
-- To show something on Tommy's dashboard, use core.voice.show.show_image /
-  show_html if they exist; otherwise just return text.
+- To show something on Tommy's dashboard (it has a viewer panel), call the
+  helpers in core/voice/show.py (read it): `await show_image(title,
+  png_bytes=..., mime="image/png", caption="")` or `url="https://..."`, and
+  `await show_html(title, html, caption="")` for a self-contained HTML/SVG page
+  (scripts do not run in the viewer). They return a short status string.
+- To GENERATE an image, use the OpenAI Images API through the `openai` package
+  (model "gpt-image-1", b64_json result) after ensure_openai_key(). Mock it in tests.
 
 Tests must run offline (mock any network call) and finish in seconds. They must
 import the skill and call its tools directly. Run them with:

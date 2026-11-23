@@ -2647,6 +2647,7 @@ function handleMessage(msg) {
     case 'code_repair_proposal': handleCodeRepairProposal(payload); break;
     case 'code_repair_result': handleCodeRepairResult(payload); break;
     case 'code_repair_jobs': renderCodeRepairJobs(payload); break;
+    case 'show': handleShow(payload); break;
     case 'config': handleConfig(payload); break;
     case 'db_status': handleDBStatus(payload); break;
     case 'illegal_transition': handleIllegalTransition(payload); break;
@@ -4812,6 +4813,56 @@ function init() {
 }
 
 init();
+</script>
+<style>
+#showPanel{position:fixed;right:24px;bottom:24px;width:min(760px,92vw);max-height:84vh;display:none;flex-direction:column;z-index:9000;background:#0b1117;border:1px solid #1f3a4a;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.6);color:#d6e6f0;font:14px system-ui,sans-serif}
+#showPanel.open{display:flex}
+#showPanel header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #1f3a4a}
+#showPanel header b{flex:1;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#showPanel button,#showFab{background:#12202b;color:#bfe3f5;border:1px solid #28506a;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+#showPanel button:hover,#showFab:hover{background:#1a3040}
+#showBody{padding:12px;overflow:auto;display:flex;justify-content:center;align-items:flex-start;min-height:120px}
+#showBody img{max-width:100%;max-height:68vh;border-radius:8px;object-fit:contain}
+#showBody iframe{width:100%;height:62vh;border:0;border-radius:8px;background:#fff}
+#showCaption{padding:0 14px 12px;color:#8fb2c4;font-size:13px}
+#showFab{position:fixed;left:24px;bottom:24px;z-index:8999;display:none}
+</style>
+<div id="showPanel" role="dialog" aria-label="Argo is showing you something">
+  <header><button id="showPrev" aria-label="Previous">&lsaquo;</button><b id="showTitle"></b><span id="showCount"></span><button id="showNext" aria-label="Next">&rsaquo;</button><button id="showClose" aria-label="Close">&times;</button></header>
+  <div id="showBody"></div><div id="showCaption"></div>
+</div>
+<button id="showFab" aria-label="Reopen what Argo showed">Show</button>
+<script>
+var showItems = [], showIndex = 0;
+function showRender() {
+  var panel = document.getElementById('showPanel'), body = document.getElementById('showBody');
+  var item = showItems[showIndex];
+  document.getElementById('showFab').style.display = showItems.length ? 'block' : 'none';
+  if (!item) { panel.classList.remove('open'); return; }
+  document.getElementById('showTitle').textContent = item.title || 'Argo';
+  document.getElementById('showCount').textContent = showItems.length > 1 ? (showIndex + 1) + ' / ' + showItems.length : '';
+  document.getElementById('showCaption').textContent = item.caption || '';
+  body.textContent = '';
+  if (item.kind === 'image') {
+    var img = document.createElement('img'); img.alt = item.title || ''; img.src = item.src; body.appendChild(img);
+  } else {
+    var frame = document.createElement('iframe'); frame.setAttribute('sandbox', ''); frame.title = item.title || 'Argo';
+    frame.srcdoc = item.html || ''; body.appendChild(frame);
+  }
+  panel.classList.add('open');
+}
+function handleShow(item) {
+  if (!item || !item.kind) return;
+  showItems.push(item); if (showItems.length > 12) showItems.shift();
+  showIndex = showItems.length - 1; showRender();
+}
+document.getElementById('showPrev').onclick = function () { if (showIndex > 0) { showIndex--; showRender(); } };
+document.getElementById('showNext').onclick = function () { if (showIndex < showItems.length - 1) { showIndex++; showRender(); } };
+document.getElementById('showClose').onclick = function () { document.getElementById('showPanel').classList.remove('open'); };
+document.getElementById('showFab').onclick = function () { showRender(); };
+fetch('/api/show', {cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : {items: []}; })
+  .then(function (d) { if (d.items && d.items.length) { showItems = d.items.slice(-12); showIndex = showItems.length - 1;
+    document.getElementById('showFab').style.display = 'block'; } }).catch(function () {});
 </script>
 </body>
 </html>

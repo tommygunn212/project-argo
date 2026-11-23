@@ -121,6 +121,25 @@ def build_frontend_handler(services):
                     self._send_json({"error": str(exc)}, status=500)
                 return
     
+            if path == "/api/show":
+                # Same local-sidecar guard as the repair bridge.
+                import secrets
+                if (self.client_address[0] not in ("127.0.0.1", "::1")
+                        or self.headers.get("Origin") or not services["get_repair_bridge_token"]()
+                        or not secrets.compare_digest(self.headers.get("X-Argo-Repair", ""), services["get_repair_bridge_token"]())):
+                    self._send_json({"error": "Forbidden"}, status=403)
+                    return
+                try:
+                    from core.show_service import BOARD, ShowError
+                    body = self._read_json_body(max_bytes=12_000_000)
+                    self._send_json(BOARD.add(body, services["broadcast_msg"]))
+                except ShowError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                except Exception as exc:
+                    services["logger"].exception("[HTTP] show failed")
+                    self._send_json({"error": str(exc)}, status=500)
+                return
+
             if path == "/api/repair-voice":
                 # Local sidecar only; browser origins and unauthenticated calls
                 # cannot invoke runtime repairs through this endpoint.
@@ -188,6 +207,9 @@ def build_frontend_handler(services):
                     "service": "ARGO Local Voice Assistant",
                     "ws_endpoint": f"ws://{request_host}:{ws_port}/ws"
                 })
+            elif path == '/api/show':
+                from core.show_service import BOARD
+                self._send_json({"items": BOARD.snapshot()})
             elif path == '/api/argo-roadmap':
                 from core.roadmap_catalog import search_argo_roadmap
                 self._send_json(search_argo_roadmap(_query_first(query, "q")))
