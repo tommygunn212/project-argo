@@ -134,3 +134,22 @@ def test_topic_titles_with_quotes_stay_readable(tmp_path, monkeypatch):
     monkeypatch.setattr(B, "PROJECTS_ROOT", tmp_path / "projects")
     B.add_topic_note("argo", 'The "big" one', "note")
     assert B.topics("argo")[0]["topic"] == "The 'big' one"
+
+
+def test_open_app_sends_home_assistant_to_the_browser(monkeypatch):
+    import webbrowser
+
+    from core.voice import tools
+
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+    monkeypatch.setattr("tools.home_assistant._base_url", lambda cfg: "http://ha.local:8123")
+    assert tools._is_home_assistant("Home-Assistant") and tools._is_home_assistant("home assistant")
+    assert not tools._is_home_assistant("notepad")
+    assert tools.open_home_assistant() == {"ok": True, "message": "Opened Home Assistant in your browser."}
+    assert opened == ["http://ha.local:8123"]
+    monkeypatch.setattr("tools.home_assistant._base_url", lambda cfg: "")
+    assert tools.open_home_assistant()["ok"] is False
+    monkeypatch.setattr("tools.home_assistant._base_url", lambda cfg: "http://ha.local:8123")
+    monkeypatch.setattr(webbrowser, "open", lambda url: False)
+    assert tools.open_home_assistant()["ok"] is False

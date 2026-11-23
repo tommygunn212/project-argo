@@ -29,6 +29,29 @@ async def _call(capability: Callable[..., dict], *args: Any) -> str:
     return json.dumps(result, default=str)
 
 
+def _is_home_assistant(name: str) -> bool:
+    return " ".join(str(name or "").casefold().replace("-", " ").split()) in {
+        "home assistant", "homeassistant", "ha", "home assistant app", "home assistant dashboard"}
+
+
+def open_home_assistant() -> dict:
+    """Open Home Assistant's web page in the default browser."""
+    import webbrowser
+
+    from tools import home_assistant
+
+    url = home_assistant._base_url(home_assistant._load_ha_config())
+    if not url.startswith(("http://", "https://")):
+        return {"ok": False, "message": "I don't have a Home Assistant address."}
+    try:
+        opened = webbrowser.open(url)
+    except Exception as exc:
+        return {"ok": False, "message": f"I couldn't open the browser: {type(exc).__name__}."}
+    if not opened:
+        return {"ok": False, "message": f"The browser didn't open. The address is {url}."}
+    return {"ok": True, "message": "Opened Home Assistant in your browser."}
+
+
 class MachineTools:
     """This PC: hardware, health, volume and performance profile."""
 
@@ -204,7 +227,12 @@ class AppTools:
 
     @function_tool()
     async def open_app(self, name: str) -> str:
-        """Launch an application by name, e.g. "notepad", "chrome", "spotify"."""
+        """Launch an application by name, e.g. "notepad", "chrome", "spotify".
+
+        "Home Assistant" is a web page, not an app: it opens in the browser.
+        """
+        if _is_home_assistant(name):
+            return json.dumps(await asyncio.to_thread(open_home_assistant))
         return await _call(capabilities.app_open, name)
 
     @function_tool()

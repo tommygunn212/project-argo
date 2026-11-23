@@ -17,7 +17,9 @@
 
   const PRESET_SECONDS = 24;      // how long each preset plays
   const BLEND_SECONDS = 2.7;      // cross-fade between presets
+  const FAVES_KEY = 'argoMilkdropFaves', FAVES_ONLY_KEY = 'argoMilkdropFavesOnly';
   const state = {
+    faves: [], favesOnly: false, ticks: 0,
     viz: [], audioContext: null, node: null, presets: [], names: [],
     active: false, raf: null, lastSwitch: 0, index: -1, ready: false, idle: null,
   };
@@ -76,6 +78,90 @@
     return a;
   }
 
+  function loadSaved() {
+    try {
+      const list = JSON.parse(root.localStorage.getItem(FAVES_KEY) || '[]');
+      state.faves = Array.isArray(list) ? list.filter(n => typeof n === 'string').slice(0, 500) : [];
+      state.favesOnly = root.localStorage.getItem(FAVES_ONLY_KEY) === '1';
+    } catch (_) { state.faves = []; state.favesOnly = false; }
+  }
+  function saveFaves() {
+    try {
+      root.localStorage.setItem(FAVES_KEY, JSON.stringify(state.faves));
+      root.localStorage.setItem(FAVES_ONLY_KEY, state.favesOnly ? '1' : '0');
+    } catch (_) {}
+  }
+  function current() { return state.names[state.index] || ''; }
+  function isFave(name) { return state.faves.indexOf(name || current()) >= 0; }
+  // Which preset comes next. With "favorites only" on and at least one favorite
+  // that exists in this preset pack, only favorites are visited.
+  function step(dir, blend) {
+    if (!state.names.length) return;
+    const n = state.names.length;
+    const usable = state.favesOnly && state.names.some(name => state.faves.indexOf(name) >= 0);
+    let i = state.index;
+    for (let tries = 0; tries < n; tries++) {
+      i = (i + dir + n) % n;
+      if (!usable || state.faves.indexOf(state.names[i]) >= 0) break;
+    }
+    loadPreset(i, blend);
+    refreshControls();
+  }
+  function toggleFavorite() {
+    const name = current();
+    if (!name) return false;
+    const at = state.faves.indexOf(name);
+    if (at >= 0) state.faves.splice(at, 1); else state.faves.push(name);
+    saveFaves(); refreshControls();
+    return at < 0;
+  }
+  function setFavoritesOnly(on) {
+    state.favesOnly = Boolean(on);
+    saveFaves(); refreshControls();
+    if (state.favesOnly && !isFave()) step(1, BLEND_SECONDS);
+  }
+
+  // A small control strip on each visualizer: previous, favorite, next, and
+  // "favorites only". It shows only while that visualizer is on screen.
+  const controls = [];
+  function refreshControls() {
+    controls.forEach(c => {
+      c.name.textContent = current();
+      c.fave.textContent = isFave() ? '\u2605' : '\u2606';
+      c.only.style.opacity = state.favesOnly ? '1' : '0.55';
+      c.only.title = state.favesOnly ? 'Playing favorites only (click for all)' : 'Playing all presets (click for favorites only)';
+      c.bar.style.display = c.canvas.offsetParent !== null ? 'flex' : 'none';
+    });
+  }
+  function buildControls(canvas) {
+    try {
+      const parent = canvas.parentElement;
+      if (!parent || !root.document) return;
+      if (root.getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+      const bar = root.document.createElement('div');
+      bar.style.cssText = 'position:absolute;left:8px;right:8px;bottom:8px;display:none;gap:6px;align-items:center;' +
+        'padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.55);color:#cfe;font:12px system-ui;z-index:5';
+      const mk = (label, title, fn) => {
+        const b = root.document.createElement('button');
+        b.textContent = label; b.title = title; b.type = 'button';
+        b.style.cssText = 'background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px';
+        b.addEventListener('click', ev => { ev.stopPropagation(); fn(); });
+        bar.appendChild(b);
+        return b;
+      };
+      mk('\u25c0', 'Previous preset', () => step(-1, BLEND_SECONDS));
+      const fave = mk('\u2606', 'Favorite this preset', toggleFavorite);
+      mk('\u25b6', 'Next preset', () => step(1, BLEND_SECONDS));
+      const only = mk('Faves only', '', () => setFavoritesOnly(!state.favesOnly));
+      only.style.fontSize = '12px';
+      const name = root.document.createElement('span');
+      name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8';
+      bar.appendChild(name);
+      parent.appendChild(bar);
+      controls.push({ canvas, bar, fave, only, name });
+    } catch (_) {}
+  }
+
   function loadPreset(index, blend) {
     if (!state.names.length) return;
     state.index = (index + state.names.length) % state.names.length;
@@ -89,6 +175,7 @@
     if (!supported()) return false;
     try {
       state.presets = root.butterchurnPresets.getPresets();
+      loadSaved();
       state.names = shuffle(Object.keys(state.presets));
       const ctx = ensureContext();
       Array.from(canvases || []).forEach(canvas => {
@@ -96,9 +183,10 @@
         canvas.width = w; canvas.height = h;
         const viz = lib().createVisualizer(ctx, canvas, { width: w, height: h, pixelRatio: 1 });
         state.viz.push({ canvas, viz, w, h });
+        if (!controls.some(c => c.canvas === canvas)) buildControls(canvas);
       });
       state.ready = state.viz.length > 0;
-      if (state.ready) { loadPreset(0, 0); attach(idleSource(ctx)); }
+      if (state.ready) { loadPreset(state.favesOnly ? -1 : 0, 0); if (state.favesOnly) step(1, 0); attach(idleSource(ctx)); refreshControls(); }
       return state.ready;
     } catch (err) {
       console.warn('MilkDrop visuals unavailable', err);
@@ -130,7 +218,8 @@
   function frame(now) {
     state.raf = state.active ? requestAnimationFrame(frame) : null;
     if (!state.active || document.hidden) return;
-    if (now - state.lastSwitch > PRESET_SECONDS * 1000) loadPreset(state.index + 1, BLEND_SECONDS);
+    if (now - state.lastSwitch > PRESET_SECONDS * 1000) step(1, BLEND_SECONDS);
+    if (controls.length && ++state.ticks % 30 === 0) refreshControls();
     state.viz.forEach(v => {
       const { w, h } = sizeOf(v.canvas);
       if (w !== v.w || h !== v.h) {
@@ -151,7 +240,11 @@
 
   root.MilkdropVisuals = {
     init, connect, disconnect, setActive, supported,
-    next: () => loadPreset(state.index + 1, BLEND_SECONDS),
+    next: () => step(1, BLEND_SECONDS),
+    prev: () => step(-1, BLEND_SECONDS),
+    toggleFavorite, setFavoritesOnly,
+    get favorites() { return state.faves.slice(); },
+    get favoritesOnly() { return state.favesOnly; },
     get presetName() { return state.names[state.index] || ''; },
   };
 })(typeof window !== 'undefined' ? window : this);
