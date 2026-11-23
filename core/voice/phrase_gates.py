@@ -67,6 +67,10 @@ class _OncePerUtterance:
     def acted(self, transcript: str) -> None:
         self._acted_on = transcript
 
+    @property
+    def acted_this_utterance(self) -> bool:
+        return bool(self._acted_on)
+
 
 def _is_speaking(session: AgentSession) -> bool:
     return str(getattr(session, "agent_state", "")) == "speaking"
@@ -167,12 +171,12 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         if _is_speaking(session):
             _interrupt(session, "WakeSleep")
 
-    def wake_up(phrase: str, transcript: str) -> None:
+    def wake_up(phrase: str, transcript: str, *, ack: bool = True) -> None:
         state.asleep = False
         logger.info("[WakeSleep] wake phrase %r -> listening again (heard %r)",
                     phrase, transcript[:80])
         voice_events.emit("wake_word_triggered", phrase=phrase, transcript=transcript[:120])
-        if cfg.wake_ack_enabled:
+        if ack and cfg.wake_ack_enabled:
             try:
                 session.generate_reply(instructions=WAKE_ACK_INSTRUCTIONS,
                                        allow_interruptions=True)
@@ -180,6 +184,25 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
                 logger.warning("[WakeSleep] wake acknowledgement failed", exc_info=True)
 
     def on_transcript(event) -> None:
+        if getattr(event, "is_final", False):
+            # Some transcribers (gpt-4o-mini-transcribe over realtime) send
+            # only blank interims, so the final is the first real text we
+            # see. Check it too, unless an interim already acted.
+            already = latch.acted_this_utterance
+            latch.candidate(event)  # re-arm for the next utterance
+            if already:
+                return
+            transcript = getattr(event, "transcript", "") or ""
+            phrase = opening_phrase(transcript, wake_phrases if state.asleep else sleep_phrases)
+            if not phrase:
+                return
+            if state.asleep:
+                # The model is already answering this turn; that answer is the
+                # acknowledgement, so don't stack a second reply on top.
+                wake_up(phrase, transcript, ack=False)
+            else:
+                fall_asleep(phrase, transcript)
+            return
         transcript = latch.candidate(event)
         if transcript is None:
             return

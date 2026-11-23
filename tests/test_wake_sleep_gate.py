@@ -153,6 +153,50 @@ class TestWakeAckConfigurable(unittest.TestCase):
         session.generate_reply.assert_called_once()
 
 
+class TestFinalOnlyTranscripts(unittest.TestCase):
+    """gpt-4o-mini-transcribe over realtime sends blank interims; only the final has text."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        with patch("core.voice_events.emit"):
+            gates.wire_wake_sleep_gate(self.session, make_cfg(wake_start_asleep=True, wake_ack_enabled=True))
+
+    def _utterance(self, text):
+        self.session.fire("user_input_transcribed", FakeEvent(transcript="", is_final=False))
+        self.session.fire("user_input_transcribed", FakeEvent(transcript=text, is_final=True))
+
+    def test_wake_phrase_in_final_wakes_her_without_a_second_reply(self):
+        with patch("core.voice_events.emit") as mock_emit:
+            self._utterance("Hey Argo, can you hear me?")
+        self.assertFalse(self.session.argo_wake.asleep)
+        mock_emit.assert_any_call("wake_word_triggered", phrase="hey argo",
+                                  transcript="Hey Argo, can you hear me?")
+        self.session.generate_reply.assert_not_called()
+        # her own answer to that turn must not be cut off
+        self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+        self.session.interrupt.assert_not_called()
+
+    def test_non_wake_final_keeps_her_asleep(self):
+        with patch("core.voice_events.emit"):
+            self._utterance("Can you hear me now?")
+            self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+        self.assertTrue(self.session.argo_wake.asleep)
+        self.session.interrupt.assert_called_once()
+
+    def test_sleep_phrase_in_final_puts_her_to_sleep(self):
+        with patch("core.voice_events.emit"):
+            self._utterance("hey argo")
+            self._utterance("Go to sleep.")
+        self.assertTrue(self.session.argo_wake.asleep)
+
+    def test_interim_that_already_acted_is_not_repeated_on_final(self):
+        with patch("core.voice_events.emit") as mock_emit:
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="hey argo", is_final=False))
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="hey argo go to sleep", is_final=True))
+        self.assertFalse(self.session.argo_wake.asleep)
+        self.assertEqual([c for c in mock_emit.call_args_list if c.args[0] == "wake_word_triggered"].__len__(), 1)
+
+
 class TestOpeningPhrase(unittest.TestCase):
     def test_phrase_must_open_the_utterance(self):
         self.assertEqual(gates.opening_phrase("Stop!", ("stop",)), "stop")
