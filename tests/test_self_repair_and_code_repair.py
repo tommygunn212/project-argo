@@ -124,7 +124,8 @@ def repo(tmp_path):
 
 
 def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang=False,
-                         project_path=None, verification_command=None, auto_apply=False):
+                         project_path=None, verification_command=None, auto_apply=False,
+                         before_dispatch=None):
     completed = threading.Event()
     broadcasts = []
     def broadcast(kind, payload):
@@ -156,6 +157,8 @@ def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang
     monkeypatch.setattr("core.code_repair.subprocess.Popen", launch)
     proposal = manager.propose("Fix VALUE to 2", project_path=project_path,
                                verification_command=verification_command)
+    if before_dispatch:
+        before_dispatch()
     result = manager.dispatch_if_approved(proposal["action_id"], True)
     assert result["status"] == "running", result
     assert completed.wait(20), manager.snapshot()
@@ -181,6 +184,42 @@ def test_isolated_repair_end_to_end_review_then_apply(monkeypatch, repo):
     assert (repo / "answer.py").read_text() == "VALUE = 2\n"
     assert (repo / "new_file.py").exists()
     assert restored.apply_if_approved(job["action_id"], job["patch_sha256"], True)["status"] == "error"
+
+
+def test_uncommitted_edits_no_longer_block_a_repair_but_do_block_apply(monkeypatch, repo):
+    def dirty():
+        (repo / "answer.py").write_text("VALUE = 50  # Tommy's work in progress\n")
+    manager, job = launch_fixture_agent(monkeypatch, repo, before_dispatch=dirty)
+    # The request ran from committed HEAD and was told about the dirty tree.
+    assert job["status"] == "review_ready", job
+    assert job["dirty_at_start"] is True
+    assert "VALUE = 2" in job["diff"]
+    assert (repo / "answer.py").read_text().startswith("VALUE = 50")  # never touched
+    # Applying still refuses on a dirty tree, with an actionable message...
+    refused = manager.apply_if_approved(job["action_id"], job["patch_sha256"], True)
+    assert refused["status"] == "error" and "Commit or set them aside" in refused["message"]
+    assert (repo / "answer.py").read_text().startswith("VALUE = 50")
+    # ...and Tommy's edits survive the refusal.
+    assert not (repo / "new_file.py").exists()
+
+
+def test_codex_found_outside_path_via_desktop_app_fallback(monkeypatch, repo):
+    manager = CodeRepairManager(repo)
+    proposal = manager.propose("repair")
+    monkeypatch.setattr("core.code_repair.shutil.which", lambda _: None)
+    monkeypatch.setattr("core.code_repair._fallback_codex", lambda: "fixture-codex")
+    seen = {}
+    original_popen = subprocess.Popen
+    def launch(command, **kwargs):
+        if command[0] != "fixture-codex":
+            return original_popen(command, **kwargs)  # real git for the clone
+        seen["exe"] = command[0]
+        return SimpleNamespace(pid=1, wait=lambda timeout=None: 0)
+    monkeypatch.setattr("core.code_repair.subprocess.Popen", launch)
+    monkeypatch.setattr(CodeRepairManager, "_monitor", lambda *a, **k: None)
+    result = manager.dispatch_if_approved(proposal["action_id"], True)
+    assert result["status"] == "running", result.get("message")
+    assert seen["exe"] == "fixture-codex"
 
 
 def test_restart_requires_applied_change_and_uses_stack_script(monkeypatch, repo):
@@ -386,6 +425,7 @@ def test_launch_error_becomes_persisted_failure(monkeypatch, repo):
     manager = CodeRepairManager(repo)
     proposal = manager.propose("repair")
     monkeypatch.setattr("core.code_repair.shutil.which", lambda _: None)
+    monkeypatch.setattr("core.code_repair._fallback_codex", lambda: None)
     result = manager.dispatch_if_approved(proposal["action_id"], True)
     assert result["status"] == "failed"
     assert CodeRepairManager(repo).snapshot()[0]["status"] == "failed"

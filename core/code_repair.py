@@ -13,6 +13,20 @@ import uuid
 from pathlib import Path
 
 
+def _fallback_codex() -> str | None:
+    """Codex when it isn't on PATH: the desktop app's bundled CLI, then known spots.
+
+    The old LocalAppData install is too old for current models; delegate_jobs
+    already knows the right order, so reuse it rather than guess twice.
+    """
+    try:
+        from core.delegate_jobs import DelegateSettings, resolve_executable
+
+        return resolve_executable(DelegateSettings(enabled=True, engine="codex"))
+    except Exception:
+        return None
+
+
 class CodeRepairManager:
     def __init__(self, root=None, broadcast_fn=None, *, timeout=1800, verify_command=None, auto_apply=True):
         self.root = Path(root or Path(__file__).resolve().parents[1]).resolve()
@@ -127,13 +141,17 @@ class CodeRepairManager:
                 return dict(job)
             try:
                 project = self._job_root(job)
-                if self._git(project, "status", "--porcelain", "--untracked-files=no").strip():
-                    raise RuntimeError("Commit or set aside tracked changes before starting an isolated code change.")
+                # Uncommitted edits used to block every request. They don't need
+                # to: the work happens in a clone of the committed HEAD and never
+                # touches this checkout. What stays strict is APPLYING the result
+                # (apply_if_approved) - that needs a clean tree so a reviewed
+                # patch can't collide with work in progress.
+                dirty = bool(self._git(project, "status", "--porcelain", "--untracked-files=no").strip())
                 if self._git(project, "rev-parse", "HEAD").strip() != job["base"]:
                     raise RuntimeError("The project changed since this proposal. Create a new request.")
-                codex = shutil.which("codex")
+                codex = shutil.which("codex") or _fallback_codex()
                 if not codex:
-                    raise RuntimeError("Codex CLI is unavailable on PATH.")
+                    raise RuntimeError("Codex CLI was not found on PATH or in the Codex desktop app.")
                 job.update(status="preparing")
                 self._save(job)
                 directory = self._folder(job)
@@ -154,7 +172,10 @@ class CodeRepairManager:
                         "--sandbox", "workspace-write", "-C", str(workspace), "-o", job["result_path"], prompt],
                         cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                job.update(status="running", pid=process.pid, message="Codex is preparing an isolated code change.")
+                note = (" Your uncommitted edits are not in the isolated copy; commit them before applying the result."
+                        if dirty else "")
+                job.update(status="running", pid=process.pid, dirty_at_start=dirty,
+                           message="Codex is preparing an isolated code change." + note)
                 self._save(job)
                 threading.Thread(target=self._monitor, args=(action_id, process), daemon=True).start()
             except Exception as exc:
@@ -250,7 +271,8 @@ class CodeRepairManager:
                 if patch_sha256 != job["patch_sha256"] or hashlib.sha256(patch).hexdigest() != patch_sha256:
                     raise RuntimeError("Patch changed since review.")
                 if self._git(project, "rev-parse", "HEAD").strip() != job["base"] or self._git(project, "status", "--porcelain", "--untracked-files=no").strip():
-                    raise RuntimeError("Working checkout changed. Rebase and review the repair before applying.")
+                    raise RuntimeError("Working checkout changed or has uncommitted edits. Commit or set them aside, "
+                                       "then apply again (or re-run the request) so the reviewed patch lands on a clean base.")
                 self._git(project, "apply", "--check", job["patch_path"])
                 self._git(project, "apply", job["patch_path"])
                 self._git(project, "add", "-A", "--", *job["changed_files"])
