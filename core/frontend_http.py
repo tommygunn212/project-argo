@@ -289,6 +289,8 @@ def build_frontend_handler(services):
                     'argo_cyber_male.png': ('assets', 'image/png'),
                     'cortana-avatar.js': ('assets', 'application/javascript; charset=utf-8'),
                     'avatar-motion.js': ('assets', 'application/javascript; charset=utf-8'),
+                    'orbit-face.js': ('assets', 'application/javascript; charset=utf-8'),
+                    'orbit-demo.html': ('', 'text/html; charset=utf-8'),
                     'neural-orb.js': ('assets', 'application/javascript; charset=utf-8'),
                     'milkdrop-visuals.js': ('assets', 'application/javascript; charset=utf-8'),
                     'butterchurn.min.js': ('vendor', 'application/javascript; charset=utf-8'),

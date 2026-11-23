@@ -1374,7 +1374,7 @@ input[type="range"]::-moz-range-thumb {
             <legend>Avatar</legend>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
             <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="dashboardAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
+            <label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice"><input type="radio" name="dashboardAvatar" value="orbit" onchange="selectAvatar(this.value)"><span>Orbit</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="dashboardAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
           </fieldset>
         </div>
       </div>
@@ -1574,7 +1574,7 @@ input[type="range"]::-moz-range-thumb {
                 <legend>Avatar</legend>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="auto" checked onchange="selectAvatar(this.value)"><span>Auto</span></label>
                 <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cortana" onchange="selectAvatar(this.value)"><span>Cortana</span></label>
-                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="voiceAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
+                <label class="avatar-choice"><input type="radio" name="voiceAvatar" value="cyber_male" onchange="selectAvatar(this.value)"><span>Cyber Male</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orb" onchange="selectAvatar(this.value)"><span>Orb</span></label><label class="avatar-choice"><input type="radio" name="voiceAvatar" value="orbit" onchange="selectAvatar(this.value)"><span>Orbit</span></label><label class="avatar-choice" title="Winamp-style MilkDrop visuals. Double-click for full screen."><input type="radio" name="voiceAvatar" value="milkdrop" onchange="selectAvatar(this.value)"><span>Visuals</span></label>
               </fieldset>
             </div>
           </div>
@@ -2309,6 +2309,7 @@ input[type="range"]::-moz-range-thumb {
 <script src="/v2-assets/livekit-client.umd.js"></script>
 <script src="/v2-assets/cortana-avatar.js"></script>
 <script src="/v2-assets/neural-orb.js"></script>
+<script src="/v2-assets/orbit-face.js"></script>
 <script src="/v2-assets/butterchurn.min.js"></script>
 <script src="/v2-assets/butterchurnPresets.min.js"></script>
 <script src="/v2-assets/milkdrop-visuals.js"></script>
@@ -2342,7 +2343,7 @@ let avatarMode = 'orb';
 let milkdropReady = false;  // set by initMilkdrop(); read by syncOrbMode()
 try {
   const savedAvatar = localStorage.getItem('argo_avatar');
-  if (['auto', 'cortana', 'cyber_male', 'orb', 'milkdrop'].includes(savedAvatar)) avatarMode = savedAvatar;
+  if (['auto', 'cortana', 'cyber_male', 'orb', 'orbit', 'milkdrop'].includes(savedAvatar)) avatarMode = savedAvatar;
 } catch (_) {}
 let selectedAvatar = avatarMode === 'cyber_male' ? 'cyber_male' : 'cortana';
 let avatarMotionPreference = null;
@@ -3520,7 +3521,7 @@ function attachLocalAvatarRenderer(stage, el) {
 }
 
 function selectAvatar(value, persist = true) {
-  avatarMode = ['cortana', 'cyber_male', 'orb', 'milkdrop'].includes(value) ? value : 'auto';
+  avatarMode = ['cortana', 'cyber_male', 'orb', 'orbit', 'milkdrop'].includes(value) ? value : 'auto';
   if (persist) {
     try { localStorage.setItem('argo_avatar', avatarMode); } catch (_) {}
   }
@@ -3537,7 +3538,7 @@ function configureLocalAvatarMedia(status) {
   const voice = livekitConnected ? `openai:${livekitMeta.voice}` : $('ttsSelect').value;
   selectedAvatar = avatarMode === 'auto'
     ? (window.CortanaAvatar?.avatarForVoice(voice, selectedAvatar) || selectedAvatar)
-    : (avatarMode === 'orb' || avatarMode === 'milkdrop' ? 'cortana' : avatarMode);
+    : (avatarMode === 'orb' || avatarMode === 'orbit' || avatarMode === 'milkdrop' ? 'cortana' : avatarMode);
   const male = selectedAvatar === 'cyber_male';
   const name = male ? 'Cyber Male' : 'Cortana';
   document.querySelectorAll('.avatar-picker input').forEach(input => {
@@ -3610,9 +3611,9 @@ function updateAvatarProviderDisplay(status) {
     el.title = window.MilkdropVisuals?.presetName || 'Winamp-style visuals driven by ARGO voice audio.';
     return;
   }
-  if (avatarMode === 'orb') {
+  if (avatarMode === 'orb' || avatarMode === 'orbit') {
     const live = livekitConnected && realtimeAvatarMeter?.audioContext.state === 'running';
-    el.textContent = `NEURAL ORB · ${live ? 'VOICE SYNC' : 'LOCAL'}`;
+    el.textContent = `${avatarMode === 'orbit' ? 'ORBIT' : 'NEURAL ORB'} · ${live ? 'VOICE SYNC' : 'LOCAL'}`;
     el.style.color = 'var(--accent3)';
     el.title = 'The particle orb pulses with ARGO voice audio.';
     return;
@@ -4161,7 +4162,7 @@ function drawAvatarLoop(now) {
   const mouth = portraitEnvelope ? portraitEnvelope.update(livekitConnected ? avatarAudioLevel : desktopLevel,dt) : 0;
   setAvatarState(avatarVisualState());
   portraitRenderers.forEach(renderer => {
-    if (avatarMode === 'orb' || avatarMode === 'milkdrop') return;
+    if (avatarMode === 'orb' || avatarMode === 'orbit' || avatarMode === 'milkdrop') return;
     const stage = renderer.canvas.closest('.avatar-stage');
     const localMedia = stage?.querySelector('.avatar-local-media');
     if (!stage?.classList.contains('has-video') && (!localMedia || renderer.image === localMedia)) {
@@ -4194,9 +4195,11 @@ function initAvatar() {
 
 // ═══════ NEURAL ORB ═══════
 const orbRenderers = [];
+const orbitRenderers = [];
 function syncOrbMode() {
-  const on = avatarMode === 'orb';
+  const on = avatarMode === 'orb' || avatarMode === 'orbit';
   avatarStages.forEach(stage => stage.classList.toggle('orb-mode', on));
+  document.querySelectorAll('.orb-canvas').forEach(c => c.style.visibility = (c.dataset.orbit === 'true') === (avatarMode === 'orbit') ? '' : 'hidden');
   const viz = avatarMode === 'milkdrop' && milkdropReady;
   avatarStages.forEach(stage => stage.classList.toggle('viz-mode', viz));
   window.MilkdropVisuals?.setActive(viz);
@@ -4204,13 +4207,13 @@ function syncOrbMode() {
 }
 function orbLoop(now) {
   requestAnimationFrame(orbLoop);
-  if (avatarMode !== 'orb' || document.hidden) return;
+  if (!['orb','orbit'].includes(avatarMode) || document.hidden) return;
   const level = livekitConnected
     ? avatarAudioLevel
     : (currentState === 'SPEAKING' && now - desktopAvatarAudioTime < 250 ? desktopAvatarAudioLevel : 0);
   const reduced = avatarMotionPreference === null ? reducedAvatarMotion.matches : !avatarMotionPreference;
   const state = avatarVisualState();
-  orbRenderers.forEach(orb => orb.draw(now, level, state, reduced));
+  (avatarMode === 'orbit' ? orbitRenderers : orbRenderers).forEach(orb => orb.draw(now, level, state, reduced));
 }
 function initMilkdrop() {
   if (!window.MilkdropVisuals) return;
@@ -4232,13 +4235,22 @@ function initMilkdrop() {
 }
 
 function initOrb() {
+  if (window.OrbitFace) document.querySelectorAll('.orb-canvas').forEach(original => {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'orb-canvas'; canvas.dataset.orbit = 'true';
+    canvas.setAttribute('role','img'); canvas.setAttribute('aria-label','Orbit star-field face');
+    original.after(canvas);
+    try { orbitRenderers.push(new window.OrbitFace.Face(canvas)); }
+    catch(error) { canvas.remove(); console.warn('Orbit unavailable',error); }
+  });
+  if (avatarMode === 'orbit' && !orbitRenderers.length) avatarMode = 'orb';
   if (!window.NeuralOrb) {
     addSystemLog('Neural orb renderer unavailable; using the portrait instead.');
     if (avatarMode === 'orb') avatarMode = 'auto';
     syncOrbMode();
     return;
   }
-  document.querySelectorAll('.orb-canvas').forEach(canvas => {
+  document.querySelectorAll('.orb-canvas:not([data-orbit])').forEach(canvas => {
     try { orbRenderers.push(new window.NeuralOrb.Orb(canvas)); }
     catch (error) { console.warn('Neural orb unavailable on one stage', error); }
   });
