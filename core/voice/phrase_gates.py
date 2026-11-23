@@ -30,6 +30,13 @@ WAKE_ACK_INSTRUCTIONS = (
     "Acknowledge you are listening again, one or two words only, nothing more."
 )
 
+WAKE_REPLY_INSTRUCTIONS = (
+    "Tommy just woke you with your wake phrase. Answer only his last line, the one "
+    "that started with the wake phrase. If that line was only the wake phrase, a few "
+    "words to say you're listening is enough. Ignore anything said before it while "
+    "you were asleep - that was not meant for you."
+)
+
 
 def opening_phrase(transcript: str, phrases: Iterable[str]) -> str | None:
     """The phrase this transcript opens with, or None.
@@ -118,6 +125,35 @@ def wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) ->
         logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
 
 
+def set_auto_reply(session: AgentSession, enabled: bool) -> bool:
+    """Turn the realtime model's automatic reply-at-end-of-turn on or off.
+
+    Off is what makes "asleep" real: the model still transcribes everything (so
+    the wake phrase is heard) but never starts a response on its own, so it
+    cannot speak *or run tools* on overheard speech. Returns False when this
+    model has no server turn detection to change; the reactive gate below is
+    then the only protection.
+    """
+    model = getattr(session, "llm", None)
+    opts = getattr(model, "_opts", None)
+    turn = getattr(opts, "turn_detection", None)
+    if model is None or turn is None or not hasattr(model, "update_options"):
+        return False
+    try:
+        if hasattr(turn, "model_copy"):
+            updated = turn.model_copy(update={"create_response": enabled})
+        else:
+            updated = dict(turn)
+            updated["create_response"] = enabled
+        model.update_options(turn_detection=updated)
+        logger.info("[WakeSleep] auto-reply %s", "on" if enabled else "off")
+        return True
+    except Exception:
+        logger.warning("[WakeSleep] could not switch auto-reply %s",
+                       "on" if enabled else "off", exc_info=True)
+        return False
+
+
 class WakeState:
     """Whether ARGO is asleep, plus a one-shot pass for a deliberate line."""
 
@@ -165,18 +201,33 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
 
     def fall_asleep(phrase: str, transcript: str) -> None:
         state.asleep = True
+        set_auto_reply(session, False)
         logger.info("[WakeSleep] sleep phrase %r -> going quiet (heard %r)",
                     phrase, transcript[:80])
         voice_events.emit("sleep_word_triggered", phrase=phrase, transcript=transcript[:120])
         if _is_speaking(session):
             _interrupt(session, "WakeSleep")
 
-    def wake_up(phrase: str, transcript: str, *, ack: bool = True) -> None:
+    def wake_up(phrase: str, transcript: str, *, from_final: bool = False) -> None:
         state.asleep = False
+        auto_was_off = set_auto_reply(session, True)
         logger.info("[WakeSleep] wake phrase %r -> listening again (heard %r)",
                     phrase, transcript[:80])
         voice_events.emit("wake_word_triggered", phrase=phrase, transcript=transcript[:120])
-        if ack and cfg.wake_ack_enabled:
+        if from_final and auto_was_off:
+            # Auto-reply was off when this turn ended, so nothing is answering
+            # it yet. Answer it now - just this line, not the overheard ones.
+            try:
+                session.generate_reply(instructions=WAKE_REPLY_INSTRUCTIONS,
+                                       allow_interruptions=True)
+            except Exception:
+                logger.warning("[WakeSleep] wake reply failed", exc_info=True)
+            return
+        if from_final:
+            # The model already answered this turn on its own; don't stack a
+            # second reply on top.
+            return
+        if cfg.wake_ack_enabled:
             try:
                 session.generate_reply(instructions=WAKE_ACK_INSTRUCTIONS,
                                        allow_interruptions=True)
@@ -199,7 +250,7 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
             if state.asleep:
                 # The model is already answering this turn; that answer is the
                 # acknowledgement, so don't stack a second reply on top.
-                wake_up(phrase, transcript, ack=False)
+                wake_up(phrase, transcript, from_final=True)
             else:
                 fall_asleep(phrase, transcript)
             return
@@ -213,7 +264,17 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         (wake_up if state.asleep else fall_asleep)(phrase, transcript)
 
     def on_agent_state(event) -> None:
-        if not state.asleep or str(getattr(event, "new_state", "")) != "speaking":
+        new_state = str(getattr(event, "new_state", ""))
+        if not state.asleep or new_state not in ("speaking", "thinking"):
+            return
+        if new_state == "thinking":
+            # Thinking while asleep means a reply - maybe a tool call - is
+            # under way on overheard speech. Stop it before it does anything,
+            # unless it is the one deliberate line (a due reminder).
+            if not state.allow_once:
+                logger.info("[WakeSleep] reply thinking while asleep -> interrupting")
+                voice_events.emit("wake_sleep_suppressed_reply", stage="thinking")
+                _interrupt(session, "WakeSleep")
             return
         if state.allow_once:
             # A line ARGO was told to say on purpose (a due reminder).
@@ -224,6 +285,9 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
         logger.info("[WakeSleep] reply started while asleep -> interrupting")
         voice_events.emit("wake_sleep_suppressed_reply")
         _interrupt(session, "WakeSleep")
+
+    if state.asleep:
+        set_auto_reply(session, False)
 
     try:
         session.on("user_input_transcribed", on_transcript)

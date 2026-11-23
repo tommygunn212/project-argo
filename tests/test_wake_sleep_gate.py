@@ -197,6 +197,68 @@ class TestFinalOnlyTranscripts(unittest.TestCase):
         self.assertEqual([c for c in mock_emit.call_args_list if c.args[0] == "wake_word_triggered"].__len__(), 1)
 
 
+class FakeModel:
+    """A realtime model whose server turn detection can be switched."""
+
+    def __init__(self):
+        self._opts = type("Opts", (), {})()
+        self._opts.turn_detection = {"type": "semantic_vad", "create_response": True}
+        self.updates = []
+
+    def update_options(self, *, turn_detection):
+        self.updates.append(turn_detection["create_response"])
+        self._opts.turn_detection = turn_detection
+
+
+class TestAutoReplyIsReallyOffWhileAsleep(unittest.TestCase):
+    """Asleep must stop the model replying - and so running tools - not just speaking."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        self.session.llm = FakeModel()
+        with patch("core.voice_events.emit"):
+            gates.wire_wake_sleep_gate(self.session, make_cfg(wake_start_asleep=True))
+
+    def _utterance(self, text):
+        self.session.fire("user_input_transcribed", FakeEvent(transcript="", is_final=False))
+        self.session.fire("user_input_transcribed", FakeEvent(transcript=text, is_final=True))
+
+    def test_starting_asleep_switches_auto_reply_off(self):
+        self.assertEqual(self.session.llm.updates, [False])
+
+    def test_overheard_speech_starts_no_reply(self):
+        with patch("core.voice_events.emit"):
+            self._utterance("What's the weather tomorrow?")
+        self.session.generate_reply.assert_not_called()
+        self.assertEqual(self.session.llm.updates, [False])
+
+    def test_wake_turns_auto_reply_on_and_answers_that_line(self):
+        with patch("core.voice_events.emit"):
+            self._utterance("Hey Argo, can you hear me?")
+        self.assertEqual(self.session.llm.updates, [False, True])
+        self.session.generate_reply.assert_called_once()
+        self.assertIn("Ignore anything said before",
+                      self.session.generate_reply.call_args.kwargs["instructions"])
+
+    def test_sleep_turns_auto_reply_back_off(self):
+        with patch("core.voice_events.emit"):
+            self._utterance("hey argo")
+            self._utterance("Go to sleep.")
+        self.assertEqual(self.session.llm.updates, [False, True, False])
+
+    def test_thinking_while_asleep_is_interrupted(self):
+        with patch("core.voice_events.emit"):
+            self.session.fire("agent_state_changed", FakeEvent(new_state="thinking"))
+        self.session.interrupt.assert_called_once()
+
+    def test_deliberate_line_passes_thinking_and_speaking(self):
+        self.session.argo_wake.allow_once = True
+        with patch("core.voice_events.emit"):
+            self.session.fire("agent_state_changed", FakeEvent(new_state="thinking"))
+            self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+        self.session.interrupt.assert_not_called()
+
+
 class TestOpeningPhrase(unittest.TestCase):
     def test_phrase_must_open_the_utterance(self):
         self.assertEqual(gates.opening_phrase("Stop!", ("stop",)), "stop")
