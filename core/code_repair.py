@@ -174,7 +174,7 @@ class CodeRepairManager:
                     "Do not push, deploy, send messages, or edit outside this checkout unless Tommy's request expressly authorizes that action. "
                     "Do not start microphones or production services. Explain remaining uncertainty.")
                 with Path(job["log_path"]).open("w", encoding="utf-8") as log:
-                    process = subprocess.Popen([codex, "exec", "-m", "gpt-6-astra",
+                    process = subprocess.Popen([codex, "exec", "-m", os.environ.get("ARGO_CODEX_MODEL", "gpt-6.1-terra"),
                         "-c", 'model_reasoning_effort="high"', "-c", 'approval_policy="never"',
                         "--sandbox", "workspace-write", "-C", str(workspace), "-o", job["result_path"], prompt],
                         cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,

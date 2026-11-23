@@ -141,7 +141,7 @@ def launch_fixture_agent(monkeypatch, repo, *, fail=False, test_fail=False, hang
     def launch(command, **kwargs):
         if command[0] != "fixture-codex":
             return original_popen(command, **kwargs)
-        assert "gpt-6-astra" in command
+        assert "gpt-6.1-terra" in command
         assert "--approve-for-me" not in command
         assert "workspace-write" in command
         assert Path(kwargs["cwd"]).resolve() != repo.resolve()
