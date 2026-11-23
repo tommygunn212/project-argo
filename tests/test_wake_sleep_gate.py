@@ -291,9 +291,29 @@ class TestUrgentInterrupts(unittest.TestCase):
             self._interim("stop")
             self._interim("stop talking")
             self.assertEqual(self.session.interrupt.call_count, 1)
-            self.session.fire("user_input_transcribed", FakeEvent(transcript="stop talking", is_final=True))
+            self.session.fire("user_input_transcribed",
+                              FakeEvent(transcript="stop talking about that", is_final=True))
             self._interim("stop")
         self.assertEqual(self.session.interrupt.call_count, 2)
+
+    def test_bare_stop_in_final_interrupts_and_cuts_the_reply_to_it(self):
+        with patch("core.voice_events.emit") as mock_emit:
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="", is_final=False))
+            self.session.fire("user_input_transcribed", FakeEvent(transcript="Stop.", is_final=True))
+            self.assertEqual(self.session.interrupt.call_count, 1)
+            self.session.fire("agent_state_changed", FakeEvent(new_state="thinking"))
+            self.assertEqual(self.session.interrupt.call_count, 2)
+            # only that one reply is cut; the next turn is answered normally
+            self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+        self.assertEqual(self.session.interrupt.call_count, 2)
+        mock_emit.assert_any_call("urgent_hush", phrase="stop", transcript="Stop.")
+
+    def test_stop_inside_a_real_request_is_not_hushed(self):
+        with patch("core.voice_events.emit"):
+            self.session.fire("user_input_transcribed",
+                              FakeEvent(transcript="Stop the print job.", is_final=True))
+            self.session.fire("agent_state_changed", FakeEvent(new_state="thinking"))
+        self.session.interrupt.assert_not_called()
 
     def test_no_phrases_registers_nothing(self):
         session = FakeSession()

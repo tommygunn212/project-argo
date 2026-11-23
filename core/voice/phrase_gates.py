@@ -38,6 +38,19 @@ WAKE_REPLY_INSTRUCTIONS = (
 )
 
 
+def _normalize(transcript: str) -> str:
+    return " ".join((transcript or "").strip().lower().translate(_PUNCTUATION).split())
+
+
+def whole_phrase(transcript: str, phrases: Iterable[str]) -> str | None:
+    """The phrase if it is the ENTIRE utterance ("Stop." yes, "stop the job" no)."""
+    text = _normalize(transcript)
+    for phrase in phrases:
+        if text == phrase:
+            return phrase
+    return None
+
+
 def opening_phrase(transcript: str, phrases: Iterable[str]) -> str | None:
     """The phrase this transcript opens with, or None.
 
@@ -104,8 +117,40 @@ def wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) ->
         return
 
     latch = _OncePerUtterance()
+    # A bare "Stop." means "be quiet" - not "answer me about stopping". The
+    # model still gets that turn and replies to it (live, it once ran
+    # check_background_tasks and said "Stopped, nothing running"), so the
+    # reply to a bare stop phrase is cut before it gets anywhere.
+    hush = {"until": 0.0}
+    HUSH_SECONDS = 4.0
+
+    def on_final(event) -> None:
+        transcript = getattr(event, "transcript", "") or ""
+        phrase = whole_phrase(transcript, phrases)
+        if not phrase:
+            return
+        import time as _time
+
+        hush["until"] = _time.monotonic() + HUSH_SECONDS
+        logger.info("[Interrupt] bare %r -> staying quiet, no reply (heard %r)",
+                    phrase, transcript[:80])
+        voice_events.emit("urgent_hush", phrase=phrase, transcript=transcript[:120])
+        _interrupt(session, "Interrupt")
+
+    def on_agent_state(event) -> None:
+        if str(getattr(event, "new_state", "")) not in ("thinking", "speaking"):
+            return
+        import time as _time
+
+        if _time.monotonic() < hush["until"]:
+            hush["until"] = 0.0
+            logger.info("[Interrupt] reply to a bare stop phrase -> cutting it")
+            voice_events.emit("urgent_hush_reply_cut")
+            _interrupt(session, "Interrupt")
 
     def on_transcript(event) -> None:
+        if getattr(event, "is_final", False):
+            on_final(event)
         transcript = latch.candidate(event)
         if transcript is None:
             return
@@ -120,6 +165,7 @@ def wire_urgent_interrupts(session: AgentSession, cfg: LiveKitRealtimeConfig) ->
 
     try:
         session.on("user_input_transcribed", on_transcript)
+        session.on("agent_state_changed", on_agent_state)
         logger.info("[Interrupt] urgent phrases armed: %s", ", ".join(phrases))
     except Exception:
         logger.warning("[Interrupt] could not arm urgent phrases", exc_info=True)
