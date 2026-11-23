@@ -192,6 +192,31 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
                            "at the /board page on his dashboard."})
 
     @function_tool()
+    async def note_to_topic(self, project: str, topic: str, text: str) -> str:
+        """Save a note under a topic inside a project, e.g. project ChefsByte,
+        topic Cooking School. Use when Tommy says "note that under promotions"
+        or wants a thread of thoughts kept separate and on topic. Topics are
+        created on first use."""
+        from core import board_service
+        try:
+            done = await asyncio.to_thread(board_service.add_topic_note, project, topic, text)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        return json.dumps({"ok": True, "message": f"Noted under {done['project']}, {done['topic']}."})
+
+    @function_tool()
+    async def list_topics(self, project: str = "") -> str:
+        """Say which topics a project has and the newest thing in each. Leave
+        project empty for all projects."""
+        from core import board_service
+        found = await asyncio.to_thread(board_service.topics, project)
+        if not found:
+            return json.dumps({"ok": True, "message": "No topics yet."})
+        lines = [f"{t['project']} / {t['topic']}: {t['count']} notes, newest: {t['entries'][0][:120]}"
+                 for t in found[:8]]
+        return json.dumps({"ok": True, "topics": lines})
+
+    @function_tool()
     async def tidy_board(self, project: str = "") -> str:
         """Reset a project's board cards to a neat grid. Use when he says the
         board is messy or asks you to tidy up."""

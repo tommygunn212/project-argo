@@ -85,3 +85,39 @@ def test_the_agent_has_the_board_tools():
 
     for name in ("show_board", "tidy_board"):
         assert hasattr(agent_mod.ArgoRealtimeAgent, name)
+
+def test_topic_notes_are_kept_per_project_and_newest_first(board):
+    done = B.add_topic_note("cooking school", "Promotions", "try a launch week discount")
+    assert done == {"project": "ChefsByte", "topic": "Promotions"}
+    B.add_topic_note("chefsbyte", "promotions", "email the list first")
+    B.add_topic_note("chefsbyte", "Mentor", "Dot suggested weekly review")
+    found = B.topics("chefsbyte")
+    by = {t["topic"]: t for t in found}
+    assert by["Promotions"]["count"] == 2
+    assert by["Promotions"]["entries"][0].endswith("email the list first")
+    assert B.topics("Argo") == [] and len(B.topics("All")) == 2
+
+
+def test_topic_note_rejects_empty_and_unsafe_names(board):
+    with pytest.raises(ValueError):
+        B.add_topic_note("argo", "x", "   ")
+    B.add_topic_note("argo", "../../evil", "text")
+    assert not (board / "evil.md").exists()
+    assert [p.name for p in (B.PROJECTS_ROOT / "Argo" / "topics").iterdir()] == ["evil.md"]
+
+
+def test_snapshot_carries_topics_and_activity(board, monkeypatch):
+    B.add_topic_note("argo", "Board", "cards")
+    from core.voice import action_log
+    monkeypatch.setattr(action_log, "recent", lambda n=20: [
+        {"clock": "2026-11-23T12:00:00.000", "tool": "show_image", "ok": True, "output": {"message": "Showing it."}}])
+    snap = B.snapshot("argo", [], [])
+    assert snap["topics"][0]["topic"] == "Board"
+    assert snap["activity"] == [{"clock": "2026-11-23T12:00:00", "tool": "show_image", "ok": True, "said": "Showing it."}]
+
+
+def test_the_agent_has_topic_tools():
+    import livekit_realtime_agent as agent_mod
+
+    for name in ("note_to_topic", "list_topics"):
+        assert hasattr(agent_mod.ArgoRealtimeAgent, name)

@@ -111,6 +111,70 @@ def notes(project: str, limit: int = 12) -> list[str]:
     return bullets[-limit:][::-1]
 
 
+def _topic_slug(topic: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")
+    return slug[:60] or "general"
+
+
+def add_topic_note(project: str, topic: str, text: str) -> dict:
+    """Append a dated line to one topic under a project (a named stream of notes)."""
+    name = normalize(project)
+    if name == ALL:
+        name = "Inbox"
+    title = " ".join(topic.split())[:60] or "General"
+    line = " ".join(text.split())[:1000]
+    if not line:
+        raise ValueError("nothing to note")
+    folder = PROJECTS_ROOT / name / "topics"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (_topic_slug(title) + ".md")
+    if not path.exists():
+        path.write_text(f'---\ntitle: "{title}"\nproject: "{name}"\n---\n\n', encoding="utf-8")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"- {time.strftime('%Y-%m-%d')}: {line}\n")
+    return {"project": name, "topic": title}
+
+
+def topics(project: str, per_topic: int = 6) -> list[dict]:
+    """Topics under a project (or every project for All): name, count, newest entries first."""
+    name = normalize(project)
+    names = project_names() if name == ALL else [name]
+    found = []
+    for proj in names:
+        folder = PROJECTS_ROOT / proj / "topics"
+        if not folder.is_dir():
+            continue
+        for path in folder.glob("*.md"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            meta, body = _front_matter(text)
+            entries = [ln.lstrip("-* ").strip() for ln in body.splitlines() if ln.strip().startswith(("-", "*"))]
+            found.append({"project": proj, "topic": meta.get("title") or path.stem, "count": len(entries),
+                          "entries": entries[-per_topic:][::-1], "mtime": path.stat().st_mtime})
+    found.sort(key=lambda x: x["mtime"], reverse=True)
+    for item in found:
+        del item["mtime"]
+    return found[:40]
+
+
+def activity(limit: int = 15) -> list[dict]:
+    """What Argo just did, newest first, from the action log."""
+    try:
+        from core.voice import action_log
+        rows = action_log.recent(limit)
+    except Exception:
+        return []
+    out = []
+    for row in rows[::-1]:
+        res = row.get("output")
+        said = res.get("message") if isinstance(res, dict) else ""
+        out.append({"clock": str(row.get("clock", ""))[:19], "tool": row.get("tool", "?"),
+                    "ok": bool(row.get("ok")), "said": str(said or "")[:140]})
+    return out
+
+
 def _jobs_for(project: str, jobs: list[dict]) -> list[dict]:
     name = normalize(project)
     if name == ALL:
@@ -126,7 +190,8 @@ def snapshot(project: str, jobs: list[dict], show_items: list[dict]) -> dict:
         "project": name, "projects": [ALL] + project_names(), "focus": focus,
         "jobs": _jobs_for(name, jobs),
         "show": [{k: it.get(k, "") for k in ("id", "title", "kind", "caption")} for it in show_items][-6:],
-        "parked": parked(name), "notes": notes(name), "layout": get_layout(name),
+        "parked": parked(name), "notes": notes(name),
+        "topics": topics(name), "activity": activity(), "layout": get_layout(name),
         "server_time": time.time(),
     }
 
