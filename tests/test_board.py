@@ -121,3 +121,11 @@ def test_the_agent_has_topic_tools():
 
     for name in ("note_to_topic", "list_topics"):
         assert hasattr(agent_mod.ArgoRealtimeAgent, name)
+
+
+def test_activity_shows_old_log_rows_that_said_failed_as_failed(board, monkeypatch):
+    from core.voice import action_log
+    monkeypatch.setattr(action_log, "recent", lambda n=20: [
+        {"clock": "2026-11-22T23:17:17.175", "tool": "work_on_project", "ok": True,
+         "output": {"status": "failed", "message": "Commit first."}}])
+    assert B.activity()[0]["ok"] is False

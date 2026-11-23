@@ -83,7 +83,12 @@ def _parse_json(raw: Any) -> Any:
 def _looks_failed(output: Any, is_error: bool) -> bool:
     if is_error:
         return True
-    return isinstance(output, dict) and output.get("ok") is False
+    if not isinstance(output, dict):
+        return False
+    if output.get("ok") is False:
+        return True
+    # Some tools answer ok but say "status": "failed" (a job that could not start).
+    return str(output.get("status", "")).lower() in {"failed", "error", "timed_out", "cancelled"}
 
 
 def record(tool: str, arguments: Any, output: Any, *, is_error: bool = False,

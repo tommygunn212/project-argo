@@ -186,6 +186,12 @@ class TestHAConfig:
 
 
 class TestHABoundaries:
+    @pytest.fixture(autouse=True)
+    def _no_remembered_address(self, tmp_path, monkeypatch):
+        # The real runtime/home_assistant_url.txt (where she remembers the VM's
+        # moved address) must not leak into these unconfigured-state checks.
+        monkeypatch.setattr("tools.home_assistant._RESOLVED_URL_FILE", tmp_path / "none.txt")
+
     def test_status_reports_unconfigured_without_a_network_call(self):
         with patch("tools.home_assistant._load_ha_config", return_value={}):
             with patch("tools.home_assistant._ha_request") as request:

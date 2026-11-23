@@ -145,6 +145,14 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-u
       r.appendChild(el('div', 'dim', meta));
       if (j.percent != null) { var b = el('div', 'bar'), f = el('i'); f.style.width = j.percent + '%'; b.appendChild(f); r.appendChild(b); }
       if (j.status === 'waiting' && j.question) r.appendChild(el('div', 'q', 'Question: ' + j.question));
+      if (active || j.status === 'waiting') {
+        var x = el('button', 'btn', 'Cancel'); x.style.marginTop = '6px';
+        x.onclick = function () {
+          if (!confirm('Cancel this job?')) return;
+          fetch('/api/jobs/cancel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: j.id})}).then(load);
+        };
+        r.appendChild(x);
+      }
       if (j.state === 'stalled') r.appendChild(el('div', 'prev', 'No output for ' + ago(j.quiet_seconds) + '. Tell Argo "retry job ' + j.id.slice(-6) + '".'));
       if (j.status === 'failed' && j.error) r.appendChild(el('div', 'prev', j.error));
       if (j.status === 'done' && j.summary) r.appendChild(el('div', 'prev', j.summary.slice(0, 200)));

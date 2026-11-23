@@ -121,7 +121,7 @@ def add_topic_note(project: str, topic: str, text: str) -> dict:
     name = normalize(project)
     if name == ALL:
         name = "Inbox"
-    title = " ".join(topic.split())[:60] or "General"
+    title = " ".join(topic.replace('"', "'").split())[:60] or "General"
     line = " ".join(text.split())[:1000]
     if not line:
         raise ValueError("nothing to note")
@@ -171,8 +171,17 @@ def activity(limit: int = 15) -> list[dict]:
         res = row.get("output")
         said = res.get("message") if isinstance(res, dict) else ""
         out.append({"clock": str(row.get("clock", ""))[:19], "tool": row.get("tool", "?"),
-                    "ok": bool(row.get("ok")), "said": str(said or "")[:140]})
+                    "ok": bool(row.get("ok")) and not action_log._looks_failed(res, False), "said": str(said or "")[:140]})
     return out
+
+
+def cancel_job(job_id: str) -> dict:
+    """Stop a running or waiting job from the board's Cancel button."""
+    from core import delegate_jobs
+    job_id = (job_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,80}", job_id):
+        return {"ok": False, "message": "Bad job id."}
+    return delegate_jobs.cancel(job_id)
 
 
 def _jobs_for(project: str, jobs: list[dict]) -> list[dict]:

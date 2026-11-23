@@ -46,6 +46,8 @@ class ProactiveSettings:
     interval_s: float = 30.0
     morning_offer: bool = True
     morning_delay_s: float = 8.0
+    quiet_start: str = "22:00"   # no volunteered chatter from here...
+    quiet_end: str = "07:00"     # ...until here (his own reminders still speak)
 
 
 def load_settings(config: dict | None = None) -> ProactiveSettings:
@@ -65,7 +67,34 @@ def load_settings(config: dict | None = None) -> ProactiveSettings:
         interval_s=max(5.0, float(raw.get("interval_s") or base.interval_s)),
         morning_offer=bool(raw.get("morning_offer", base.morning_offer)),
         morning_delay_s=float(raw.get("morning_delay_s", base.morning_delay_s)),
+        quiet_start=str(raw.get("quiet_start", base.quiet_start)),
+        quiet_end=str(raw.get("quiet_end", base.quiet_end)),
     )
+
+
+def _minutes(value: str, fallback: int) -> int:
+    try:
+        hour, minute = value.strip().split(":")
+        return max(0, min(23, int(hour))) * 60 + max(0, min(59, int(minute)))
+    except (ValueError, AttributeError):
+        return fallback
+
+
+def in_quiet_hours(settings: ProactiveSettings | None = None, now: datetime | None = None) -> bool:
+    """True during Tommy's quiet hours, when she should not volunteer anything.
+
+    The window may cross midnight (22:00 to 07:00). Equal start and end means
+    quiet hours are off.
+    """
+    settings = settings or load_settings()
+    now = now or datetime.now()
+    start, end = _minutes(settings.quiet_start, 22 * 60), _minutes(settings.quiet_end, 7 * 60)
+    minute = now.hour * 60 + now.minute
+    if start == end:
+        return False
+    if start < end:
+        return start <= minute < end
+    return minute >= start or minute < end
 
 
 def _due_reminders() -> list[dict]:
@@ -147,7 +176,7 @@ async def run_loop(session, settings: ProactiveSettings, *, due=_due_reminders,
     while not stop.is_set():
         # The morning offer waits until she's awake (wake/sleep gate); a
         # sleeping ARGO doesn't volunteer chatter.
-        if morning_pending and not _asleep(session):
+        if morning_pending and not _asleep(session) and not in_quiet_hours(settings):
             morning_pending = False
             if await _say(session, MORNING_INSTRUCTION):
                 _mark_morning_offer()

@@ -136,6 +136,20 @@ def build_frontend_handler(services):
                     self._send_json({"error": str(exc)}, status=400)
                 return
 
+            if path == "/api/jobs/cancel":
+                origin = self.headers.get("Origin") or ""
+                host = self.headers.get("Host") or ""
+                if origin and origin.split("://", 1)[-1] != host:
+                    self._send_json({"error": "Forbidden"}, status=403)
+                    return
+                try:
+                    from core import board_service
+                    body = self._read_json_body(max_bytes=4_000)
+                    self._send_json(board_service.cancel_job(str(body.get("id") or "")))
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                return
+
             if path == "/api/show":
                 # Same local-sidecar guard as the repair bridge.
                 import secrets
