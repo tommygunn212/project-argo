@@ -80,6 +80,11 @@ def log_session_activity(session: AgentSession, *, room: str = "", memory=None) 
         voice_events.emit("said", role=role, text=text[:600])
         if memory is not None:
             memory.note(str(getattr(item, "role", "")), text)
+        try:
+            from core import transcript
+            transcript.append(role, text)
+        except Exception:
+            logger.debug("[Session] transcript write failed", exc_info=True)
 
     def on_error(event) -> None:
         detail = getattr(event, "error", event)

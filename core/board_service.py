@@ -159,6 +159,17 @@ def topics(project: str, per_topic: int = 6) -> list[dict]:
     return found[:40]
 
 
+def conversation(limit: int = 14) -> list[dict]:
+    """The latest things said, spoken or typed, newest first."""
+    try:
+        from core import transcript
+        rows = transcript.recent(limit)
+    except Exception:
+        return []
+    return [{"clock": r.get("clock", "")[11:16], "who": r.get("who", ""), "text": str(r.get("text", ""))[:300]}
+            for r in rows[::-1]]
+
+
 def activity(limit: int = 15) -> list[dict]:
     """What Argo just did, newest first, from the action log."""
     try:
@@ -200,7 +211,7 @@ def snapshot(project: str, jobs: list[dict], show_items: list[dict]) -> dict:
         "jobs": _jobs_for(name, jobs),
         "show": [{k: it.get(k, "") for k in ("id", "title", "kind", "caption")} for it in show_items][-6:],
         "parked": parked(name), "notes": notes(name),
-        "topics": topics(name), "activity": activity(), "layout": get_layout(name),
+        "topics": topics(name), "activity": activity(), "conversation": conversation(), "layout": get_layout(name),
         "server_time": time.time(),
     }
 

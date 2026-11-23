@@ -36,7 +36,12 @@ class FakeSession:
         self._handlers = {}
         self.agent_state = "listening"
         self.interrupt = MagicMock()
-        self.generate_reply = MagicMock()
+        # A method that forwards to a mock: the gate wraps session.generate_reply
+        # (to wake on typed text), so the double must be wrappable like the real one.
+        self.generate_reply_mock = MagicMock()
+
+    def generate_reply(self, *args, **kwargs):
+        return self.generate_reply_mock(*args, **kwargs)
 
     def on(self, name, callback):
         self._handlers.setdefault(name, []).append(callback)
@@ -115,7 +120,7 @@ class TestWakeSleepGateBehavior(unittest.TestCase):
             self._interim("hey argo")
         mock_emit.assert_any_call("sleep_word_triggered", phrase="go to sleep", transcript="go to sleep")
         mock_emit.assert_any_call("wake_word_triggered", phrase="hey argo", transcript="hey argo")
-        self.session.generate_reply.assert_not_called()
+        self.session.generate_reply_mock.assert_not_called()
 
     def test_reply_started_while_asleep_is_interrupted(self):
         with patch("core.voice_events.emit"):
@@ -150,7 +155,7 @@ class TestWakeAckConfigurable(unittest.TestCase):
             session.fire("user_input_transcribed", FakeEvent(transcript="go to sleep", is_final=False))
             session.fire("user_input_transcribed", FakeEvent(transcript="", is_final=True))
             session.fire("user_input_transcribed", FakeEvent(transcript="hey argo", is_final=False))
-        session.generate_reply.assert_called_once()
+        session.generate_reply_mock.assert_called_once()
 
 
 class TestFinalOnlyTranscripts(unittest.TestCase):
@@ -171,7 +176,7 @@ class TestFinalOnlyTranscripts(unittest.TestCase):
         self.assertFalse(self.session.argo_wake.asleep)
         mock_emit.assert_any_call("wake_word_triggered", phrase="hey argo",
                                   transcript="Hey Argo, can you hear me?")
-        self.session.generate_reply.assert_not_called()
+        self.session.generate_reply_mock.assert_not_called()
         # her own answer to that turn must not be cut off
         self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
         self.session.interrupt.assert_not_called()
@@ -229,16 +234,16 @@ class TestAutoReplyIsReallyOffWhileAsleep(unittest.TestCase):
     def test_overheard_speech_starts_no_reply(self):
         with patch("core.voice_events.emit"):
             self._utterance("What's the weather tomorrow?")
-        self.session.generate_reply.assert_not_called()
+        self.session.generate_reply_mock.assert_not_called()
         self.assertEqual(self.session.llm.updates, [False])
 
     def test_wake_turns_auto_reply_on_and_answers_that_line(self):
         with patch("core.voice_events.emit"):
             self._utterance("Hey Argo, can you hear me?")
         self.assertEqual(self.session.llm.updates, [False, True])
-        self.session.generate_reply.assert_called_once()
+        self.session.generate_reply_mock.assert_called_once()
         self.assertIn("Ignore anything said before",
-                      self.session.generate_reply.call_args.kwargs["instructions"])
+                      self.session.generate_reply_mock.call_args.kwargs["instructions"])
 
     def test_sleep_turns_auto_reply_back_off(self):
         with patch("core.voice_events.emit"):
@@ -362,3 +367,42 @@ class TestStartAsleepAndDeliberateLines(unittest.TestCase):
         with patch("core.voice_events.emit"):
             gates.wire_wake_sleep_gate(session, make_cfg())
         self.assertFalse(session.argo_wake.asleep)
+
+
+class TestTypedMessagesWakeHer(unittest.TestCase):
+    """A message typed into the live session is deliberate, so it wakes her."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        self.cfg = make_cfg(wake_start_asleep=True)
+        gates.wire_wake_sleep_gate(self.session, self.cfg)
+
+    def test_typed_input_wakes_her_and_turns_auto_reply_on(self):
+        self.assertTrue(self.session.argo_wake.asleep)
+        self.session.generate_reply(user_input="what did I type?")
+        self.assertFalse(self.session.argo_wake.asleep)
+        self.session.generate_reply_mock.assert_called_once_with(user_input="what did I type?")
+
+    def test_auto_reply_comes_back_only_after_the_typed_reply_is_done(self):
+        with patch.object(gates, "set_auto_reply") as auto:
+            self.session.generate_reply(user_input="hello")
+            auto.assert_not_called()  # switching it on mid-turn made her answer twice
+            self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+            auto.assert_not_called()
+            self.session.fire("agent_state_changed", FakeEvent(new_state="listening"))
+            auto.assert_called_once_with(self.session, True)
+
+    def test_her_reply_to_typed_input_is_not_interrupted(self):
+        self.session.generate_reply(user_input="hello")
+        self.session.fire("agent_state_changed", FakeEvent(new_state="speaking"))
+        self.session.interrupt.assert_not_called()
+
+    def test_instructions_only_replies_do_not_wake_her(self):
+        # Her own announcements (a job result) are generated from instructions,
+        # not typed input, and must still respect the sleep gate.
+        self.session.generate_reply(instructions="tell him the job finished")
+        self.assertTrue(self.session.argo_wake.asleep)
+
+    def test_empty_typed_input_does_not_wake_her(self):
+        self.session.generate_reply(user_input="")
+        self.assertTrue(self.session.argo_wake.asleep)

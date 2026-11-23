@@ -251,6 +251,16 @@ def build_frontend_handler(services):
                 self._send_json(board_service.snapshot(
                     _query_first(query, "project") or "", delegate_jobs.status(limit=60)["jobs"],
                     BOARD.snapshot()))
+            elif path == '/api/transcript':
+                import time
+                from core import transcript
+                params = parse_qs(parsed.query)
+                try:
+                    limit = int((params.get('limit') or ['40'])[0])
+                    since = float((params.get('since') or ['0'])[0])
+                except ValueError:
+                    limit, since = 40, 0.0
+                self._send_json({"turns": transcript.recent(limit, since), "server_time": time.time()})
             elif path == '/api/jobs':
                 from core import delegate_jobs
                 try:

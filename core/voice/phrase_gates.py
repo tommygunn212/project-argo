@@ -206,6 +206,7 @@ class WakeState:
     def __init__(self, asleep: bool = False) -> None:
         self.asleep = asleep
         self.allow_once = False
+        self.auto_reply_pending = False
 
 
 def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> None:
@@ -311,6 +312,9 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
 
     def on_agent_state(event) -> None:
         new_state = str(getattr(event, "new_state", ""))
+        if state.auto_reply_pending and new_state == "listening":
+            state.auto_reply_pending = False
+            set_auto_reply(session, True)  # the typed message's reply is finished
         if not state.asleep or new_state not in ("speaking", "thinking"):
             return
         if new_state == "thinking":
@@ -334,6 +338,31 @@ def wire_wake_sleep_gate(session: AgentSession, cfg: LiveKitRealtimeConfig) -> N
 
     if state.asleep:
         set_auto_reply(session, False)
+
+    # Typing is deliberate: a message typed into the live session wakes her, and
+    # the reply LiveKit already asked for is let through. (The gate exists to
+    # stop her answering overheard speech, not Tommy at the keyboard.) Typed text
+    # arrives as generate_reply(user_input=...); spoken turns never do.
+    original_generate_reply = getattr(session, "generate_reply", None)
+    if callable(original_generate_reply):
+        def generate_reply_waking_on_typed(*args, **kwargs):
+            try:
+                if kwargs.get("user_input") and state.asleep:
+                    # Awake now, so her reply is let through. Spoken turns are
+                    # answered again once that reply is done: switching the
+                    # model's auto-reply on mid-turn made it answer twice.
+                    state.asleep = False
+                    state.auto_reply_pending = True
+                    logger.info("[WakeSleep] typed message -> awake")
+                    voice_events.emit("wake_word_triggered", phrase="(typed)", transcript="")
+            except Exception:
+                logger.debug("[WakeSleep] typed wake failed", exc_info=True)
+            return original_generate_reply(*args, **kwargs)
+
+        try:
+            session.generate_reply = generate_reply_waking_on_typed
+        except Exception:
+            logger.debug("[WakeSleep] could not hook typed input", exc_info=True)
 
     try:
         session.on("user_input_transcribed", on_transcript)

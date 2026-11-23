@@ -56,8 +56,8 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-u
   'use strict';
   var COLORS = ['slate','teal','green','amber','rose','violet','blue','gray'];
   var SWATCH = {slate:'#6b8ba0',teal:'#2fb3b3',green:'#3fbf7f',amber:'#e0a63a',rose:'#e06a8a',violet:'#9a7be0',blue:'#4a9be0',gray:'#8a8f94'};
-  var DEF = {jobs:{w:440,h:380,color:'green'},show:{w:440,h:380,color:'violet'},parked:{w:400,h:360,color:'amber'},notes:{w:360,h:280,color:'blue'},topics:{w:400,h:340,color:'teal'},activity:{w:400,h:340,color:'slate'}};
-  var TITLES = {jobs:'Jobs',show:'Argo showed',parked:'Parked',notes:'Notes',topics:'Topics',activity:'Activity'};
+  var DEF = {jobs:{w:440,h:380,color:'green'},show:{w:440,h:380,color:'violet'},parked:{w:400,h:360,color:'amber'},notes:{w:360,h:280,color:'blue'},topics:{w:400,h:340,color:'teal'},activity:{w:400,h:340,color:'slate'},conversation:{w:420,h:380,color:'rose'}};
+  var TITLES = {jobs:'Jobs',show:'Argo showed',parked:'Parked',notes:'Notes',topics:'Topics',activity:'Activity',conversation:'Conversation'};
   var canvas = document.getElementById('canvas'), chips = document.getElementById('chips'), msg = document.getElementById('msg');
   var project = (new URLSearchParams(location.search).get('project')) || localStorage.getItem('argoBoardProject') || 'All';
   var data = null, layout = {}, cards = {}, saveTimer = null, busy = false, seenFocus = null, seenTidy = null, showShown = '';
@@ -188,6 +188,16 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-u
       body.appendChild(r);
     });
   }
+  function renderConversation(body, rows) {
+    body.textContent = '';
+    rows.forEach(function (c) {
+      var r = el('div', 'row'), t = el('div', 't');
+      t.appendChild(el('b', '', c.who === 'you' ? 'You' : 'Argo'));
+      t.appendChild(el('span', 'dim', c.clock));
+      r.appendChild(t); r.appendChild(el('div', 'prev', c.text));
+      body.appendChild(r);
+    });
+  }
   function renderActivity(body, rows) {
     body.textContent = '';
     rows.forEach(function (a) {
@@ -219,6 +229,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-u
     if (data.notes.length) want.push('notes');
     if (data.topics.length) want.push('topics');
     if (data.activity.length) want.push('activity');
+    if (data.conversation.length) want.push('conversation');
     Object.keys(cards).forEach(function (id) { if (want.indexOf(id) < 0) { cards[id].el.remove(); delete cards[id]; if (id === 'show') showShown = ''; } });
     want.forEach(function (id) { if (!cards[id]) cards[id] = makeCard(id); });
     autoPlace(want);
@@ -231,6 +242,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-u
       else if (id === 'notes') renderNotes(cards[id].body, data.notes);
       else if (id === 'topics') renderTopics(cards[id].body, data.topics);
       else if (id === 'activity') renderActivity(cards[id].body, data.activity);
+      else if (id === 'conversation') renderConversation(cards[id].body, data.conversation);
       else renderShow(cards[id].body, data.show);
     });
     var live = data.jobs.filter(function (j) { return j.status === 'running' || j.status === 'starting'; }).length;

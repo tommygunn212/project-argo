@@ -4082,28 +4082,58 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Typed text goes into the live voice session when one is running, so she hears
+// it like anything else Tommy says and the transcript shows both. With no live
+// session it goes to the classic pipeline as before.
+function sendTypedMessage(text) {
+  const classic = () => { _skipNextUserLog = true; sendText(text); addChatMessage(text, 'user'); };
+  try {
+    const me = livekitConnected && livekitRoom && livekitRoom.localParticipant;
+    if (me && typeof me.sendText === 'function') {
+      Promise.resolve(me.sendText(text, { topic: 'lk.chat' })).catch((err) => {
+        addSystemLog(`Could not send to the live voice session (${err?.message || err}); sent it the classic way.`);
+        classic();
+      });
+      return 'live';
+    }
+  } catch (err) { /* fall through to classic */ }
+  classic();
+  return 'classic';
+}
+
+// While voice is live, the chat shows the voice session's own transcript: what
+// Tommy said (spoken or typed) and what she said back.
+let _transcriptSince = 0;
+async function pollTranscript() {
+  if (!livekitConnected) { _transcriptSince = 0; return; }
+  try {
+    if (!_transcriptSince) {  // start from "now" on the server's clock, not the old history
+      const first = await (await fetch(argoUrl('/api/transcript?limit=1&since=9999999999'), { cache: 'no-store' })).json();
+      _transcriptSince = (first.server_time || Date.now() / 1000) - 1;
+    }
+    const data = await (await fetch(argoUrl('/api/transcript?since=' + _transcriptSince), { cache: 'no-store' })).json();
+    (data.turns || []).forEach((turn) => {
+      if (turn.t > _transcriptSince) {
+        _transcriptSince = turn.t;
+        addChatMessage(turn.text, turn.who === 'you' ? 'user' : 'argo');
+      }
+    });
+  } catch (err) { /* try again next tick */ }
+}
+setInterval(pollTranscript, 2000);
+
 // Chat input
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     const text = chatInput.value.trim();
-    if (text) {
-      _skipNextUserLog = true;
-      sendText(text);
-      addChatMessage(text, 'user');
-      chatInput.value = '';
-    }
+    if (text) { sendTypedMessage(text); chatInput.value = ''; }
   }
 });
 
 $('chatSendBtn').addEventListener('click', () => {
   const text = chatInput.value.trim();
-  if (text) {
-    _skipNextUserLog = true;
-    sendText(text);
-    addChatMessage(text, 'user');
-    chatInput.value = '';
-  }
+  if (text) { sendTypedMessage(text); chatInput.value = ''; }
 });
 
 // ─── Chat Mic / Stop / Mute ─────────────────────────────────
