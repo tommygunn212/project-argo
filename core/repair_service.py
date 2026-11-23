@@ -142,6 +142,21 @@ class RepairService:
             return {"status": job["status"], "message": job["message"], "job": job}
         return {"status": "proposed", "message": "Code change recorded in System.", "job": job}
 
+    def propose_skill_request(self, name, request):
+        """Have Codex write, test and install a new voice skill. No approval step."""
+        from core.voice.skills import valid_name
+
+        name = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if not valid_name(name):
+            return {"status": "error", "message": "Skill name must be snake_case, 3-31 letters/digits/underscores."}
+        try:
+            job = self.code_repairs.propose(request, skill_name=name)
+        except (ValueError, RuntimeError) as exc:
+            return {"status": "error", "message": str(exc)}
+        job = self.code_repairs.dispatch_if_approved(job["action_id"], True)
+        self.broadcast("code_repair_result", job)
+        return {"status": job["status"], "message": job["message"], "skill": name, "job_id": job["action_id"]}
+
     def _handle_text(self, text):
         normalized = re.sub(r"[.!?,]+$", "", text.lower().strip())
         normalized = re.sub(r"^argo[, ]+", "", normalized)

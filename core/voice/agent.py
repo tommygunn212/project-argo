@@ -30,14 +30,14 @@ DEEP_THINK_HISTORY_TURNS = 24
 
 
 def _post_repair_request(text: str, *, kind: str = "repair", project_path: str = "",
-                         verification_command: str = "") -> str:
+                         verification_command: str = "", name: str = "") -> str:
     """Hand a repair request to the backend's /api/repair-voice bridge."""
     token = REPAIR_TOKEN_FILE.read_text(encoding="utf-8")
     port = int(os.getenv("ARGO_HTTP_PORT", "8000"))
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/repair-voice",
         data=json.dumps({"text": text, "kind": kind, "project_path": project_path,
-                         "verification_command": verification_command}).encode(),
+                         "verification_command": verification_command, "name": name}).encode(),
         headers={"Content-Type": "application/json", "X-Argo-Repair": token},
     )
     with urllib.request.urlopen(request, timeout=REPAIR_TIMEOUT_S) as response:
@@ -157,6 +157,41 @@ class ArgoRealtimeAgent(CapabilityTools, Agent):
         except Exception as exc:
             return json.dumps({"status": "unavailable",
                                "message": f"Project coding service could not be reached: {type(exc).__name__}."})
+
+    @function_tool()
+    async def build_skill(self, name: str, request: str) -> str:
+        """Teach yourself a new ability, then tell Tommy it started.
+
+        Use when Tommy asks for something you have no tool for and says to
+        figure it out, add it, or build it - or after you offered and he said
+        yes. `name` is a short snake_case name for the skill (for example
+        show_image). `request` is exactly what the skill must do, in plain
+        words with every detail Tommy gave. This starts Codex writing the tool
+        and a test for it; it installs itself when the test passes and is
+        usable from your next session. Say it started, never that it works.
+        """
+        try:
+            return await asyncio.to_thread(_post_repair_request, request,
+                                           kind="skill_request", name=name)
+        except Exception as exc:
+            return json.dumps({"status": "unavailable",
+                               "message": f"The skill builder could not be reached: {type(exc).__name__}."})
+
+    @function_tool()
+    async def list_my_skills(self) -> str:
+        """List the skills you have taught yourself and any that failed to load.
+
+        Use when Tommy asks what you can do that you added yourself, or why a
+        skill you built is not working.
+        """
+        from core.voice import skills
+
+        try:
+            _tools, report = await asyncio.to_thread(skills.discover, skills.builtin_tool_names())
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        return json.dumps({"ok": True, "skills": report,
+                           "note": "Skills loaded in this session are fixed at session start."})
 
     @function_tool()
     async def argo_roadmap(self, query: str = "") -> str:

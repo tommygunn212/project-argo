@@ -29,6 +29,7 @@ from core.voice.activity import ensure_logging, log_session_activity
 from core.voice.agent import ArgoRealtimeAgent
 from core.voice.avatars import start_avatar
 from core.voice.mcp_bridge import close_toolsets, ready_toolsets
+from core.voice.skills import builtin_tool_names, load_for_session as load_skills_for_session
 from core.voice.model import build_noise_filter, build_realtime_model
 from core.voice.phrase_gates import wire_urgent_interrupts, wire_wake_sleep_gate
 from core.voice.proactive import start_proactive
@@ -185,6 +186,10 @@ async def _start_in_room(ctx: JobContext, cfg: LiveKitRealtimeConfig, memory):
     # Plug-ins connect before the session starts, and any that fail are left
     # out: a dead MCP server must never cost ARGO her voice.
     plugins = await ready_toolsets()
+    # Skills ARGO wrote for herself. A broken one is skipped and logged.
+    skill_tools, _skill_report = await asyncio.to_thread(
+        load_skills_for_session, builtin_tool_names())
+    plugins = list(plugins or []) + list(skill_tools)
     avatar = await start_avatar(session, ctx.room)
     try:
         await session.start(

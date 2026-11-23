@@ -101,7 +101,7 @@ class CodeRepairManager:
     def _job_root(self, job):
         return Path(job.get("project_root", self.root)).resolve()
 
-    def propose(self, request, project_path=None, verification_command=None):
+    def propose(self, request, project_path=None, verification_command=None, skill_name=None):
         request = str(request or "").strip()
         if not request or len(request) > 8000:
             raise ValueError("Describe the feature or repair in 1–8000 characters.")
@@ -117,6 +117,7 @@ class CodeRepairManager:
             job = {"action_id": uuid.uuid4().hex, "request": request,
                 "project_root": str(project), "restart_available": project == self.root,
                 "verification_command": verification, "verification_args": verification_args,
+                "skill_name": skill_name or "",
                 "status": "proposed", "base": self._git(project, "rev-parse", "HEAD").strip(),
                 "expires_at": time.time() + 600,
                 "message": "Codex will work in a separate checkout. Passing independently verified changes apply automatically; otherwise review the diff and results in System."}
@@ -160,7 +161,13 @@ class CodeRepairManager:
                 self._git(workspace, "checkout", "--detach", job["base"])
                 self._git(workspace, "remote", "remove", "origin")
                 job.update(workspace=str(workspace), log_path=str(directory / "agent.log"))
-                prompt = (f"Implement this requested feature or repair for {project} in the current isolated checkout:\n" + job["request"] +
+                if job.get("skill_name"):
+                    from core.voice.skills import SKILL_CONTRACT
+                    prompt = (SKILL_CONTRACT.format(name=job["skill_name"]) +
+                              "\nWhat Tommy asked for:\n" + job["request"] +
+                              "\n\nDo not push, deploy, or edit anything outside the two files. Explain remaining uncertainty.")
+                else:
+                    prompt = (f"Implement this requested feature or repair for {project} in the current isolated checkout:\n" + job["request"] +
                     "\nDiagnose first, implement the smallest change, run tests, and report exact commands/results. "
                     "ARGO's host manager will commit the captured change; do not spend time trying to write the sandboxed .git directory. "
                     "Use available tools and documentation as needed. "
@@ -221,11 +228,24 @@ class CodeRepairManager:
             if exit_code == 0 and not job.get("timed_out"):
                 with test_path.open("w", encoding="utf-8") as log:
                     is_argo = self._job_root(job) == self.root
-                    commands = self.verify_commands if is_argo else []
-                    if not is_argo and job.get("verification_args"):
-                        commands = [job["verification_args"]]
-                    if not is_argo:
-                        commands.append(["git", "diff", "--check", job["base"], "--"])
+                    skill = job.get("skill_name") or ""
+                    if skill:
+                        # A skill is judged on its own test plus the real loader,
+                        # not the whole ARGO suite: it can only add two files.
+                        commands = [
+                            [sys.executable, "-m", "pytest", f"tests/test_skill_{skill}.py", "-q"],
+                            [sys.executable, "-c",
+                             "from pathlib import Path; from core.voice import skills as s; "
+                             "t, r = s.discover(s.builtin_tool_names(), Path('argo_skills')); "
+                             f"m = [x for x in r if x['skill'] == {skill!r}]; "
+                             "assert m and m[0]['ok'], m; print('loader ok', m[0]['tools'])"],
+                        ]
+                    else:
+                        commands = self.verify_commands if is_argo else []
+                        if not is_argo and job.get("verification_args"):
+                            commands = [job["verification_args"]]
+                        if not is_argo:
+                            commands.append(["git", "diff", "--check", job["base"], "--"])
                     for command in commands:
                         log.write("Command: " + subprocess.list2cmdline(command) + "\n")
                         log.flush()
@@ -239,6 +259,14 @@ class CodeRepairManager:
             self._git(workspace, "add", "-N", "--", ".")
             after = self._git(workspace, "diff", "--binary", job["base"], "--")
             ready = ready and after == patch
+            skill_name = job.get("skill_name") or ""
+            if skill_name:
+                allowed = {f"argo_skills/{skill_name}.py", f"tests/test_skill_{skill_name}.py"}
+                stray = sorted(set(changed) - allowed)
+                if stray or f"argo_skills/{skill_name}.py" not in changed:
+                    ready = False
+                    job["skill_problem"] = ("Touched files outside the skill: " + ", ".join(stray)
+                                            if stray else "The skill file was never written.")
             with self.lock:
                 job.update(status="review_ready" if ready else "review_failed", changed_files=changed,
                     isolated_commit=isolated_commit,
@@ -249,7 +277,9 @@ class CodeRepairManager:
                     ("Project command plus Git diff check" if job.get("verification_args") else "Git diff check only; review agent-reported project tests"),
                     message="Review the diff and verification output. Changes have not been applied.")
                 self._save(job)
-                if ready and self.auto_apply and (self._job_root(job) == self.root or job.get("verification_args")):
+                if ready and skill_name:
+                    self._install_skill(job, workspace, changed)
+                elif ready and self.auto_apply and (self._job_root(job) == self.root or job.get("verification_args")):
                     applied = self.apply_if_approved(action_id, job["patch_sha256"], True)
                     if applied["status"] == "error":
                         job["message"] = "Automatic apply stopped: " + applied["message"]
@@ -259,6 +289,54 @@ class CodeRepairManager:
                 job.update(status="review_failed", message=f"Verification did not complete: {exc}")
                 self._save(job)
         self.broadcast("code_repair_result", dict(job))
+
+    def _install_skill(self, job, workspace, changed):
+        """Copy a verified skill into the live folders and record it on argo-self.
+
+        Skills are new files in their own folder, so unlike a patch this never
+        collides with Tommy's uncommitted edits - which is why it needs no clean
+        tree and no approval.
+        """
+        from core.voice import skills
+
+        name = job["skill_name"]
+        try:
+            files = {rel: (Path(workspace) / rel).read_bytes() for rel in changed}
+            info = skills.install(name, files, directory=self.root / "argo_skills",
+                                  tests_directory=self.root / "tests")
+            branch = self._record_on_branch(files, f"Argo added skill {name}: {job['request'][:120]}")
+            job.update(status="applied", skill_installed=True,
+                       message=f"Skill {name} installed" + (" (replaced the old version)" if info["replaced"] else "") +
+                               ". It loads the next time a voice session starts." +
+                               (f" Recorded on branch argo-self ({branch})." if branch else ""))
+        except Exception as exc:
+            job.update(status="review_failed", message=f"Skill passed its tests but could not be installed: {exc}")
+        self._save(job)
+
+    def _record_on_branch(self, files, message):
+        """Commit the skill on the argo-self branch via a separate worktree.
+
+        Best effort: it never touches Tommy's checkout, and any failure here is
+        swallowed - the skill is already installed and logged.
+        """
+        try:
+            tree = self.root / "runtime" / "argo_self_worktree"
+            if not tree.exists():
+                have = subprocess.run(["git", "-C", str(self.root), "rev-parse", "--verify", "-q", "argo-self"],
+                                      capture_output=True, text=True).returncode == 0
+                args = ["worktree", "add", str(tree), "argo-self"] if have else \
+                       ["worktree", "add", "-b", "argo-self", str(tree), "HEAD"]
+                self._git(self.root, *args)
+            for rel, data in files.items():
+                target = tree / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            self._git(tree, "add", "--", *files)
+            self._git(tree, "-c", "user.name=ARGO", "-c", "user.email=argo@local.invalid",
+                      "commit", "-m", message)
+            return self._git(tree, "rev-parse", "--short", "HEAD").strip()
+        except Exception:
+            return ""
 
     def apply_if_approved(self, action_id, patch_sha256, approved):
         with self.lock:

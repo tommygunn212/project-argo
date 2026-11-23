@@ -139,6 +139,8 @@ def build_frontend_handler(services):
                         result = service.propose_code_request(
                             text, project_path=str(body.get("project_path") or ""),
                             verification_command=str(body.get("verification_command") or ""))
+                    elif kind == "skill_request" and service:
+                        result = service.propose_skill_request(str(body.get("name") or ""), text)
                     elif kind == "roadmap":
                         from core.roadmap_catalog import search_argo_roadmap
                         result = search_argo_roadmap(text)
